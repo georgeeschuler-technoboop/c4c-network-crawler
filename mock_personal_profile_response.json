@@ -1,0 +1,26 @@
+{
+  "public_identifier": "daraparker",
+  "full_name": "Dara Parker",
+  "headline": "Social Impact Executive",
+  "location": "Vancouver, Canada",
+  "people_also_viewed": [
+    {
+      "public_identifier": "adrienneevans",
+      "full_name": "Adrienne Evans",
+      "headline": "UNITED VISION PROJECT",
+      "profile_url": "https://www.linkedin.com/in/adrienneevans"
+    },
+    {
+      "public_identifier": "juliaroig",
+      "full_name": "Julia Roig",
+      "headline": "Founder & Chief Network Weaver at Philanthropy for Active Civic Engagement (PACE)",
+      "profile_url": "https://www.linkedin.com/in/juliaroig"
+    },
+    {
+      "public_identifier": "johndoe",
+      "full_name": "John Doe",
+      "headline": "Network Strategist",
+      "profile_url": "https://www.linkedin.com/in/johndoe"
+    }
+  ]
+}
