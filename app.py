@@ -10,6 +10,7 @@ import re
 import os
 import pathlib
 from datetime import datetime
+import socket
 
 # ============================================================================
 # CONFIGURATION
@@ -85,13 +86,50 @@ def validate_graph(seen_profiles: Dict, edges: List[Dict]) -> Tuple[List[str], L
     return sorted(orphan_ids), valid_edges
 
 
+def test_network_connectivity() -> Tuple[bool, str]:
+    """
+    Test if enrichlayer.com is reachable.
+    Returns (success, message)
+    """
+    try:
+        # Test DNS resolution for the correct domain
+        ip = socket.gethostbyname("enrichlayer.com")
+        
+        # Test HTTPS connection to the correct endpoint
+        response = requests.get("https://enrichlayer.com/api/v2/profile", timeout=5)
+        return True, f"✅ Network OK (resolved to {ip})"
+    
+    except socket.gaierror:
+        return False, (
+            "❌ DNS Resolution Failed\n\n"
+            "Cannot reach enrichlayer.com. This indicates a network/firewall restriction.\n\n"
+            "**Solutions:**\n"
+            "1. Check your internet connection\n"
+            "2. Try a different network\n"
+            "3. Use Mock Mode for testing"
+        )
+    
+    except requests.exceptions.ConnectionError:
+        return False, (
+            "❌ Connection Failed\n\n"
+            "DNS works but cannot establish HTTPS connection.\n\n"
+            "**Solutions:**\n"
+            "1. Check EnrichLayer service status\n"
+            "2. Try a different network\n"
+            "3. Use Mock Mode for testing"
+        )
+    
+    except Exception as e:
+        return False, f"❌ Unexpected error: {str(e)}"
+
+
 # ============================================================================
 # ENRICHLAYER API CLIENT
 # ============================================================================
 
 def call_enrichlayer_api(api_token: str, profile_url: str, mock_mode: bool = False) -> Tuple[Optional[Dict], Optional[str]]:
     """
-    Call EnrichLayer personal profile endpoint.
+    Call EnrichLayer person profile endpoint.
     
     Returns:
         (response_dict, error_message) tuple
@@ -103,15 +141,20 @@ def call_enrichlayer_api(api_token: str, profile_url: str, mock_mode: bool = Fal
         time.sleep(0.1)  # Small delay to simulate API call
         return get_mock_response(profile_url), None
     
-    endpoint = "https://api.enrichlayer.com/linkedin/profile"
+    # Correct EnrichLayer API endpoint (v2)
+    endpoint = "https://enrichlayer.com/api/v2/profile"
     headers = {
         "Authorization": f"Bearer {api_token}",
-        "Content-Type": "application/json"
     }
-    payload = {"url": profile_url}
+    params = {
+        "url": profile_url,
+        "use_cache": "if-present",  # Use cache if available
+        "live_fetch": "if-needed",   # Only fetch live if needed
+    }
     
     try:
-        response = requests.post(endpoint, headers=headers, json=payload, timeout=30)
+        # Use GET request with params (not POST with json)
+        response = requests.get(endpoint, headers=headers, params=params, timeout=30)
         
         if response.status_code == 200:
             return response.json(), None
@@ -136,12 +179,16 @@ def get_mock_response(profile_url: str) -> Dict:
     try:
         mock_path = pathlib.Path(__file__).parent / "mock_personal_profile_response.json"
         with open(mock_path, "r") as f:
-            return json.load(f)
+            base_response = json.load(f)
+            # Vary the response slightly based on the profile URL
+            temp_id = canonical_id_from_url(profile_url)
+            base_response["public_identifier"] = temp_id
+            return base_response
     except FileNotFoundError:
         # Fallback to synthetic response
         temp_id = canonical_id_from_url(profile_url)
         return {
-            "public_identifier": f"mock-{temp_id}",
+            "public_identifier": temp_id,
             "full_name": f"Mock User ({temp_id})",
             "headline": "Mock Professional",
             "location": "Mock City",
@@ -459,6 +506,15 @@ def main():
             value=default_token,
             help="Get your token from EnrichLayer dashboard. Not stored, used only for this session."
         )
+        
+        # Network connectivity test
+        if st.button("🔍 Test API Connection", help="Check if EnrichLayer API is reachable"):
+            with st.spinner("Testing connection..."):
+                success, message = test_network_connectivity()
+                if success:
+                    st.success(message)
+                else:
+                    st.error(message)
         
         # Improvement #1: UI-based mock mode toggle
         mock_mode = st.toggle(
