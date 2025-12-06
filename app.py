@@ -11,6 +11,7 @@ import os
 import pathlib
 from datetime import datetime
 import socket
+import zipfile
 
 # ============================================================================
 # CONFIGURATION
@@ -437,6 +438,25 @@ def generate_raw_json(raw_profiles: List) -> str:
     return json.dumps(raw_profiles, indent=2)
 
 
+def create_download_zip(nodes_csv: str, edges_csv: str, raw_json: str) -> bytes:
+    """
+    Create a ZIP file containing all three output files.
+    Returns ZIP file as bytes.
+    """
+    zip_buffer = BytesIO()
+    
+    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+        # Add nodes.csv
+        zip_file.writestr('nodes.csv', nodes_csv)
+        # Add edges.csv
+        zip_file.writestr('edges.csv', edges_csv)
+        # Add raw_profiles.json
+        zip_file.writestr('raw_profiles.json', raw_json)
+    
+    zip_buffer.seek(0)
+    return zip_buffer.getvalue()
+
+
 # ============================================================================
 # STREAMLIT UI
 # ============================================================================
@@ -447,6 +467,10 @@ def main():
         page_icon="🕸️",
         layout="wide"
     )
+    
+    # Initialize session state for preserving results
+    if 'crawl_results' not in st.session_state:
+        st.session_state.crawl_results = None
     
     st.title("🕸️ C4C Network Seed Crawler")
     st.markdown("Convert LinkedIn seed profiles into a Polinode-ready network using EnrichLayer")
@@ -606,6 +630,24 @@ def main():
                 "or that the crawl depth was too shallow."
             )
         
+        # Store results in session state so they persist across reruns (e.g., after downloads)
+        st.session_state.crawl_results = {
+            'seen_profiles': seen_profiles,
+            'edges': edges,
+            'raw_profiles': raw_profiles,
+            'stats': stats,
+            'max_degree': max_degree
+        }
+    
+    # Display results if available (either from current run or session state)
+    if st.session_state.crawl_results is not None:
+        results = st.session_state.crawl_results
+        seen_profiles = results['seen_profiles']
+        edges = results['edges']
+        raw_profiles = results['raw_profiles']
+        stats = results['stats']
+        max_degree = results['max_degree']
+        
         # ====================================================================
         # RESULTS SUMMARY
         # ====================================================================
@@ -643,6 +685,30 @@ def main():
         edges_csv = generate_edges_csv(edges, max_degree=max_degree, max_edges=100, max_nodes=150)
         raw_json = generate_raw_json(raw_profiles)
         
+        # Primary action: Download all as ZIP
+        st.markdown("### 📦 Download All Files")
+        zip_data = create_download_zip(nodes_csv, edges_csv, raw_json)
+        
+        col1, col2 = st.columns([3, 1])
+        with col1:
+            st.download_button(
+                label="⬇️ Download All as ZIP (Recommended)",
+                data=zip_data,
+                file_name="c4c_network_crawl.zip",
+                mime="application/zip",
+                type="primary",
+                use_container_width=True,
+                help="Download all three files (nodes.csv, edges.csv, raw_profiles.json) in one ZIP file"
+            )
+        with col2:
+            if st.button("🗑️ Clear Results", use_container_width=True, help="Clear results to start a new crawl"):
+                st.session_state.crawl_results = None
+                st.rerun()
+        
+        # Individual downloads
+        st.markdown("### 📄 Download Individual Files")
+        st.caption("Or download files individually (results will stay available)")
+        
         col1, col2, col3 = st.columns(3)
         
         with col1:
@@ -651,7 +717,8 @@ def main():
                 data=nodes_csv,
                 file_name="nodes.csv",
                 mime="text/csv",
-                use_container_width=True
+                use_container_width=True,
+                key="download_nodes"
             )
         
         with col2:
@@ -660,7 +727,8 @@ def main():
                 data=edges_csv,
                 file_name="edges.csv",
                 mime="text/csv",
-                use_container_width=True
+                use_container_width=True,
+                key="download_edges"
             )
         
         with col3:
@@ -669,7 +737,8 @@ def main():
                 data=raw_json,
                 file_name="raw_profiles.json",
                 mime="application/json",
-                use_container_width=True
+                use_container_width=True,
+                key="download_raw"
             )
         
         # ====================================================================
