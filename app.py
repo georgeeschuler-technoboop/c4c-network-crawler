@@ -225,6 +225,9 @@ def call_enrichlayer_api(api_token: str, profile_url: str, mock_mode: bool = Fal
                 return response.json(), None
             elif response.status_code == 401:
                 return None, "Invalid API token"
+            elif response.status_code == 403:
+                # Out of credits - don't retry
+                return None, "Out of credits (check your EnrichLayer balance)"
             elif response.status_code == 429:
                 # Rate limit - retry with exponential backoff
                 if attempt < max_retries - 1:
@@ -233,6 +236,13 @@ def call_enrichlayer_api(api_token: str, profile_url: str, mock_mode: bool = Fal
                     continue
                 else:
                     return None, f"Rate limit exceeded (tried {max_retries} times)"
+            elif response.status_code == 503:
+                # Enrichment failed - can retry
+                if attempt < max_retries - 1:
+                    time.sleep(3)
+                    continue
+                else:
+                    return None, "Enrichment failed after retries"
             else:
                 return None, f"API error {response.status_code}: {response.text}"
         
@@ -323,7 +333,15 @@ def run_crawler(
         'edges_added': 0,
         'max_degree_reached': 0,
         'stopped_reason': None,
-        'profiles_with_no_neighbors': 0
+        'profiles_with_no_neighbors': 0,
+        'error_breakdown': {
+            'rate_limit': 0,
+            'out_of_credits': 0,
+            'auth_error': 0,
+            'not_found': 0,
+            'enrichment_failed': 0,
+            'other': 0
+        }
     }
     
     # Initialize seeds
@@ -376,12 +394,26 @@ def run_crawler(
             stats['failed_calls'] += 1
             status_container.error(f"❌ Failed to fetch {current_node['profile_url']}: {error}")
             
-            # Stop if authentication fails
-            if "Invalid API token" in error:
+            # Classify error type
+            if "Rate limit" in error:
+                stats['error_breakdown']['rate_limit'] += 1
+            elif "Out of credits" in error:
+                stats['error_breakdown']['out_of_credits'] += 1
+                stats['stopped_reason'] = 'out_of_credits'
+                st.error("🚫 **Out of Credits!** Check your EnrichLayer balance.")
+                break
+            elif "Invalid API token" in error:
+                stats['error_breakdown']['auth_error'] += 1
                 stats['stopped_reason'] = 'auth_error'
                 break
+            elif "Enrichment failed" in error:
+                stats['error_breakdown']['enrichment_failed'] += 1
+            elif "404" in error or "not found" in error.lower():
+                stats['error_breakdown']['not_found'] += 1
+            else:
+                stats['error_breakdown']['other'] += 1
             
-            # Continue with other profiles for other errors
+            # Continue with other profiles for non-fatal errors
             continue
         
         stats['successful_calls'] += 1
@@ -870,6 +902,53 @@ def main():
             col8.warning("⚠️ Node Limit")
         elif stats['stopped_reason'] == 'auth_error':
             col8.error("❌ Auth Error")
+        elif stats['stopped_reason'] == 'out_of_credits':
+            col8.error("❌ Out of Credits")
+        
+        # Show error breakdown if there were failures
+        if stats['failed_calls'] > 0:
+            st.markdown("---")
+            st.subheader("❌ Error Breakdown")
+            
+            error_breakdown = stats.get('error_breakdown', {})
+            if error_breakdown:
+                col1, col2, col3, col4, col5, col6 = st.columns(6)
+                
+                if error_breakdown.get('rate_limit', 0) > 0:
+                    col1.metric("Rate Limits", error_breakdown['rate_limit'], delta_color="off")
+                if error_breakdown.get('out_of_credits', 0) > 0:
+                    col2.metric("Out of Credits", error_breakdown['out_of_credits'], delta_color="off")
+                if error_breakdown.get('auth_error', 0) > 0:
+                    col3.metric("Auth Errors", error_breakdown['auth_error'], delta_color="off")
+                if error_breakdown.get('not_found', 0) > 0:
+                    col4.metric("Not Found", error_breakdown['not_found'], delta_color="off")
+                if error_breakdown.get('enrichment_failed', 0) > 0:
+                    col5.metric("Enrichment Failed", error_breakdown['enrichment_failed'], delta_color="off")
+                if error_breakdown.get('other', 0) > 0:
+                    col6.metric("Other Errors", error_breakdown['other'], delta_color="off")
+                
+                # Interpretation
+                if error_breakdown.get('rate_limit', 0) > stats['failed_calls'] * 0.5:
+                    st.warning("""
+                    **⚠️ High Rate Limit Failures**
+                    
+                    Most failures were due to rate limiting. This suggests:
+                    - Your crawl exceeded EnrichLayer's rate limits
+                    - Consider using Degree 1 instead of Degree 2
+                    - Space out large crawls over time
+                    - Check your EnrichLayer plan limits
+                    """)
+                
+                if error_breakdown.get('out_of_credits', 0) > 0:
+                    st.error("""
+                    **🚫 Out of Credits**
+                    
+                    You've exhausted your EnrichLayer credits. To continue:
+                    1. Check your credit balance at EnrichLayer dashboard
+                    2. Purchase more credits if needed
+                    3. Resume your crawl
+                    """)
+
         
         # ====================================================================
         # ADVANCED ANALYTICS (if advanced mode was enabled)
