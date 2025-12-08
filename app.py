@@ -240,7 +240,7 @@ def call_enrichlayer_api(api_token: str, profile_url: str, mock_mode: bool = Fal
             if attempt < max_retries - 1:
                 time.sleep(2)
                 continue
-            return None, "Request timed out (tried {max_retries} times)"
+            return None, f"Request timed out (tried {max_retries} times)"
         except requests.exceptions.RequestException as e:
             if attempt < max_retries - 1:
                 time.sleep(2)
@@ -248,9 +248,6 @@ def call_enrichlayer_api(api_token: str, profile_url: str, mock_mode: bool = Fal
             return None, f"Network error: {str(e)}"
     
     return None, "Failed after maximum retries"
-        return None, "Request timeout"
-    except requests.exceptions.RequestException as e:
-        return None, f"Network error: {str(e)}"
 
 
 def get_mock_response(profile_url: str) -> Dict:
