@@ -41,6 +41,67 @@ def extract_url_stub(profile_url: str) -> str:
     return clean_url.split('/')[-1]
 
 
+def extract_organization(occupation: str = '', experiences: List = None) -> str:
+    """
+    Extract organization name from occupation string or experiences.
+    
+    Args:
+        occupation: String like "Chief Executive Officer at Toniic"
+        experiences: List of experience dicts with 'company' field
+    
+    Returns:
+        Organization name or empty string
+    """
+    # Try occupation field first (most reliable for current role)
+    if occupation and ' at ' in occupation:
+        # "Chief Executive Officer at Toniic" → "Toniic"
+        org = occupation.split(' at ', 1)[1].strip()
+        # Clean up common suffixes
+        org = org.replace('|', '').strip()
+        return org
+    
+    # Fallback to most recent experience
+    if experiences and len(experiences) > 0:
+        # Get most recent (first in list, usually current)
+        recent = experiences[0]
+        if 'company' in recent and recent['company']:
+            return recent['company'].strip()
+    
+    return ''
+
+
+def infer_sector(organization: str, headline: str = '') -> str:
+    """
+    Infer sector/industry from organization name and headline.
+    Simple keyword-based classification.
+    """
+    combined = f"{organization} {headline}".lower()
+    
+    # Keyword mappings
+    if any(word in combined for word in ['foundation', 'philanthropy', 'donor', 'giving']):
+        return 'Philanthropy'
+    elif any(word in combined for word in ['ngo', 'nonprofit', 'charity', 'humanitarian']):
+        return 'Nonprofit'
+    elif any(word in combined for word in ['government', 'ministry', 'federal', 'state', 'public sector']):
+        return 'Government'
+    elif any(word in combined for word in ['university', 'college', 'academic', 'research', 'professor']):
+        return 'Academia'
+    elif any(word in combined for word in ['peace', 'conflict', 'democracy', 'justice', 'rights']):
+        return 'Peacebuilding/Democracy'
+    elif any(word in combined for word in ['social impact', 'social change', 'community development']):
+        return 'Social Impact'
+    elif any(word in combined for word in ['consulting', 'consultant', 'advisory']):
+        return 'Consulting'
+    elif any(word in combined for word in ['finance', 'investment', 'capital', 'fund', 'bank']):
+        return 'Finance'
+    elif any(word in combined for word in ['tech', 'software', 'digital', 'platform']):
+        return 'Technology'
+    elif any(word in combined for word in ['corp', 'inc', 'llc', 'ltd', 'company']):
+        return 'Corporate'
+    else:
+        return 'Other'
+
+
 def canonical_id_from_url(profile_url: str) -> str:
     """Generate temporary canonical ID from URL before API enrichment."""
     return extract_url_stub(profile_url)
@@ -221,7 +282,8 @@ def run_crawler(
     max_edges: int,
     max_nodes: int,
     status_container,
-    mock_mode: bool = False
+    mock_mode: bool = False,
+    advanced_mode: bool = False
 ) -> Tuple[Dict, List, List, Dict]:
     """
     Run BFS crawler on seed profiles.
@@ -311,7 +373,17 @@ def run_crawler(
         # Update node with enriched data
         enriched_id = response.get('public_identifier', current_id)
         current_node['headline'] = response.get('headline', '')
-        current_node['location'] = response.get('location', '')
+        current_node['location'] = response.get('location_str') or response.get('location', '')
+        
+        # Advanced mode: Extract organization and sector
+        if advanced_mode:
+            occupation = response.get('occupation', '')
+            experiences = response.get('experiences', [])
+            organization = extract_organization(occupation, experiences)
+            sector = infer_sector(organization, current_node['headline'])
+            
+            current_node['organization'] = organization
+            current_node['sector'] = sector
         
         # Update canonical ID if different
         if enriched_id != current_id:
@@ -375,6 +447,12 @@ def run_crawler(
                 'degree': current_node['degree'] + 1,
                 'source_type': 'discovered'
             }
+            
+            # Advanced mode: Add organization and sector (will be populated when fetched)
+            if advanced_mode:
+                neighbor_node['organization'] = ''  # Will be filled when profile is fetched
+                neighbor_node['sector'] = ''
+            
             seen_profiles[neighbor_id] = neighbor_node
             stats['nodes_added'] += 1
             
@@ -403,7 +481,7 @@ def generate_nodes_csv(seen_profiles: Dict, max_degree: int, max_edges: int, max
     """Generate nodes.csv content with metadata header."""
     nodes_data = []
     for node in seen_profiles.values():
-        nodes_data.append({
+        node_dict = {
             'id': node['id'],
             'name': node['name'],
             'profile_url': node['profile_url'],
@@ -411,7 +489,15 @@ def generate_nodes_csv(seen_profiles: Dict, max_degree: int, max_edges: int, max
             'location': node.get('location', ''),
             'degree': node['degree'],
             'source_type': node['source_type']
-        })
+        }
+        
+        # Add organization and sector if present (advanced mode)
+        if 'organization' in node:
+            node_dict['organization'] = node.get('organization', '')
+        if 'sector' in node:
+            node_dict['sector'] = node.get('sector', '')
+        
+        nodes_data.append(node_dict)
     
     df = pd.DataFrame(nodes_data)
     csv_body = df.to_csv(index=False)
@@ -666,7 +752,8 @@ def main():
             max_edges=1000,
             max_nodes=500,
             status_container=status_container,
-            mock_mode=mock_mode
+            mock_mode=mock_mode,
+            advanced_mode=advanced_mode
         )
         
         status_container.update(label="✅ Crawl Complete!", state="complete")
@@ -743,44 +830,112 @@ def main():
             st.markdown("---")
             st.header("🔬 Advanced Network Analytics")
             
-            st.info("""
-            **🚧 Advanced Analytics - Coming Soon!**
+            # Check if organization data is available
+            has_org_data = any('organization' in node for node in seen_profiles.values())
             
-            The following features are currently in development:
+            if has_org_data:
+                st.success("✅ **Organization Extraction Active** - Enhanced data available")
+                
+                # Extract organization statistics
+                orgs = {}
+                sectors = {}
+                for node in seen_profiles.values():
+                    org = node.get('organization', '')
+                    sector = node.get('sector', 'Unknown')
+                    
+                    if org:
+                        orgs[org] = orgs.get(org, 0) + 1
+                    if sector:
+                        sectors[sector] = sectors.get(sector, 0) + 1
+                
+                # Display organization breakdown
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    st.subheader("🏢 Organizations Represented")
+                    
+                    if orgs:
+                        # Sort by count
+                        sorted_orgs = sorted(orgs.items(), key=lambda x: x[1], reverse=True)
+                        
+                        st.metric("Unique Organizations", len(orgs))
+                        
+                        # Show top 10
+                        st.markdown("**Top Organizations:**")
+                        for org, count in sorted_orgs[:10]:
+                            st.markdown(f"- **{org}**: {count} {'person' if count == 1 else 'people'}")
+                        
+                        if len(sorted_orgs) > 10:
+                            st.caption(f"...and {len(sorted_orgs) - 10} more organizations")
+                    else:
+                        st.info("No organization data extracted from profiles")
+                
+                with col2:
+                    st.subheader("🎯 Sector Distribution")
+                    
+                    if sectors:
+                        # Sort by count
+                        sorted_sectors = sorted(sectors.items(), key=lambda x: x[1], reverse=True)
+                        
+                        st.metric("Sectors Identified", len(sectors))
+                        
+                        st.markdown("**Sector Breakdown:**")
+                        for sector, count in sorted_sectors:
+                            percentage = (count / len(seen_profiles)) * 100
+                            st.markdown(f"- **{sector}**: {count} ({percentage:.1f}%)")
+                    else:
+                        st.info("No sector classification available")
+                
+                # Note about what this enables
+                st.markdown("---")
+                st.info("""
+                **🎯 What Organization Data Enables:**
+                
+                With organization and sector information, you can now:
+                - Identify cross-sector brokers
+                - Detect organizational silos
+                - Find inter-organizational bridges
+                - Map influence across sectors
+                
+                **Coming Next:** Brokerage matrix showing who connects which organizations/sectors.
+                """)
             
+            else:
+                st.warning("""
+                **⚠️ Organization Data Not Available**
+                
+                Organization extraction requires full profile data from EnrichLayer API responses.
+                This data may not be available for:
+                - Discovered nodes that weren't fully fetched
+                - Profiles with incomplete data
+                - Mock mode tests
+                
+                **Tip:** Run with real API token and degree 1 or 2 to get organization data for fetched profiles.
+                """)
+            
+            # Roadmap for future features
+            st.markdown("---")
+            st.subheader("📋 Coming Soon")
+            
+            st.markdown("""
             **Network Metrics** (Next Release)
-            - Degree centrality (in/out/total)
-            - Betweenness centrality (identify brokers)
-            - Eigenvector centrality (identify influencers)
-            - Closeness centrality (identify connectors)
-            - Clustering coefficient
+            - Degree, betweenness, eigenvector, closeness centrality
+            - Identify top connectors and brokers
             
-            **Community Detection** (In Progress)
-            - Identify network clusters
-            - Calculate modularity scores
-            - Label communities by organization/sector
+            **Community Detection** (In Progress)  
+            - Algorithmic cluster identification
+            - Modularity scores
             
-            **Brokerage Analysis** (Planned)
-            - Coordinators (within-group brokers)
-            - Gatekeepers (control inflow)
-            - Representatives (control outflow)
-            - Liaisons (connect unrelated groups)
-            - Structural hole positions
+            **Brokerage Matrix** (Planned)
+            - Coordinators, gatekeepers, representatives, liaisons
+            - Structural hole analysis
+            - Cross-sector bridge identification
             
             **Strategic Insights** (Future)
-            - Hidden brokers and key connectors
-            - Alignment gaps across sectors
+            - AI-generated narrative analysis
+            - Gap identification
             - Collaboration opportunities
-            - Minimum viable coalition identification
-            
-            For now, download your basic files below and import to Polinode for visualization and analysis.
             """)
-            
-            st.markdown("**Note:** When these features are ready, you'll see:")
-            st.markdown("- 📊 Enhanced nodes.csv with centrality metrics")
-            st.markdown("- 📈 network_analysis.json with summary statistics")
-            st.markdown("- 🎯 key_positions.csv identifying important actors")
-            st.markdown("- 🔗 brokerage_matrix.csv showing structural roles")
         
         # ====================================================================
         # DOWNLOAD SECTION
