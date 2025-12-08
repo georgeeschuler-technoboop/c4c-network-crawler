@@ -573,9 +573,9 @@ def main():
         )
     
     with col2:
-        st.markdown("**Prototype Limits:**")
-        st.metric("Max Edges", 100)
-        st.metric("Max Nodes", 150)
+        st.markdown("**Crawl Limits:**")
+        st.metric("Max Edges", 1000)
+        st.metric("Max Nodes", 500)
     
     # ========================================================================
     # RUN BUTTON
@@ -610,8 +610,8 @@ def main():
             seeds=seeds,
             api_token=api_token,
             max_degree=max_degree,
-            max_edges=100,
-            max_nodes=150,
+            max_edges=1000,
+            max_nodes=500,
             status_container=status_container,
             mock_mode=mock_mode
         )
@@ -687,8 +687,8 @@ def main():
         st.header("💾 Download Results")
         
         # Generate files
-        nodes_csv = generate_nodes_csv(seen_profiles, max_degree=max_degree, max_edges=100, max_nodes=150)
-        edges_csv = generate_edges_csv(edges, max_degree=max_degree, max_edges=100, max_nodes=150)
+        nodes_csv = generate_nodes_csv(seen_profiles, max_degree=max_degree, max_edges=1000, max_nodes=500)
+        edges_csv = generate_edges_csv(edges, max_degree=max_degree, max_edges=1000, max_nodes=500)
         raw_json = generate_raw_json(raw_profiles)
         
         # Primary action: Download all as ZIP
