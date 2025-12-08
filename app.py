@@ -1001,8 +1001,8 @@ def main():
     
     with col2:
         st.markdown("**Crawl Limits:**")
-        st.metric("Max Edges", 1000)
-        st.metric("Max Nodes", 1000)
+        st.metric("Max Edges", 5000)
+        st.metric("Max Nodes", 2500)
     
     # Rate Limit Information (cleaner version per team feedback)
     st.caption(f"""
@@ -1047,8 +1047,8 @@ def main():
             seeds=seeds,
             api_token=api_token,
             max_degree=max_degree,
-            max_edges=1000,
-            max_nodes=1000,
+            max_edges=5000,
+            max_nodes=2500,
             status_container=status_container,
             mock_mode=mock_mode,
             advanced_mode=advanced_mode,
@@ -1190,8 +1190,8 @@ Error Breakdown:
 
 Crawl Configuration:
 - Max Degree: {max_degree}
-- Max Edges Limit: 1000
-- Max Nodes Limit: 1000
+- Max Edges Limit: 5000
+- Max Nodes Limit: 2500
 - API Delay: {API_DELAY} seconds between calls
 - Stopped Reason: {stats.get('stopped_reason', 'unknown')}
                 """, language="text")
@@ -1349,8 +1349,8 @@ Profiles With No Neighbors: {stats.get('profiles_with_no_neighbors', 0)}
         st.header("💾 Download Results")
         
         # Generate files
-        nodes_csv = generate_nodes_csv(seen_profiles, max_degree=max_degree, max_edges=1000, max_nodes=1000)
-        edges_csv = generate_edges_csv(edges, max_degree=max_degree, max_edges=1000, max_nodes=1000)
+        nodes_csv = generate_nodes_csv(seen_profiles, max_degree=max_degree, max_edges=5000, max_nodes=2500)
+        edges_csv = generate_edges_csv(edges, max_degree=max_degree, max_edges=5000, max_nodes=2500)
         raw_json = generate_raw_json(raw_profiles)
         
         # Primary action: Download all as ZIP
