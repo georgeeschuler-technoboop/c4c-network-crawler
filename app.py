@@ -17,7 +17,7 @@ import zipfile
 # CONFIGURATION
 # ============================================================================
 
-API_DELAY = 1.0  # Seconds between API calls
+API_DELAY = 2.0  # Seconds between API calls (increased to avoid rate limits)
 DEFAULT_MOCK_MODE = os.getenv("C4C_MOCK_MODE", "false").lower() == "true"
 
 # ============================================================================
@@ -189,14 +189,16 @@ def test_network_connectivity() -> Tuple[bool, str]:
 # ENRICHLAYER API CLIENT
 # ============================================================================
 
-def call_enrichlayer_api(api_token: str, profile_url: str, mock_mode: bool = False) -> Tuple[Optional[Dict], Optional[str]]:
+def call_enrichlayer_api(api_token: str, profile_url: str, mock_mode: bool = False, max_retries: int = 3) -> Tuple[Optional[Dict], Optional[str]]:
     """
-    Call EnrichLayer person profile endpoint.
+    Call EnrichLayer person profile endpoint with retry logic.
     
     Returns:
         (response_dict, error_message) tuple
         - If successful: (response, None)
         - If failed: (None, error_message)
+    
+    Implements exponential backoff for rate limit errors (429).
     """
     if mock_mode:
         # Return mock data for testing
@@ -214,20 +216,38 @@ def call_enrichlayer_api(api_token: str, profile_url: str, mock_mode: bool = Fal
         "live_fetch": "if-needed",   # Only fetch live if needed
     }
     
-    try:
-        # Use GET request with params (not POST with json)
-        response = requests.get(endpoint, headers=headers, params=params, timeout=30)
+    for attempt in range(max_retries):
+        try:
+            # Use GET request with params (not POST with json)
+            response = requests.get(endpoint, headers=headers, params=params, timeout=30)
+            
+            if response.status_code == 200:
+                return response.json(), None
+            elif response.status_code == 401:
+                return None, "Invalid API token"
+            elif response.status_code == 429:
+                # Rate limit - retry with exponential backoff
+                if attempt < max_retries - 1:
+                    wait_time = (2 ** attempt) * 3  # 3s, 6s, 12s
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    return None, f"Rate limit exceeded (tried {max_retries} times)"
+            else:
+                return None, f"API error {response.status_code}: {response.text}"
         
-        if response.status_code == 200:
-            return response.json(), None
-        elif response.status_code == 401:
-            return None, "Invalid API token"
-        elif response.status_code == 429:
-            return None, "Rate limit exceeded"
-        else:
-            return None, f"API error {response.status_code}: {response.text}"
+        except requests.exceptions.Timeout:
+            if attempt < max_retries - 1:
+                time.sleep(2)
+                continue
+            return None, "Request timed out (tried {max_retries} times)"
+        except requests.exceptions.RequestException as e:
+            if attempt < max_retries - 1:
+                time.sleep(2)
+                continue
+            return None, f"Network error: {str(e)}"
     
-    except requests.exceptions.Timeout:
+    return None, "Failed after maximum retries"
         return None, "Request timeout"
     except requests.exceptions.RequestException as e:
         return None, f"Network error: {str(e)}"
@@ -707,9 +727,41 @@ def main():
         max_degree = st.radio(
             "Maximum Degree (hops)",
             options=[1, 2],
-            index=1,
+            index=0,  # Default to Degree 1 (safer)
             help="1 hop = direct connections only, 2 hops = connections of connections"
         )
+        
+        # Warning for degree 2
+        if max_degree == 2:
+            st.error("""
+            **⚠️ Degree 2 Warning - Read Before Running!**
+            
+            Degree 2 crawls are **expensive and risky**:
+            - 📊 10-50x more API calls than Degree 1
+            - 💳 Uses 100-500 credits (you have limited credits)
+            - ⏱️ Takes 10-20+ minutes
+            - 🚫 High risk of rate limit failures (252 failed in your last test!)
+            - 🐌 2-second delay between calls (still may hit limits)
+            
+            **💡 Recommendation:** Start with Degree 1 first!
+            - See your network structure
+            - Use only ~10 credits
+            - Complete in 30 seconds
+            - Then decide if Degree 2 is needed
+            """, icon="🚨")
+        else:
+            st.success("""
+            **✅ Degree 1 Selected - Good Choice!**
+            
+            Degree 1 is **fast, reliable, and cost-effective**:
+            - 🎯 Direct connections only (1 hop from seeds)
+            - ⚡ Completes in 20-40 seconds
+            - 💰 Uses only ~5-10 credits
+            - ✅ Very low risk of rate limits
+            - 📊 Great for exploring network structure
+            
+            **Tip:** Run Degree 1 first, then decide if you need Degree 2.
+            """, icon="👍")
     
     with col2:
         st.markdown("**Crawl Limits:**")
