@@ -310,40 +310,147 @@ def call_enrichlayer_api(api_token: str, profile_url: str, mock_mode: bool = Fal
 
 def get_mock_response(profile_url: str) -> Dict:
     """
-    Return mock API response from mock_personal_profile_response.json.
-    Falls back to synthetic response if file not found.
+    Generate comprehensive mock API response for stress testing.
+    
+    Creates deterministic but varied fake profiles with:
+    - 25-40 "people_also_viewed" connections per profile
+    - Realistic names, titles, organizations, sectors
+    - Enough data to stress test 1000 node / 1000 edge limits
+    
+    Uses hash of profile URL for deterministic randomness.
     """
-    try:
-        mock_path = pathlib.Path(__file__).parent / "mock_personal_profile_response.json"
-        with open(mock_path, "r") as f:
-            base_response = json.load(f)
-            # Vary the response slightly based on the profile URL
-            temp_id = canonical_id_from_url(profile_url)
-            base_response["public_identifier"] = temp_id
-            return base_response
-    except FileNotFoundError:
-        # Fallback to synthetic response matching v2 API format
-        temp_id = canonical_id_from_url(profile_url)
-        return {
-            "public_identifier": temp_id,
-            "full_name": f"Mock User ({temp_id})",
-            "headline": "Mock Professional",
-            "location": "Mock City",
-            "people_also_viewed": [
-                {
-                    "link": f"https://www.linkedin.com/in/mock-connection-1-{temp_id}",
-                    "name": "Mock Connection 1",
-                    "summary": "Mock Title 1",
-                    "location": "Mock City"
-                },
-                {
-                    "link": f"https://www.linkedin.com/in/mock-connection-2-{temp_id}",
-                    "name": "Mock Connection 2",
-                    "summary": "Mock Title 2",
-                    "location": "Mock City"
-                }
-            ]
-        }
+    import hashlib
+    
+    # Deterministic seed based on profile URL
+    url_hash = int(hashlib.md5(profile_url.encode()).hexdigest(), 16)
+    
+    # Mock data pools
+    first_names = [
+        "James", "Mary", "John", "Patricia", "Robert", "Jennifer", "Michael", "Linda",
+        "William", "Elizabeth", "David", "Barbara", "Richard", "Susan", "Joseph", "Jessica",
+        "Thomas", "Sarah", "Charles", "Karen", "Christopher", "Nancy", "Daniel", "Lisa",
+        "Matthew", "Betty", "Anthony", "Margaret", "Mark", "Sandra", "Donald", "Ashley",
+        "Steven", "Kimberly", "Paul", "Emily", "Andrew", "Donna", "Joshua", "Michelle",
+        "Kenneth", "Dorothy", "Kevin", "Carol", "Brian", "Amanda", "George", "Melissa",
+        "Edward", "Deborah", "Ronald", "Stephanie", "Timothy", "Rebecca", "Jason", "Sharon",
+        "Jeffrey", "Laura", "Ryan", "Cynthia", "Jacob", "Kathleen", "Gary", "Amy"
+    ]
+    
+    last_names = [
+        "Smith", "Johnson", "Williams", "Brown", "Jones", "Garcia", "Miller", "Davis",
+        "Rodriguez", "Martinez", "Hernandez", "Lopez", "Gonzalez", "Wilson", "Anderson",
+        "Thomas", "Taylor", "Moore", "Jackson", "Martin", "Lee", "Perez", "Thompson",
+        "White", "Harris", "Sanchez", "Clark", "Ramirez", "Lewis", "Robinson", "Walker",
+        "Young", "Allen", "King", "Wright", "Scott", "Torres", "Nguyen", "Hill", "Flores",
+        "Green", "Adams", "Nelson", "Baker", "Hall", "Rivera", "Campbell", "Mitchell",
+        "Carter", "Roberts", "Gomez", "Phillips", "Evans", "Turner", "Diaz", "Parker"
+    ]
+    
+    titles = [
+        "CEO", "Founder", "Director", "VP", "Manager", "Consultant", "Partner",
+        "Executive Director", "Chief Strategy Officer", "Program Director",
+        "Senior Advisor", "Managing Director", "Principal", "Fellow", "Board Member",
+        "Chief Impact Officer", "Head of Partnerships", "Director of Development",
+        "Senior Program Officer", "Policy Director", "Research Director"
+    ]
+    
+    organizations = [
+        "World Resources Institute", "The Nature Conservancy", "WWF", "IUCN",
+        "Conservation International", "Environmental Defense Fund", "Sierra Club",
+        "Greenpeace", "Earthjustice", "Ocean Conservancy", "Wildlife Conservation Society",
+        "Rainforest Alliance", "Global Water Partnership", "Water.org", "charity: water",
+        "Pacific Institute", "Alliance for Water Stewardship", "CDP", "Ceres",
+        "BSR", "World Economic Forum", "Aspen Institute", "Brookings Institution",
+        "Carnegie Endowment", "Council on Foreign Relations", "RAND Corporation",
+        "McKinsey & Company", "Boston Consulting Group", "Bain & Company", "Deloitte",
+        "Accenture", "PwC", "EY", "KPMG", "Goldman Sachs", "JPMorgan Chase",
+        "Bank of America", "Citigroup", "Morgan Stanley", "BlackRock", "Vanguard",
+        "Ford Foundation", "Rockefeller Foundation", "MacArthur Foundation",
+        "Gates Foundation", "Hewlett Foundation", "Packard Foundation", "Bloomberg Philanthropies",
+        "Open Society Foundations", "Omidyar Network", "Skoll Foundation", "Toniic",
+        "Stanford University", "Harvard University", "MIT", "Yale University",
+        "Columbia University", "UC Berkeley", "Princeton University", "Oxford University"
+    ]
+    
+    locations = [
+        "San Francisco, CA", "New York, NY", "Washington, DC", "Boston, MA",
+        "Los Angeles, CA", "Seattle, WA", "Chicago, IL", "Denver, CO",
+        "Austin, TX", "Portland, OR", "Miami, FL", "Atlanta, GA",
+        "London, UK", "Geneva, Switzerland", "Amsterdam, Netherlands",
+        "Berlin, Germany", "Paris, France", "Singapore", "Hong Kong",
+        "Tokyo, Japan", "Sydney, Australia", "Toronto, Canada", "Vancouver, Canada"
+    ]
+    
+    sectors = [
+        "Philanthropy", "Nonprofit", "Consulting", "Finance", "Technology",
+        "Academia", "Government", "Social Impact", "Corporate", "Peacebuilding/Democracy"
+    ]
+    
+    # Generate profile data based on URL hash
+    temp_id = canonical_id_from_url(profile_url)
+    
+    # Use hash to pick attributes deterministically
+    first_name = first_names[url_hash % len(first_names)]
+    last_name = last_names[(url_hash // 100) % len(last_names)]
+    title = titles[(url_hash // 1000) % len(titles)]
+    org = organizations[(url_hash // 10000) % len(organizations)]
+    location = locations[(url_hash // 100000) % len(locations)]
+    sector = sectors[(url_hash // 1000000) % len(sectors)]
+    
+    full_name = f"{first_name} {last_name}"
+    headline = f"{title} at {org}"
+    occupation = headline
+    
+    # Generate 25-40 connections (deterministic based on hash)
+    num_connections = 25 + (url_hash % 16)  # 25-40 connections
+    
+    people_also_viewed = []
+    for i in range(num_connections):
+        # Create unique but deterministic connection
+        conn_hash = (url_hash + i * 7919) % (2**32)  # Prime multiplier for variety
+        
+        conn_first = first_names[conn_hash % len(first_names)]
+        conn_last = last_names[(conn_hash // 100) % len(last_names)]
+        conn_title = titles[(conn_hash // 1000) % len(titles)]
+        conn_org = organizations[(conn_hash // 10000) % len(organizations)]
+        conn_location = locations[(conn_hash // 100000) % len(locations)]
+        
+        conn_name = f"{conn_first} {conn_last}"
+        conn_id = f"{conn_first.lower()}-{conn_last.lower()}-{conn_hash % 1000}"
+        
+        people_also_viewed.append({
+            "link": f"https://www.linkedin.com/in/{conn_id}",
+            "name": conn_name,
+            "summary": f"{conn_title} at {conn_org}",
+            "location": conn_location
+        })
+    
+    # Build response matching EnrichLayer v2 API format
+    return {
+        "public_identifier": temp_id,
+        "full_name": full_name,
+        "first_name": first_name,
+        "last_name": last_name,
+        "headline": headline,
+        "occupation": occupation,
+        "location_str": location,
+        "summary": f"Experienced {title.lower()} with expertise in {sector.lower()}.",
+        "experiences": [
+            {
+                "company": org,
+                "title": title,
+                "starts_at": {"year": 2020, "month": 1},
+                "ends_at": None
+            },
+            {
+                "company": organizations[(url_hash // 50000) % len(organizations)],
+                "title": titles[(url_hash // 5000) % len(titles)],
+                "starts_at": {"year": 2015, "month": 6},
+                "ends_at": {"year": 2019, "month": 12}
+            }
+        ],
+        "people_also_viewed": people_also_viewed
+    }
 
 
 # ============================================================================
@@ -843,7 +950,15 @@ def main():
         )
         
         if mock_mode:
-            st.info("🧪 Running in MOCK MODE (no real API calls)")
+            st.info("""
+            🧪 **MOCK MODE** - No real API calls, no credits used!
+            
+            Generates realistic synthetic network data:
+            - 25-40 connections per profile (deterministic)
+            - Realistic names, titles, organizations
+            - Perfect for stress testing node/edge limits
+            - Use `mock_test_seeds.csv` or any seed file
+            """)
     
     # ========================================================================
     # SECTION 2: CONFIGURATION
