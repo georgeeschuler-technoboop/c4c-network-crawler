@@ -491,6 +491,50 @@ def main():
     st.markdown("Convert LinkedIn seed profiles into a Polinode-ready network using EnrichLayer")
     
     # ========================================================================
+    # MODE SELECTION
+    # ========================================================================
+    
+    st.markdown("---")
+    
+    st.subheader("🎛️ Select Mode")
+    
+    col1, col2 = st.columns([1, 3])
+    
+    with col1:
+        advanced_mode = st.toggle(
+            "Advanced Mode",
+            value=False,
+            help="Enable network analysis and insights"
+        )
+    
+    with col2:
+        if advanced_mode:
+            st.info("""
+            **🔬 Advanced Mode** - Network Intelligence  
+            Includes everything in Basic Mode plus:
+            - Centrality metrics (degree, betweenness, eigenvector, closeness)
+            - Community detection and clustering
+            - Brokerage analysis (coordinators, gatekeepers, liaisons)
+            - Key position identification (connectors, brokers, bridges)
+            - Network insights and strategic recommendations
+            
+            *⏱️ Longer processing time, richer insights*
+            """)
+        else:
+            st.success("""
+            **📊 Basic Mode** - Quick Network Crawl  
+            Perfect for rapid exploration:
+            - Crawl LinkedIn networks (1 or 2 degrees)
+            - Export nodes, edges, and raw profiles
+            - Import directly to Polinode or other tools
+            - Fast processing, clean data
+            
+            *⚡ Quick results, simple outputs*
+            """)
+    
+    st.markdown("---")
+    
+    # ========================================================================
     # SECTION 1: INPUT
     # ========================================================================
     
@@ -651,7 +695,8 @@ def main():
             'edges': edges,
             'raw_profiles': raw_profiles,
             'stats': stats,
-            'max_degree': max_degree
+            'max_degree': max_degree,
+            'advanced_mode': advanced_mode  # Store mode setting
         }
     
     # Display results if available (either from current run or session state)
@@ -662,6 +707,7 @@ def main():
         raw_profiles = results['raw_profiles']
         stats = results['stats']
         max_degree = results['max_degree']
+        was_advanced_mode = results.get('advanced_mode', False)
         
         # ====================================================================
         # RESULTS SUMMARY
@@ -688,6 +734,53 @@ def main():
             col8.warning("⚠️ Node Limit")
         elif stats['stopped_reason'] == 'auth_error':
             col8.error("❌ Auth Error")
+        
+        # ====================================================================
+        # ADVANCED ANALYTICS (if advanced mode was enabled)
+        # ====================================================================
+        
+        if was_advanced_mode:
+            st.markdown("---")
+            st.header("🔬 Advanced Network Analytics")
+            
+            st.info("""
+            **🚧 Advanced Analytics - Coming Soon!**
+            
+            The following features are currently in development:
+            
+            **Network Metrics** (Next Release)
+            - Degree centrality (in/out/total)
+            - Betweenness centrality (identify brokers)
+            - Eigenvector centrality (identify influencers)
+            - Closeness centrality (identify connectors)
+            - Clustering coefficient
+            
+            **Community Detection** (In Progress)
+            - Identify network clusters
+            - Calculate modularity scores
+            - Label communities by organization/sector
+            
+            **Brokerage Analysis** (Planned)
+            - Coordinators (within-group brokers)
+            - Gatekeepers (control inflow)
+            - Representatives (control outflow)
+            - Liaisons (connect unrelated groups)
+            - Structural hole positions
+            
+            **Strategic Insights** (Future)
+            - Hidden brokers and key connectors
+            - Alignment gaps across sectors
+            - Collaboration opportunities
+            - Minimum viable coalition identification
+            
+            For now, download your basic files below and import to Polinode for visualization and analysis.
+            """)
+            
+            st.markdown("**Note:** When these features are ready, you'll see:")
+            st.markdown("- 📊 Enhanced nodes.csv with centrality metrics")
+            st.markdown("- 📈 network_analysis.json with summary statistics")
+            st.markdown("- 🎯 key_positions.csv identifying important actors")
+            st.markdown("- 🔗 brokerage_matrix.csv showing structural roles")
         
         # ====================================================================
         # DOWNLOAD SECTION
