@@ -470,7 +470,7 @@ def create_download_zip(nodes_csv: str, edges_csv: str, raw_json: str) -> bytes:
 def main():
     st.set_page_config(
         page_title="C4C Network Seed Crawler",
-        page_icon="🕸️",
+        page_icon="https://static.wixstatic.com/media/275a3f_9c48d5079fcf4b688606c81d8f34d5a5~mv2.jpg",
         layout="wide"
     )
     
@@ -478,7 +478,16 @@ def main():
     if 'crawl_results' not in st.session_state:
         st.session_state.crawl_results = None
     
-    st.title("🕸️ C4C Network Seed Crawler")
+    # Header with C4C logo
+    col1, col2 = st.columns([1, 9])
+    with col1:
+        st.image(
+            "https://static.wixstatic.com/media/275a3f_9c48d5079fcf4b688606c81d8f34d5a5~mv2.jpg",
+            width=80
+        )
+    with col2:
+        st.title("C4C Network Seed Crawler")
+    
     st.markdown("Convert LinkedIn seed profiles into a Polinode-ready network using EnrichLayer")
     
     # ========================================================================
