@@ -18,6 +18,54 @@ import zipfile
 # ============================================================================
 
 API_DELAY = 3.0  # Seconds between API calls (20 requests/min for $49/mo EnrichLayer plan)
+PER_MIN_LIMIT = 20  # Tuned for $49/mo plan (can be changed for other tiers)
+
+
+# ============================================================================
+# RATE LIMITER CLASS
+# ============================================================================
+
+class RateLimiter:
+    """
+    Rate limiter that enforces a per-minute request limit.
+    Uses a sliding window approach with a safety buffer.
+    """
+    def __init__(self, per_min_limit: int, buffer: float = 0.8):
+        """
+        Args:
+            per_min_limit: documented limit (e.g., 20 requests/min)
+            buffer: safety factor (0.8 → aim for 16/min so we never hit the hard cap)
+        """
+        self.per_min_limit = per_min_limit
+        self.allowed_per_min = max(1, int(per_min_limit * buffer))
+        self.window_start = time.time()
+        self.calls_in_window = 0
+
+    def wait_for_slot(self):
+        """Wait until we have a safe slot to make a request."""
+        now = time.time()
+        elapsed = now - self.window_start
+
+        # New minute → reset window
+        if elapsed >= 60:
+            self.window_start = now
+            self.calls_in_window = 0
+            return
+
+        # If we've hit our safe quota, sleep until the minute resets
+        if self.calls_in_window >= self.allowed_per_min:
+            sleep_for = 60 - elapsed
+            time.sleep(sleep_for)
+            self.window_start = time.time()
+            self.calls_in_window = 0
+
+    def record_call(self):
+        """Record that we made a call."""
+        self.calls_in_window += 1
+    
+    def get_status(self) -> str:
+        """Get current rate limiter status for display."""
+        return f"{self.calls_in_window}/{self.allowed_per_min} calls this minute"
 DEFAULT_MOCK_MODE = os.getenv("C4C_MOCK_MODE", "false").lower() == "true"
 
 # ============================================================================
@@ -312,8 +360,7 @@ def run_crawler(
     mock_mode: bool = False,
     advanced_mode: bool = False,
     progress_bar = None,
-    time_display = None,
-    estimated_total: int = 10
+    per_min_limit: int = PER_MIN_LIMIT
 ) -> Tuple[Dict, List, List, Dict]:
     """
     Run BFS crawler on seed profiles.
@@ -321,14 +368,17 @@ def run_crawler(
     Returns:
         (seen_profiles, edges, raw_profiles, stats)
     """
-    import datetime
-    start_time = datetime.datetime.now()
+    # Initialize rate limiter
+    rate_limiter = None
+    if not mock_mode:
+        rate_limiter = RateLimiter(per_min_limit=per_min_limit)
     
     # Initialize data structures
     queue = deque()
     seen_profiles = {}
     edges = []
     raw_profiles = []
+    processed_nodes = 0  # Track progress
     
     # Statistics tracking
     stats = {
@@ -385,6 +435,17 @@ def run_crawler(
         
         current_id = queue.popleft()
         current_node = seen_profiles[current_id]
+        processed_nodes += 1
+        
+        # Update progress bar (based on processed vs total known)
+        if progress_bar is not None:
+            total_known = processed_nodes + len(queue)
+            if total_known > 0:
+                progress = processed_nodes / total_known
+                progress_bar.progress(
+                    min(max(progress, 0.0), 0.99),  # Cap at 99% until complete
+                    text=f"Processing... {processed_nodes} done, {len(queue)} remaining"
+                )
         
         # Stop expanding if at max degree
         if current_node['degree'] >= max_degree:
@@ -399,38 +460,25 @@ def run_crawler(
                 progress_text += f" | ❌ {stats['failed_calls']} failed"
                 if stats['error_breakdown'].get('rate_limit', 0) > 0:
                     progress_text += f" (Rate limited: {stats['error_breakdown']['rate_limit']})"
+        if rate_limiter is not None:
+            progress_text += f" | ⏱️ {rate_limiter.get_status()}"
         status_container.write(progress_text)
         
-        # Update progress bar and time estimate
-        if progress_bar is not None:
-            # Calculate progress percentage (cap at 99% until complete)
-            progress_pct = min(99, int((stats['api_calls'] / max(estimated_total, 1)) * 100))
-            
-            # Calculate time estimate
-            elapsed = (datetime.datetime.now() - start_time).total_seconds()
-            if stats['api_calls'] > 0:
-                avg_time_per_call = elapsed / stats['api_calls']
-                remaining_calls = max(0, estimated_total - stats['api_calls'])
-                est_remaining = remaining_calls * avg_time_per_call
-                
-                # Format time
-                if est_remaining > 60:
-                    time_str = f"~{int(est_remaining // 60)} min {int(est_remaining % 60)} sec remaining"
-                else:
-                    time_str = f"~{int(est_remaining)} sec remaining"
-                
-                progress_bar.progress(progress_pct, text=f"Processing... {stats['api_calls']}/{estimated_total} profiles ({progress_pct}%)")
-                
-                if time_display is not None:
-                    time_display.caption(f"⏱️ {time_str} | Elapsed: {int(elapsed // 60)}m {int(elapsed % 60)}s | Rate: {60/API_DELAY:.0f} req/min")
-        
-        # Rate limiting: Wait BEFORE each API call (not after)
-        if stats['api_calls'] > 0 and not mock_mode:
-            time.sleep(API_DELAY)
+        # Rate limiting: wait for a safe slot before calling the API
+        if rate_limiter is not None:
+            rate_limiter.wait_for_slot()
         
         # Call EnrichLayer API
         stats['api_calls'] += 1
         response, error = call_enrichlayer_api(api_token, current_node['profile_url'], mock_mode=mock_mode)
+        
+        # Record the API call for rate limiting
+        if rate_limiter is not None:
+            rate_limiter.record_call()
+        
+        # Tiny courtesy delay (the real throttle is per-minute via RateLimiter)
+        if not mock_mode:
+            time.sleep(0.2)
         
         if error:
             stats['failed_calls'] += 1
@@ -841,15 +889,11 @@ def main():
         st.metric("Max Edges", 1000)
         st.metric("Max Nodes", 500)
     
-    # Rate Limit Information
-    st.info(f"""
-    **⏱️ Rate Limit: 20 requests/minute** (EnrichLayer $49/mo plan)
-    
-    Estimated time for {len(seeds)} seeds:
-    - **Degree 1:** ~{max(1, len(seeds) * 3 // 60)} min {(len(seeds) * 3) % 60} sec ({len(seeds)} API calls)
-    - **Degree 2:** ~{len(seeds) * 50 * 3 // 60}-{len(seeds) * 100 * 3 // 60} min ({len(seeds) * 50}-{len(seeds) * 100} API calls, varies by network size)
-    
-    *Each API call takes ~3 seconds to respect rate limits.*
+    # Rate Limit Information (cleaner version per team feedback)
+    st.caption(f"""
+    ⏱️ **API pacing:** This prototype is tuned for up to **{PER_MIN_LIMIT} requests/minute**
+    (EnrichLayer $49/mo plan). The app automatically throttles calls so we don't hit rate limits.
+    Progress bar shows processed nodes vs. remaining queue.
     """)
     
     # ========================================================================
@@ -878,19 +922,10 @@ def main():
     if run_button:
         st.header("🔄 Crawl Progress")
         
-        # Progress bar and time estimate
-        progress_bar = st.progress(0, text="Starting crawl...")
-        time_display = st.empty()
+        # Progress bar
+        progress_bar = st.progress(0.0, text="Starting crawl...")
         
         status_container = st.status("Running crawl...", expanded=True)
-        
-        # Estimate total profiles to fetch
-        # Degree 1: just the seeds
-        # Degree 2: seeds + estimated connections (rough estimate: 50 per seed)
-        if max_degree == 1:
-            estimated_total = len(seeds)
-        else:
-            estimated_total = len(seeds) + (len(seeds) * 50)  # Rough estimate
         
         # Run the crawler
         seen_profiles, edges, raw_profiles, stats = run_crawler(
@@ -903,12 +938,10 @@ def main():
             mock_mode=mock_mode,
             advanced_mode=advanced_mode,
             progress_bar=progress_bar,
-            time_display=time_display,
-            estimated_total=estimated_total
+            per_min_limit=PER_MIN_LIMIT
         )
         
-        progress_bar.progress(100, text="✅ Complete!")
-        time_display.empty()
+        progress_bar.progress(1.0, text="✅ Complete!")
         status_container.update(label="✅ Crawl Complete!", state="complete")
         
         # Improvement #3: Graph validation
