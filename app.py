@@ -186,7 +186,7 @@ def get_mock_response(profile_url: str) -> Dict:
             base_response["public_identifier"] = temp_id
             return base_response
     except FileNotFoundError:
-        # Fallback to synthetic response
+        # Fallback to synthetic response matching v2 API format
         temp_id = canonical_id_from_url(profile_url)
         return {
             "public_identifier": temp_id,
@@ -195,16 +195,16 @@ def get_mock_response(profile_url: str) -> Dict:
             "location": "Mock City",
             "people_also_viewed": [
                 {
-                    "public_identifier": f"mock-connection-1-{temp_id}",
-                    "full_name": "Mock Connection 1",
-                    "headline": "Mock Title 1",
-                    "profile_url": f"https://www.linkedin.com/in/mock-connection-1-{temp_id}"
+                    "link": f"https://www.linkedin.com/in/mock-connection-1-{temp_id}",
+                    "name": "Mock Connection 1",
+                    "summary": "Mock Title 1",
+                    "location": "Mock City"
                 },
                 {
-                    "public_identifier": f"mock-connection-2-{temp_id}",
-                    "full_name": "Mock Connection 2",
-                    "headline": "Mock Title 2",
-                    "profile_url": f"https://www.linkedin.com/in/mock-connection-2-{temp_id}"
+                    "link": f"https://www.linkedin.com/in/mock-connection-2-{temp_id}",
+                    "name": "Mock Connection 2",
+                    "summary": "Mock Title 2",
+                    "location": "Mock City"
                 }
             ]
         }
@@ -335,11 +335,17 @@ def run_crawler(
                 status_container.warning(f"⚠️ Reached edge limit ({max_edges}) while processing neighbors.")
                 break
             
-            neighbor_url = neighbor.get('profile_url', '')
+            # Handle both v2 API format and mock data format
+            # v2 API uses: link, name, summary
+            # Mock uses: profile_url, full_name, headline, public_identifier
+            neighbor_url = neighbor.get('link') or neighbor.get('profile_url', '')
+            neighbor_name = neighbor.get('name') or neighbor.get('full_name', '')
+            neighbor_headline = neighbor.get('summary') or neighbor.get('headline', '')
+            
             if not neighbor_url:
                 continue
             
-            # Use public_identifier if available, otherwise extract from URL
+            # Use public_identifier if available (mock data), otherwise extract from URL
             neighbor_id = neighbor.get('public_identifier', canonical_id_from_url(neighbor_url))
             
             # Add edge
@@ -362,9 +368,9 @@ def run_crawler(
             # Create new node
             neighbor_node = {
                 'id': neighbor_id,
-                'name': neighbor.get('full_name', ''),
+                'name': neighbor_name,
                 'profile_url': neighbor_url,
-                'headline': neighbor.get('headline', ''),
+                'headline': neighbor_headline,
                 'location': neighbor.get('location', ''),
                 'degree': current_node['degree'] + 1,
                 'source_type': 'discovered'
