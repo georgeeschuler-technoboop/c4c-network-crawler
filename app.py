@@ -17,7 +17,7 @@ import zipfile
 # CONFIGURATION
 # ============================================================================
 
-API_DELAY = 2.0  # Seconds between API calls (increased to avoid rate limits)
+API_DELAY = 3.0  # Seconds between API calls (20 requests/min for $49/mo EnrichLayer plan)
 DEFAULT_MOCK_MODE = os.getenv("C4C_MOCK_MODE", "false").lower() == "true"
 
 # ============================================================================
@@ -310,7 +310,10 @@ def run_crawler(
     max_nodes: int,
     status_container,
     mock_mode: bool = False,
-    advanced_mode: bool = False
+    advanced_mode: bool = False,
+    progress_bar = None,
+    time_display = None,
+    estimated_total: int = 10
 ) -> Tuple[Dict, List, List, Dict]:
     """
     Run BFS crawler on seed profiles.
@@ -318,6 +321,9 @@ def run_crawler(
     Returns:
         (seen_profiles, edges, raw_profiles, stats)
     """
+    import datetime
+    start_time = datetime.datetime.now()
+    
     # Initialize data structures
     queue = deque()
     seen_profiles = {}
@@ -340,7 +346,8 @@ def run_crawler(
             'auth_error': 0,
             'not_found': 0,
             'enrichment_failed': 0,
-            'other': 0
+            'other': 0,
+            'consecutive_rate_limits': 0
         }
     }
     
@@ -383,8 +390,43 @@ def run_crawler(
         if current_node['degree'] >= max_degree:
             continue
         
-        # Status update
-        status_container.write(f"🔍 Processing: {current_node['name']} (degree {current_node['degree']})")
+        # Status update with real-time stats
+        progress_text = f"🔍 Processing: {current_node['name']} (degree {current_node['degree']})"
+        if stats['api_calls'] > 0:
+            success_rate = (stats['successful_calls'] / stats['api_calls']) * 100
+            progress_text += f" | ✅ {stats['successful_calls']}/{stats['api_calls']} ({success_rate:.0f}%)"
+            if stats['failed_calls'] > 0:
+                progress_text += f" | ❌ {stats['failed_calls']} failed"
+                if stats['error_breakdown'].get('rate_limit', 0) > 0:
+                    progress_text += f" (Rate limited: {stats['error_breakdown']['rate_limit']})"
+        status_container.write(progress_text)
+        
+        # Update progress bar and time estimate
+        if progress_bar is not None:
+            # Calculate progress percentage (cap at 99% until complete)
+            progress_pct = min(99, int((stats['api_calls'] / max(estimated_total, 1)) * 100))
+            
+            # Calculate time estimate
+            elapsed = (datetime.datetime.now() - start_time).total_seconds()
+            if stats['api_calls'] > 0:
+                avg_time_per_call = elapsed / stats['api_calls']
+                remaining_calls = max(0, estimated_total - stats['api_calls'])
+                est_remaining = remaining_calls * avg_time_per_call
+                
+                # Format time
+                if est_remaining > 60:
+                    time_str = f"~{int(est_remaining // 60)} min {int(est_remaining % 60)} sec remaining"
+                else:
+                    time_str = f"~{int(est_remaining)} sec remaining"
+                
+                progress_bar.progress(progress_pct, text=f"Processing... {stats['api_calls']}/{estimated_total} profiles ({progress_pct}%)")
+                
+                if time_display is not None:
+                    time_display.caption(f"⏱️ {time_str} | Elapsed: {int(elapsed // 60)}m {int(elapsed % 60)}s | Rate: {60/API_DELAY:.0f} req/min")
+        
+        # Rate limiting: Wait BEFORE each API call (not after)
+        if stats['api_calls'] > 0 and not mock_mode:
+            time.sleep(API_DELAY)
         
         # Call EnrichLayer API
         stats['api_calls'] += 1
@@ -397,6 +439,20 @@ def run_crawler(
             # Classify error type
             if "Rate limit" in error:
                 stats['error_breakdown']['rate_limit'] += 1
+                
+                # Check for excessive consecutive rate limits
+                consecutive_rate_limits = stats['error_breakdown'].get('consecutive_rate_limits', 0) + 1
+                stats['error_breakdown']['consecutive_rate_limits'] = consecutive_rate_limits
+                
+                if consecutive_rate_limits >= 10:
+                    st.warning(f"""
+                    **⏸️ Pausing: Too many consecutive rate limits ({consecutive_rate_limits})**
+                    
+                    Waiting 30 seconds before continuing...
+                    Consider stopping and using Degree 1 instead.
+                    """)
+                    time.sleep(30)  # Long pause after many consecutive failures
+                    stats['error_breakdown']['consecutive_rate_limits'] = 0  # Reset counter
             elif "Out of credits" in error:
                 stats['error_breakdown']['out_of_credits'] += 1
                 stats['stopped_reason'] = 'out_of_credits'
@@ -417,6 +473,7 @@ def run_crawler(
             continue
         
         stats['successful_calls'] += 1
+        stats['error_breakdown']['consecutive_rate_limits'] = 0  # Reset on success
         raw_profiles.append(response)
         
         # Update node with enriched data
@@ -511,10 +568,6 @@ def run_crawler(
             # Enqueue if can still be expanded
             if neighbor_node['degree'] < max_degree:
                 queue.append(neighbor_id)
-        
-        # Rate limiting delay
-        if queue and not mock_mode:  # Only delay if there are more profiles and not in mock mode
-            time.sleep(API_DELAY)
     
     if not stats['stopped_reason']:
         stats['stopped_reason'] = 'completed'
@@ -765,37 +818,39 @@ def main():
             st.error("""
             **⚠️ Degree 2 Warning - Read Before Running!**
             
-            Degree 2 crawls are **expensive and risky**:
+            Degree 2 crawls are **expensive and slow**:
             - 📊 10-50x more API calls than Degree 1
-            - 💳 Uses 100-500 credits (you have limited credits)
-            - ⏱️ Takes 10-20+ minutes
-            - 🚫 High risk of rate limit failures (252 failed in your last test!)
-            - 🐌 2-second delay between calls (still may hit limits)
+            - 💳 Uses 100-500 credits
+            - ⏱️ Takes 30-90+ minutes (at 20 req/min)
+            - 🚫 May still hit rate limits on large networks
             
             **💡 Recommendation:** Start with Degree 1 first!
-            - See your network structure
-            - Use only ~10 credits
-            - Complete in 30 seconds
-            - Then decide if Degree 2 is needed
             """, icon="🚨")
         else:
             st.success("""
             **✅ Degree 1 Selected - Good Choice!**
             
-            Degree 1 is **fast, reliable, and cost-effective**:
-            - 🎯 Direct connections only (1 hop from seeds)
-            - ⚡ Completes in 20-40 seconds
-            - 💰 Uses only ~5-10 credits
-            - ✅ Very low risk of rate limits
-            - 📊 Great for exploring network structure
-            
-            **Tip:** Run Degree 1 first, then decide if you need Degree 2.
+            - 🎯 Direct connections only
+            - ⚡ ~1-2 minutes for 5 seeds
+            - 💰 Uses ~5-10 credits
+            - ✅ Reliable, low rate limit risk
             """, icon="👍")
     
     with col2:
         st.markdown("**Crawl Limits:**")
         st.metric("Max Edges", 1000)
         st.metric("Max Nodes", 500)
+    
+    # Rate Limit Information
+    st.info(f"""
+    **⏱️ Rate Limit: 20 requests/minute** (EnrichLayer $49/mo plan)
+    
+    Estimated time for {len(seeds)} seeds:
+    - **Degree 1:** ~{max(1, len(seeds) * 3 // 60)} min {(len(seeds) * 3) % 60} sec ({len(seeds)} API calls)
+    - **Degree 2:** ~{len(seeds) * 50 * 3 // 60}-{len(seeds) * 100 * 3 // 60} min ({len(seeds) * 50}-{len(seeds) * 100} API calls, varies by network size)
+    
+    *Each API call takes ~3 seconds to respect rate limits.*
+    """)
     
     # ========================================================================
     # RUN BUTTON
@@ -823,7 +878,19 @@ def main():
     if run_button:
         st.header("🔄 Crawl Progress")
         
+        # Progress bar and time estimate
+        progress_bar = st.progress(0, text="Starting crawl...")
+        time_display = st.empty()
+        
         status_container = st.status("Running crawl...", expanded=True)
+        
+        # Estimate total profiles to fetch
+        # Degree 1: just the seeds
+        # Degree 2: seeds + estimated connections (rough estimate: 50 per seed)
+        if max_degree == 1:
+            estimated_total = len(seeds)
+        else:
+            estimated_total = len(seeds) + (len(seeds) * 50)  # Rough estimate
         
         # Run the crawler
         seen_profiles, edges, raw_profiles, stats = run_crawler(
@@ -834,9 +901,14 @@ def main():
             max_nodes=500,
             status_container=status_container,
             mock_mode=mock_mode,
-            advanced_mode=advanced_mode
+            advanced_mode=advanced_mode,
+            progress_bar=progress_bar,
+            time_display=time_display,
+            estimated_total=estimated_total
         )
         
+        progress_bar.progress(100, text="✅ Complete!")
+        time_display.empty()
         status_container.update(label="✅ Crawl Complete!", state="complete")
         
         # Improvement #3: Graph validation
@@ -948,6 +1020,63 @@ def main():
                     2. Purchase more credits if needed
                     3. Resume your crawl
                     """)
+            
+            # ================================================================
+            # DETAILED ERROR LOG (C4C Internal Use)
+            # ================================================================
+            with st.expander("🔧 Technical Details (C4C Internal)", expanded=False):
+                st.markdown("### API Call Statistics")
+                st.code(f"""
+Total API Calls Attempted: {stats['api_calls']}
+Successful Calls: {stats['successful_calls']}
+Failed Calls: {stats['failed_calls']}
+Success Rate: {(stats['successful_calls'] / max(stats['api_calls'], 1) * 100):.1f}%
+
+Error Breakdown:
+- Rate Limit (429): {error_breakdown.get('rate_limit', 0)}
+- Out of Credits (403): {error_breakdown.get('out_of_credits', 0)}
+- Auth Errors (401): {error_breakdown.get('auth_error', 0)}
+- Not Found (404): {error_breakdown.get('not_found', 0)}
+- Enrichment Failed (503): {error_breakdown.get('enrichment_failed', 0)}
+- Other Errors: {error_breakdown.get('other', 0)}
+
+Crawl Configuration:
+- Max Degree: {max_degree}
+- Max Edges Limit: 1000
+- Max Nodes Limit: 500
+- API Delay: {API_DELAY} seconds between calls
+- Stopped Reason: {stats.get('stopped_reason', 'unknown')}
+                """, language="text")
+                
+                # Rate limit diagnosis
+                if error_breakdown.get('rate_limit', 0) > 10:
+                    st.markdown("### 🔍 Rate Limit Diagnosis")
+                    st.warning(f"""
+                    **High rate limit failures detected ({error_breakdown.get('rate_limit', 0)} errors)**
+                    
+                    **Possible causes:**
+                    1. EnrichLayer has strict per-minute limits (likely 60/min or less)
+                    2. Degree 2 crawls make too many rapid requests
+                    3. Your plan tier may have lower limits
+                    
+                    **Current settings:**
+                    - API Delay: {API_DELAY} seconds (should give ~{60/API_DELAY:.0f} calls/min)
+                    - This run attempted: {stats['api_calls']} calls
+                    
+                    **Recommendations:**
+                    - Use Degree 1 for most crawls
+                    - Contact EnrichLayer support about rate limits
+                    - Consider increasing API_DELAY to 3-4 seconds
+                    """)
+                
+                st.markdown("### 📊 Network Statistics")
+                st.code(f"""
+Total Nodes Discovered: {len(seen_profiles)}
+Total Edges Discovered: {len(edges)}
+Nodes with Organization Data: {sum(1 for n in seen_profiles.values() if n.get('organization'))}
+Max Degree Reached: {stats.get('max_degree_reached', 0)}
+Profiles With No Neighbors: {stats.get('profiles_with_no_neighbors', 0)}
+                """, language="text")
 
         
         # ====================================================================
