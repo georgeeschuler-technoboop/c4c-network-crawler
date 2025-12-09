@@ -468,7 +468,7 @@ def render_sector_analysis(sectors: Dict[str, int], total_nodes: int, seen_profi
     )
     
     st.markdown("**Share of classified actors by sector:**")
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
     
     # Color legend
     st.markdown("""
@@ -2179,7 +2179,7 @@ def generate_nodes_csv(seen_profiles: Dict, max_degree: int, max_edges: int, max
     
     # Improvement #5: Add metadata header
     meta = (
-        f"# generated_at={datetime.utcnow().isoformat()}Z; "
+        f"# generated_at={datetime.now(datetime.timezone.utc).isoformat()}; "
         f"max_degree={max_degree}; max_edges={max_edges}; max_nodes={max_nodes}\n"
     )
     
@@ -2193,7 +2193,7 @@ def generate_edges_csv(edges: List, max_degree: int, max_edges: int, max_nodes: 
     
     # Improvement #5: Add metadata header
     meta = (
-        f"# generated_at={datetime.utcnow().isoformat()}Z; "
+        f"# generated_at={datetime.now(datetime.timezone.utc).isoformat()}; "
         f"max_degree={max_degree}; max_edges={max_edges}; max_nodes={max_nodes}\n"
     )
     
@@ -3657,7 +3657,7 @@ Profiles With No Neighbors: {stats.get('profiles_with_no_neighbors', 0)}
                 # Display brokerage chart
                 brokerage_chart = create_brokerage_role_chart(brokerage_roles)
                 if brokerage_chart:
-                    st.plotly_chart(brokerage_chart, use_container_width=True, key="brokerage_chart_display")
+                    st.plotly_chart(brokerage_chart, width="stretch", key="brokerage_chart_display")
                 
                 # Role definitions
                 with st.expander("📖 What do these roles mean?"):
