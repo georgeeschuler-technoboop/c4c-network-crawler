@@ -232,7 +232,7 @@ def render_health_summary(score: int, label: str):
     else:
         color = "🔴"
     st.markdown(f"### {color} Network Health: **{score} / 100** — *{label}*")
-    st.caption("This score combines connectivity, cohesion, fragmentation, and power concentration.")
+    st.caption("This score reflects how well people are connected, how unified the system is, and how influence is distributed.")
 
 
 def render_health_details(
@@ -240,36 +240,69 @@ def render_health_details(
     degree_values: Sequence[float],
     betweenness_values: Sequence[float],
 ):
-    """Render detailed breakdown of health score."""
+    """Render detailed breakdown of health score in plain language."""
     with st.expander("🔍 Health Score Breakdown"):
+        # Calculate values
+        largest_share = stats.largest_component_size / max(stats.n_nodes, 1) * 100
+        deg_cent = centralization_index(degree_values)
+        btw_cent = centralization_index(betweenness_values)
+        power_concentrated = deg_cent > 0.5 or btw_cent > 0.5
+        
+        # Collect positive factors
+        positives = []
+        if largest_share >= 80:
+            positives.append(f"🟢 **The network is highly unified** — {largest_share:.0f}% of people can reach each other through the network, which means ideas and information can spread broadly.")
+        if not power_concentrated:
+            positives.append("🟢 **Influence is distributed** — no single actor dominates the network, reducing gatekeeping and single points of failure.")
+        if stats.avg_degree >= 4:
+            positives.append(f"🟢 **Good direct connectivity** — people have an average of {stats.avg_degree:.1f} direct connections, enabling organic collaboration.")
+        
+        # Collect risk factors
+        risks = []
+        if stats.avg_degree < 4:
+            risks.append(f"🔴 **Low direct connectivity** (avg {stats.avg_degree:.1f} links per person) — people have few direct ties, which means collaboration requires active coordination.")
+        if stats.n_components > 1:
+            risks.append(f"🟠 **{stats.n_components} isolated groups exist** — these clusters cannot reach each other, even indirectly. This may indicate blind spots, missing sectors, or disconnected communities.")
+        if largest_share < 80:
+            risks.append(f"🟠 **Fragmented network** — only {largest_share:.0f}% of people are part of the main connected group, limiting how far information can travel.")
+        if power_concentrated:
+            risks.append("🔴 **Power is concentrated** — influence sits with a few key actors, creating potential bottlenecks and vulnerabilities.")
+        
+        # Display
         col1, col2 = st.columns(2)
         
         with col1:
-            st.markdown("**Positive Factors:**")
-            if stats.avg_degree >= 4:
-                st.markdown(f"- ✅ Good connectivity (avg {stats.avg_degree:.1f} connections)")
+            st.markdown("**🟢 Positive Factors**")
+            if positives:
+                for p in positives:
+                    st.markdown(p)
             else:
-                st.markdown(f"- ⚠️ Low connectivity (avg {stats.avg_degree:.1f} connections)")
-            
-            largest_share = stats.largest_component_size / max(stats.n_nodes, 1) * 100
-            if largest_share >= 80:
-                st.markdown(f"- ✅ High cohesion ({largest_share:.0f}% in main component)")
-            else:
-                st.markdown(f"- ⚠️ Fragmented ({largest_share:.0f}% in main component)")
+                st.markdown("*No strong positive factors identified*")
         
         with col2:
-            st.markdown("**Risk Factors:**")
-            if stats.n_components > 3:
-                st.markdown(f"- ⚠️ {stats.n_components} disconnected groups")
+            st.markdown("**🔴 Risk Factors**")
+            if risks:
+                for r in risks:
+                    st.markdown(r)
             else:
-                st.markdown(f"- ✅ Only {stats.n_components} component(s)")
-            
-            deg_cent = centralization_index(degree_values)
-            btw_cent = centralization_index(betweenness_values)
-            if deg_cent > 0.5 or btw_cent > 0.5:
-                st.markdown("- ⚠️ Power concentrated in few nodes")
-            else:
-                st.markdown("- ✅ Power well distributed")
+                st.markdown("*No significant risks identified*")
+        
+        # Glossary
+        with st.expander("📖 What do these terms mean?"):
+            st.markdown("""
+**Direct connections (degree):**  
+How many people someone is directly connected to.
+
+**Connected group (component):**  
+A group of people who can reach each other through the network, even if indirectly.  
+If the network has multiple components, those groups never interact.
+
+**Network unity (cohesion):**  
+The share of all actors who are part of the same overall connected system.
+
+**Power concentration:**  
+Whether influence (measured through network metrics) sits with a few actors or is spread out.
+            """)
 
 # ============================================================================
 # CONFIGURATION
