@@ -576,6 +576,384 @@ def render_sector_analysis(sectors: Dict[str, int], total_nodes: int, seen_profi
                     st.caption(f"...and {len(unknown_profiles) - 10} more unclassified profiles")
 
 
+# ============================================================================
+# BROKERAGE ROLES (Gould & Fernandez Classification)
+# ============================================================================
+
+def detect_communities(G: nx.Graph) -> Dict[str, int]:
+    """
+    Run Louvain community detection.
+    Returns {node_id: community_id}
+    """
+    try:
+        import community as community_louvain
+        partition = community_louvain.best_partition(G)
+        return partition
+    except ImportError:
+        # Fallback: use NetworkX's greedy modularity if python-louvain not available
+        from networkx.algorithms.community import greedy_modularity_communities
+        communities = list(greedy_modularity_communities(G))
+        partition = {}
+        for i, comm in enumerate(communities):
+            for node in comm:
+                partition[node] = i
+        return partition
+
+
+def compute_brokerage_roles(G: nx.Graph, communities: Dict[str, int]) -> Dict[str, str]:
+    """
+    Implements simplified Gould & Fernandez brokerage classification.
+    Returns {node_id: brokerage_role}
+    
+    Roles:
+    - coordinator: connects people within their own group
+    - gatekeeper: controls access into their group  
+    - representative: connects their group to others
+    - liaison: bridges two groups neither of which is their own
+    - consultant: connects to many others across multiple sectors
+    - peripheral: low brokerage, purely internal ties
+    """
+    roles = {}
+
+    for node in G.nodes():
+        if node not in communities:
+            roles[node] = "peripheral"
+            continue
+            
+        group = communities[node]
+        neighbors = list(G.neighbors(node))
+        
+        if not neighbors:
+            roles[node] = "peripheral"
+            continue
+
+        neighbor_groups = {communities.get(n, -1) for n in neighbors}
+        neighbor_groups.discard(-1)  # Remove unknown groups
+
+        # Internal coordinator: neighbors mostly in same group
+        same_group_ties = [n for n in neighbors if communities.get(n) == group]
+        other_group_ties = [n for n in neighbors if communities.get(n) != group and n in communities]
+
+        if len(neighbor_groups) <= 1 and group in neighbor_groups:
+            roles[node] = "coordinator"
+            continue
+
+        # Liaison: connects two groups neither of which is their own
+        if len(neighbor_groups) >= 2 and group not in neighbor_groups:
+            roles[node] = "liaison"
+            continue
+
+        # Representative: many outgoing ties to other groups
+        if len(other_group_ties) >= len(neighbors) * 0.5:
+            roles[node] = "representative"
+            continue
+
+        # Gatekeeper: some ties to other groups but primarily internal
+        if len(other_group_ties) > 0 and len(other_group_ties) <= len(neighbors) * 0.35:
+            roles[node] = "gatekeeper"
+            continue
+
+        # Consultant (multi-group advisor)
+        if len(neighbor_groups) > 2:
+            roles[node] = "consultant"
+            continue
+
+        # Default
+        roles[node] = "peripheral"
+
+    return roles
+
+
+BROKER_BADGES: Dict[str, Dict[str, str]] = {
+    "coordinator": {"emoji": "🧩", "label": "Internal coordinator", "color": "#3B82F6"},
+    "gatekeeper": {"emoji": "🚪", "label": "Gatekeeper", "color": "#F97316"},
+    "representative": {"emoji": "🔗", "label": "Representative", "color": "#10B981"},
+    "liaison": {"emoji": "🌉", "label": "Cross-group liaison", "color": "#D97706"},
+    "consultant": {"emoji": "🧠", "label": "Multi-group advisor", "color": "#6366F1"},
+    "peripheral": {"emoji": "⚪", "label": "Peripheral", "color": "#9CA3AF"},
+}
+
+BROKER_TOOLTIPS: Dict[str, str] = {
+    "coordinator": "Connects people within their own group, keeping it internally cohesive.",
+    "gatekeeper": "Controls access into their group — a key node for sector handoffs.",
+    "representative": "Brings their group's voice into other groups — outbound connector.",
+    "liaison": "The rare 'true bridge' — connects groups they don't belong to. Extremely valuable.",
+    "consultant": "Sits across multiple groups with non-hierarchical ties — multi-group advisor.",
+    "peripheral": "Low influence, low connectivity — sits at the edge of the system.",
+}
+
+
+def render_broker_badge(role: str, small: bool = True) -> str:
+    """Return HTML snippet for a brokerage role badge."""
+    cfg = BROKER_BADGES.get(role, BROKER_BADGES["peripheral"])
+    pad = "2px 6px" if small else "4px 8px"
+    font_size = "11px" if small else "13px"
+    return (
+        f"<span style='"
+        f"background-color:{cfg['color']}20;"
+        f"border:1px solid {cfg['color']};"
+        f"border-radius:999px;"
+        f"padding:{pad};"
+        f"font-size:{font_size};"
+        f"color:#111827;"
+        f"margin-left:4px;"
+        f"white-space:nowrap;"
+        f"'>"
+        f"{cfg['emoji']} {cfg['label']}"
+        f"</span>"
+    )
+
+
+def describe_broker_role(name: str, org: str, role: str, betweenness_level: str) -> str:
+    """Generate a narrative description of a broker's role."""
+    org_part = f" at {org}" if org else ""
+    
+    role_descriptions = {
+        "liaison": f"{name}{org_part} serves as a critical cross-group liaison — one of the few people who bridge otherwise disconnected clusters. If they disengage, cross-sector information flow may collapse.",
+        "gatekeeper": f"{name}{org_part} acts as a gatekeeper, controlling access into their group. They are a key node for sector handoffs and should have backup to avoid bottlenecks.",
+        "representative": f"{name}{org_part} is an outbound representative who brings their group's voice into other clusters. They help ensure their sector's perspectives are heard elsewhere.",
+        "coordinator": f"{name}{org_part} serves as an internal coordinator, keeping their group cohesive. They may not bridge outward, but they strengthen internal collaboration.",
+        "consultant": f"{name}{org_part} operates as a multi-group advisor, connecting across several clusters without belonging strongly to any single one.",
+        "peripheral": f"{name}{org_part} currently plays a peripheral role with limited brokerage influence.",
+    }
+    
+    description = role_descriptions.get(role, role_descriptions["peripheral"])
+    
+    # Add betweenness context
+    if betweenness_level in ("high", "extreme") and role != "peripheral":
+        description += " Their high betweenness means many paths in the network run through them."
+    
+    return description
+
+
+# ============================================================================
+# RECOMMENDATIONS ENGINE (Rule-based Next Steps)
+# ============================================================================
+
+def generate_recommendations(
+    stats: NetworkStats,
+    sector_analysis: SectorAnalysis,
+    degree_values: Sequence[float],
+    betweenness_values: Sequence[float],
+    health_score: int,
+    health_label: str,
+    brokerage_roles: Dict[str, str] = None,
+    critical_brokers: List[str] = None,
+) -> str:
+    """
+    Generate rule-based recommendations based on network structure.
+    Returns markdown string with actionable next steps.
+    """
+    rec_sections: List[str] = []
+    
+    # Initialize if None
+    if brokerage_roles is None:
+        brokerage_roles = {}
+    if critical_brokers is None:
+        critical_brokers = []
+
+    # ----------------------------------------------------------------------
+    # 1. Overall framing based on health score
+    # ----------------------------------------------------------------------
+    if health_score >= 70:
+        intro = (
+            "The network is structurally healthy. The goal now is to **protect "
+            "what works** and **deepen strategic relationships** rather than fix "
+            "basic connectivity."
+        )
+    elif health_score >= 40:
+        intro = (
+            "The network shows **mixed signals**. There is a reasonably solid "
+            "core, but several structural risks limit how quickly ideas and "
+            "collaboration can spread."
+        )
+    else:
+        intro = (
+            "The network appears **fragile**. Basic connectivity and inclusion "
+            "need attention before deeper collaboration will be reliable."
+        )
+
+    rec_sections.append(f"### 🧭 How to Read This\n\n{intro}\n")
+
+    # ----------------------------------------------------------------------
+    # 2. Connectivity & fragmentation
+    # ----------------------------------------------------------------------
+    connectivity_recs: List[str] = []
+
+    if stats.avg_degree < 3:
+        connectivity_recs.append(
+            "**Increase direct connections:** Most people have few direct ties. "
+            "Host small, mixed-group sessions or introductions so key actors meet "
+            "each other directly instead of relying on intermediaries."
+        )
+    elif stats.avg_degree > 8:
+        connectivity_recs.append(
+            "**Simplify crowded ties:** Many actors have lots of direct links. "
+            "Consider clarifying who is responsible for what to avoid overload."
+        )
+
+    if stats.n_components > 1:
+        connectivity_recs.append(
+            f"**Bridge isolated groups:** The network splits into **{stats.n_components} "
+            "disconnected clusters**. Identify 1–2 people in each cluster who can "
+            "join cross-group conversations or shared projects."
+        )
+
+    if connectivity_recs:
+        rec_sections.append("### 🔗 Strengthen Basic Connections\n\n" +
+                            "\n\n".join([f"- {r}" for r in connectivity_recs]) + "\n")
+
+    # ----------------------------------------------------------------------
+    # 3. Sector balance & inclusion
+    # ----------------------------------------------------------------------
+    sector_recs: List[str] = []
+
+    if sector_analysis and sector_analysis.dominant_sectors:
+        dom = ", ".join(sector_analysis.dominant_sectors)
+        sector_recs.append(
+            f"**Rebalance who is at the table:** The network is strongly shaped "
+            f"by **{dom}**. Make sure decisions and narratives do not rely only "
+            "on these perspectives."
+        )
+
+    if sector_analysis and sector_analysis.underrepresented_sectors and \
+       len(sector_analysis.underrepresented_sectors) != len(sector_analysis.df):
+        under = ", ".join(sector_analysis.underrepresented_sectors)
+        sector_recs.append(
+            f"**Invite missing voices:** These sectors are underrepresented "
+            f"(**{under}**). Intentionally invite them into sensemaking workshops, "
+            "advisory groups, or early-stage design conversations."
+        )
+
+    if sector_analysis and sector_analysis.diversity_label == "Highly concentrated":
+        sector_recs.append(
+            "**Monitor concentration of influence:** Because most actors come "
+            "from a narrow set of sectors, keep an eye on how that shapes which "
+            "problems are seen as important."
+        )
+
+    if sector_recs:
+        rec_sections.append("### 🎯 Balance Sectors and Perspectives\n\n" +
+                            "\n\n".join([f"- {r}" for r in sector_recs]) + "\n")
+
+    # ----------------------------------------------------------------------
+    # 4. Power concentration & brokers
+    # ----------------------------------------------------------------------
+    power_recs: List[str] = []
+
+    deg_cent = centralization_index(degree_values)
+    btw_cent = centralization_index(betweenness_values)
+    avg_cent = 0.5 * (deg_cent + btw_cent)
+
+    if critical_brokers:
+        power_recs.append(
+            "**Reduce dependence on critical brokers:** A small number of "
+            "people sit on many key paths. If they disengage or change roles, "
+            "collaboration could stall. Identify 2–3 additional connectors who "
+            "can share this load."
+        )
+
+    if avg_cent > 0.5:
+        power_recs.append(
+            "**Distribute influence more widely:** Consider rotating facilitation "
+            "roles, broadening who convenes meetings, and creating multiple entry "
+            "points into the network."
+        )
+    elif avg_cent < 0.2 and stats.n_nodes > 20:
+        power_recs.append(
+            "**Clarify leadership signals:** Power is widely spread. This is "
+            "healthy for resilience, but can make decision-making fuzzy. Make "
+            "sure there are clear ways to align on priorities."
+        )
+
+    # Role-specific checks
+    if brokerage_roles:
+        roles_list = list(brokerage_roles.values())
+        n_liaison = roles_list.count("liaison")
+        n_gatekeeper = roles_list.count("gatekeeper")
+        n_rep = roles_list.count("representative")
+
+        if n_liaison == 0 and stats.n_components > 1:
+            power_recs.append(
+                "**Cultivate cross-group liaisons:** No clear liaisons were "
+                "detected. Support boundary-spanning people who can translate "
+                "between groups and sectors."
+            )
+
+        if n_gatekeeper > 3:
+            power_recs.append(
+                "**Support gatekeepers, but avoid bottlenecks:** People who "
+                "control access into key groups need backup and transparency so "
+                "others are not blocked when they are unavailable."
+            )
+
+        if n_rep == 0 and sector_analysis and sector_analysis.dominant_sectors:
+            power_recs.append(
+                "**Develop representatives for underrepresented sectors:** "
+                "Encourage individuals who can speak for missing sectors in "
+                "multi-stakeholder forums."
+            )
+
+    if power_recs:
+        rec_sections.append("### 🧩 Work with Brokers Thoughtfully\n\n" +
+                            "\n\n".join([f"- {r}" for r in power_recs]) + "\n")
+
+    # ----------------------------------------------------------------------
+    # 5. Periphery & follow-through
+    # ----------------------------------------------------------------------
+    periphery_recs: List[str] = []
+
+    if stats.largest_component_size / max(stats.n_nodes, 1) > 0.9 and stats.avg_degree < 3:
+        periphery_recs.append(
+            "**Stabilize the periphery:** Many actors are technically connected "
+            "but only via a small number of ties. Provide easy ways for them to "
+            "participate (light-touch updates, open calls, or periodic check-ins)."
+        )
+
+    if periphery_recs:
+        rec_sections.append("### 🌱 Strengthen Participation at the Edges\n\n" +
+                            "\n\n".join([f"- {r}" for r in periphery_recs]) + "\n")
+
+    # ----------------------------------------------------------------------
+    # 6. Fallback if nothing was triggered
+    # ----------------------------------------------------------------------
+    if len(rec_sections) == 1:  # Only the intro
+        rec_sections.append(
+            "### ✨ No Structural Red Flags\n\n"
+            "The network appears structurally sound based on the available data. "
+            "Focus on **clarifying shared purpose, stories, and norms** rather than "
+            "changing the structure itself."
+        )
+
+    return "\n".join(rec_sections)
+
+
+def render_recommendations(
+    stats: NetworkStats,
+    sector_analysis: SectorAnalysis,
+    degree_values: Sequence[float],
+    betweenness_values: Sequence[float],
+    health_score: int,
+    health_label: str,
+    brokerage_roles: Dict[str, str] = None,
+    critical_brokers: List[str] = None,
+):
+    """Render recommendations section in Streamlit."""
+    st.subheader("🚀 Next-Step Recommendations")
+    
+    recommendations_md = generate_recommendations(
+        stats=stats,
+        sector_analysis=sector_analysis,
+        degree_values=degree_values,
+        betweenness_values=betweenness_values,
+        health_score=health_score,
+        health_label=health_label,
+        brokerage_roles=brokerage_roles,
+        critical_brokers=critical_brokers,
+    )
+    
+    st.markdown(recommendations_md)
+
 
 # ============================================================================
 # CONFIGURATION
@@ -1328,7 +1706,9 @@ def calculate_network_metrics(seen_profiles: Dict, edges: List) -> Dict:
         return {
             'node_metrics': node_metrics,
             'network_stats': {'nodes': len(G.nodes()), 'edges': len(G.edges())},
-            'top_nodes': {}
+            'top_nodes': {},
+            'brokerage_roles': {},
+            'communities': {}
         }
     
     # ----- DEGREE CENTRALITY -----
@@ -1403,6 +1783,34 @@ def calculate_network_metrics(seen_profiles: Dict, edges: List) -> Dict:
     except Exception as e:
         pass
     
+    # ----- COMMUNITY DETECTION & BROKERAGE ROLES -----
+    communities = {}
+    brokerage_roles = {}
+    try:
+        if len(G.nodes()) >= 3 and len(G.edges()) >= 2:
+            communities = detect_communities(G)
+            brokerage_roles = compute_brokerage_roles(G, communities)
+            
+            # Store in node metrics
+            for node_id in node_metrics:
+                if node_id in communities:
+                    node_metrics[node_id]['community'] = communities[node_id]
+                if node_id in brokerage_roles:
+                    node_metrics[node_id]['brokerage_role'] = brokerage_roles[node_id]
+            
+            # Count communities
+            if communities:
+                network_stats['num_communities'] = len(set(communities.values()))
+            
+            # Count brokerage roles
+            if brokerage_roles:
+                role_counts = {}
+                for role in brokerage_roles.values():
+                    role_counts[role] = role_counts.get(role, 0) + 1
+                network_stats['brokerage_role_counts'] = role_counts
+    except Exception as e:
+        pass  # Skip if community detection fails
+    
     # ----- NETWORK-LEVEL STATS -----
     network_stats['nodes'] = len(G.nodes())
     network_stats['edges'] = len(G.edges())
@@ -1435,7 +1843,9 @@ def calculate_network_metrics(seen_profiles: Dict, edges: List) -> Dict:
     return {
         'node_metrics': node_metrics,
         'network_stats': network_stats,
-        'top_nodes': top_nodes
+        'top_nodes': top_nodes,
+        'brokerage_roles': brokerage_roles,
+        'communities': communities
     }
 
 
@@ -2070,6 +2480,9 @@ Profiles With No Neighbors: {stats.get('profiles_with_no_neighbors', 0)}
                     st.subheader("🎯 Sector Distribution")
                     render_sector_analysis(sectors, len(seen_profiles), seen_profiles)
                 
+                # Compute sector_analysis for recommendations
+                sector_analysis = analyze_sectors(sectors, len(seen_profiles)) if sectors else None
+                
                 # Note about what this enables
                 st.markdown("---")
                 st.info("""
@@ -2107,6 +2520,8 @@ Profiles With No Neighbors: {stats.get('profiles_with_no_neighbors', 0)}
                 top_nodes = network_metrics['top_nodes']
                 network_stats = network_metrics.get('network_stats', {})
                 node_metrics = network_metrics.get('node_metrics', {})
+                brokerage_roles = network_metrics.get('brokerage_roles', {})
+                communities = network_metrics.get('communities', {})
                 
                 # Extract metric values for breakpoint calculation
                 degree_values = [m.get('degree_centrality', 0) for m in node_metrics.values()]
@@ -2205,12 +2620,23 @@ Profiles With No Neighbors: {stats.get('profiles_with_no_neighbors', 0)}
                     st.markdown("**🌉 Top Brokers** (by Betweenness)")
                     st.caption(METRIC_TOOLTIPS["betweenness"])
                     if 'betweenness' in top_nodes and btw_bp:
+                        # Track critical brokers (extreme betweenness)
+                        critical_broker_ids = []
+                        
                         for i, (node_id, score) in enumerate(top_nodes['betweenness'][:5], 1):
                             name = seen_profiles.get(node_id, {}).get('name', node_id)
                             org = seen_profiles.get(node_id, {}).get('organization', '')
                             
                             level = classify_value(score, btw_bp)
                             badge = render_badge("betweenness", level, small=True)
+                            
+                            # Get brokerage role badge
+                            broker_role = brokerage_roles.get(node_id, 'peripheral')
+                            role_badge = render_broker_badge(broker_role, small=True)
+                            
+                            # Track critical brokers
+                            if level in ('high', 'extreme'):
+                                critical_broker_ids.append(node_id)
                             
                             # Get all levels for description
                             levels = {
@@ -2220,8 +2646,8 @@ Profiles With No Neighbors: {stats.get('profiles_with_no_neighbors', 0)}
                                 "eigenvector": classify_value(node_metrics.get(node_id, {}).get('eigenvector_centrality', 0), eig_bp) if eig_bp else "low",
                             }
                             
-                            st.markdown(f"{i}. **{name}** ({org}) — {score:.4f} {badge}", unsafe_allow_html=True)
-                            st.caption(describe_node_role(name, org, levels))
+                            st.markdown(f"{i}. **{name}** ({org}) — {score:.4f} {badge} {role_badge}", unsafe_allow_html=True)
+                            st.caption(describe_broker_role(name, org, broker_role, level))
                     else:
                         st.info("No betweenness data available")
                     
@@ -2265,25 +2691,77 @@ Profiles With No Neighbors: {stats.get('profiles_with_no_neighbors', 0)}
             else:
                 st.info("Network metrics require edges to calculate. Run a crawl with connections to see centrality analysis.")
             
-            # Roadmap for future features
-            st.markdown("---")
-            st.subheader("📋 Coming Soon")
+            # ================================================================
+            # BROKERAGE ROLE SUMMARY
+            # ================================================================
+            if brokerage_roles:
+                st.markdown("---")
+                st.subheader("🎭 Brokerage Roles")
+                st.caption("How people connect groups in the network")
+                
+                # Count roles
+                role_counts = {}
+                for role in brokerage_roles.values():
+                    role_counts[role] = role_counts.get(role, 0) + 1
+                
+                # Display role counts
+                role_cols = st.columns(6)
+                role_order = ["liaison", "gatekeeper", "representative", "coordinator", "consultant", "peripheral"]
+                
+                for i, role in enumerate(role_order):
+                    count = role_counts.get(role, 0)
+                    cfg = BROKER_BADGES.get(role, {})
+                    emoji = cfg.get('emoji', '⚪')
+                    label = cfg.get('label', role.title())
+                    role_cols[i].metric(f"{emoji} {label}", count)
+                
+                # Role definitions
+                with st.expander("📖 What do these roles mean?"):
+                    st.markdown("""
+| Role | Description | Strategic Value |
+|------|-------------|-----------------|
+| 🌉 **Liaison** | Bridges groups they don't belong to | Extremely valuable — enables cross-sector flow |
+| 🚪 **Gatekeeper** | Controls access into their group | Key for sector handoffs — needs backup |
+| 🔗 **Representative** | Connects their group outward | Brings sector voice to other groups |
+| 🧩 **Coordinator** | Connects people within their group | Keeps internal cohesion strong |
+| 🧠 **Consultant** | Advises across multiple groups | Non-hierarchical cross-group connector |
+| ⚪ **Peripheral** | Edge of network | Lower structural influence |
+                    """)
             
-            st.markdown("""
-            **Community Detection** (In Progress)  
-            - Algorithmic cluster identification
-            - Modularity scores
-            
-            **Brokerage Matrix** (Planned)
-            - Coordinators, gatekeepers, representatives, liaisons
-            - Structural hole analysis
-            - Cross-sector bridge identification
-            
-            **Strategic Insights** (Future)
-            - AI-generated narrative analysis
-            - Gap identification
-            - Collaboration opportunities
-            """)
+            # ================================================================
+            # RECOMMENDATIONS
+            # ================================================================
+            if network_metrics and network_metrics.get('top_nodes'):
+                st.markdown("---")
+                
+                # Get critical brokers (top 5 with high/extreme betweenness)
+                critical_broker_ids = []
+                if 'betweenness' in top_nodes and btw_bp:
+                    for node_id, score in top_nodes['betweenness'][:5]:
+                        level = classify_value(score, btw_bp)
+                        if level in ('high', 'extreme'):
+                            critical_broker_ids.append(node_id)
+                
+                # Get or create sector_analysis
+                if 'sector_analysis' not in dir() or sector_analysis is None:
+                    # Fallback: create minimal sector analysis
+                    sectors_temp = {}
+                    for node in seen_profiles.values():
+                        sector = node.get('sector', 'Unknown')
+                        if sector:
+                            sectors_temp[sector] = sectors_temp.get(sector, 0) + 1
+                    sector_analysis = analyze_sectors(sectors_temp, len(seen_profiles)) if sectors_temp else None
+                
+                render_recommendations(
+                    stats=health_stats,
+                    sector_analysis=sector_analysis,
+                    degree_values=degree_values,
+                    betweenness_values=betweenness_values,
+                    health_score=health_score,
+                    health_label=health_label,
+                    brokerage_roles=brokerage_roles,
+                    critical_brokers=critical_broker_ids,
+                )
         
         # ====================================================================
         # DOWNLOAD SECTION
