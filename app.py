@@ -9,7 +9,7 @@ from typing import Dict, List, Tuple, Optional, Sequence
 import re
 import os
 import pathlib
-from datetime import datetime
+from datetime import datetime, timezone
 import socket
 import zipfile
 import networkx as nx
@@ -2179,7 +2179,7 @@ def generate_nodes_csv(seen_profiles: Dict, max_degree: int, max_edges: int, max
     
     # Improvement #5: Add metadata header
     meta = (
-        f"# generated_at={datetime.now(datetime.timezone.utc).isoformat()}; "
+        f"# generated_at={datetime.now(timezone.utc).isoformat()}; "
         f"max_degree={max_degree}; max_edges={max_edges}; max_nodes={max_nodes}\n"
     )
     
@@ -2193,7 +2193,7 @@ def generate_edges_csv(edges: List, max_degree: int, max_edges: int, max_nodes: 
     
     # Improvement #5: Add metadata header
     meta = (
-        f"# generated_at={datetime.now(datetime.timezone.utc).isoformat()}; "
+        f"# generated_at={datetime.now(timezone.utc).isoformat()}; "
         f"max_degree={max_degree}; max_edges={max_edges}; max_nodes={max_nodes}\n"
     )
     
@@ -2225,8 +2225,6 @@ def generate_insights_report(
     """
     Generate a comprehensive Markdown report of network insights.
     """
-    from datetime import datetime
-    
     lines = []
     
     # Header
