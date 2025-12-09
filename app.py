@@ -12,6 +12,7 @@ import pathlib
 from datetime import datetime
 import socket
 import zipfile
+import networkx as nx
 
 # ============================================================================
 # CONFIGURATION
@@ -731,12 +732,219 @@ def run_crawler(
 
 
 # ============================================================================
+# NETWORK METRICS CALCULATION
+# ============================================================================
+
+def calculate_network_metrics(seen_profiles: Dict, edges: List) -> Dict:
+    """
+    Calculate network centrality metrics using NetworkX.
+    
+    Returns dict with:
+        - node_metrics: {node_id: {metric_name: value, ...}, ...}
+        - network_stats: {metric_name: value, ...}
+        - top_nodes: {metric_name: [(node_id, value), ...], ...}
+    """
+    # Build NetworkX graph
+    G = nx.Graph()
+    
+    # Add nodes
+    for node_id, node_data in seen_profiles.items():
+        G.add_node(node_id, **node_data)
+    
+    # Add edges
+    for edge in edges:
+        G.add_edge(edge['source_id'], edge['target_id'])
+    
+    # Initialize results
+    node_metrics = {node_id: {} for node_id in seen_profiles.keys()}
+    network_stats = {}
+    top_nodes = {}
+    
+    # Skip calculations if graph is too small
+    if len(G.nodes()) < 2 or len(G.edges()) < 1:
+        return {
+            'node_metrics': node_metrics,
+            'network_stats': {'nodes': len(G.nodes()), 'edges': len(G.edges())},
+            'top_nodes': {}
+        }
+    
+    # ----- DEGREE CENTRALITY -----
+    # Number of connections (normalized by max possible)
+    try:
+        degree_centrality = nx.degree_centrality(G)
+        for node_id, value in degree_centrality.items():
+            if node_id in node_metrics:
+                node_metrics[node_id]['degree_centrality'] = round(value, 4)
+        
+        # Also store raw degree count
+        for node_id in G.nodes():
+            if node_id in node_metrics:
+                node_metrics[node_id]['degree'] = G.degree(node_id)
+        
+        # Top 10 by degree
+        sorted_degree = sorted(degree_centrality.items(), key=lambda x: x[1], reverse=True)[:10]
+        top_nodes['degree'] = sorted_degree
+        
+        network_stats['avg_degree'] = round(sum(dict(G.degree()).values()) / len(G.nodes()), 2)
+        network_stats['max_degree'] = max(dict(G.degree()).values())
+    except Exception as e:
+        pass  # Skip if calculation fails
+    
+    # ----- BETWEENNESS CENTRALITY -----
+    # How often a node lies on shortest paths between other nodes (identifies brokers)
+    try:
+        betweenness = nx.betweenness_centrality(G)
+        for node_id, value in betweenness.items():
+            if node_id in node_metrics:
+                node_metrics[node_id]['betweenness_centrality'] = round(value, 4)
+        
+        sorted_betweenness = sorted(betweenness.items(), key=lambda x: x[1], reverse=True)[:10]
+        top_nodes['betweenness'] = sorted_betweenness
+        
+        network_stats['avg_betweenness'] = round(sum(betweenness.values()) / len(betweenness), 4)
+    except Exception as e:
+        pass
+    
+    # ----- EIGENVECTOR CENTRALITY -----
+    # Connected to well-connected people (influence)
+    try:
+        eigenvector = nx.eigenvector_centrality(G, max_iter=500)
+        for node_id, value in eigenvector.items():
+            if node_id in node_metrics:
+                node_metrics[node_id]['eigenvector_centrality'] = round(value, 4)
+        
+        sorted_eigenvector = sorted(eigenvector.items(), key=lambda x: x[1], reverse=True)[:10]
+        top_nodes['eigenvector'] = sorted_eigenvector
+    except Exception as e:
+        # Eigenvector can fail on disconnected graphs
+        pass
+    
+    # ----- CLOSENESS CENTRALITY -----
+    # Average distance to all other nodes (accessibility)
+    try:
+        # Use connected components for disconnected graphs
+        if nx.is_connected(G):
+            closeness = nx.closeness_centrality(G)
+        else:
+            # Calculate for largest connected component
+            largest_cc = max(nx.connected_components(G), key=len)
+            subgraph = G.subgraph(largest_cc)
+            closeness = nx.closeness_centrality(subgraph)
+        
+        for node_id, value in closeness.items():
+            if node_id in node_metrics:
+                node_metrics[node_id]['closeness_centrality'] = round(value, 4)
+        
+        sorted_closeness = sorted(closeness.items(), key=lambda x: x[1], reverse=True)[:10]
+        top_nodes['closeness'] = sorted_closeness
+    except Exception as e:
+        pass
+    
+    # ----- NETWORK-LEVEL STATS -----
+    network_stats['nodes'] = len(G.nodes())
+    network_stats['edges'] = len(G.edges())
+    
+    try:
+        network_stats['density'] = round(nx.density(G), 4)
+    except:
+        pass
+    
+    try:
+        if nx.is_connected(G):
+            network_stats['diameter'] = nx.diameter(G)
+            network_stats['avg_path_length'] = round(nx.average_shortest_path_length(G), 2)
+        else:
+            # For disconnected graphs, report on largest component
+            largest_cc = max(nx.connected_components(G), key=len)
+            subgraph = G.subgraph(largest_cc)
+            network_stats['largest_component_size'] = len(largest_cc)
+            network_stats['num_components'] = nx.number_connected_components(G)
+            if len(subgraph) > 1:
+                network_stats['diameter_largest_cc'] = nx.diameter(subgraph)
+    except:
+        pass
+    
+    try:
+        network_stats['avg_clustering'] = round(nx.average_clustering(G), 4)
+    except:
+        pass
+    
+    return {
+        'node_metrics': node_metrics,
+        'network_stats': network_stats,
+        'top_nodes': top_nodes
+    }
+
+
+def generate_network_analysis_json(network_metrics: Dict, seen_profiles: Dict) -> str:
+    """Generate network_analysis.json with summary statistics and top nodes."""
+    
+    analysis = {
+        'generated_at': datetime.now().isoformat(),
+        'network_statistics': network_metrics.get('network_stats', {}),
+        'top_connectors': [],
+        'top_brokers': [],
+        'top_influencers': [],
+        'metric_definitions': {
+            'degree_centrality': 'Number of direct connections (normalized). High = well-connected.',
+            'betweenness_centrality': 'How often node lies on shortest paths. High = broker/bridge.',
+            'eigenvector_centrality': 'Connected to influential people. High = influential.',
+            'closeness_centrality': 'Average distance to all others. High = central/accessible.'
+        }
+    }
+    
+    top_nodes = network_metrics.get('top_nodes', {})
+    
+    # Add top connectors (by degree)
+    if 'degree' in top_nodes:
+        for node_id, score in top_nodes['degree']:
+            if node_id in seen_profiles:
+                analysis['top_connectors'].append({
+                    'id': node_id,
+                    'name': seen_profiles[node_id].get('name', ''),
+                    'organization': seen_profiles[node_id].get('organization', ''),
+                    'degree_centrality': score,
+                    'connections': network_metrics['node_metrics'].get(node_id, {}).get('degree', 0)
+                })
+    
+    # Add top brokers (by betweenness)
+    if 'betweenness' in top_nodes:
+        for node_id, score in top_nodes['betweenness']:
+            if node_id in seen_profiles:
+                analysis['top_brokers'].append({
+                    'id': node_id,
+                    'name': seen_profiles[node_id].get('name', ''),
+                    'organization': seen_profiles[node_id].get('organization', ''),
+                    'betweenness_centrality': score
+                })
+    
+    # Add top influencers (by eigenvector)
+    if 'eigenvector' in top_nodes:
+        for node_id, score in top_nodes['eigenvector']:
+            if node_id in seen_profiles:
+                analysis['top_influencers'].append({
+                    'id': node_id,
+                    'name': seen_profiles[node_id].get('name', ''),
+                    'organization': seen_profiles[node_id].get('organization', ''),
+                    'eigenvector_centrality': score
+                })
+    
+    return json.dumps(analysis, indent=2)
+
+
+# ============================================================================
 # CSV/JSON GENERATION
 # ============================================================================
 
-def generate_nodes_csv(seen_profiles: Dict, max_degree: int, max_edges: int, max_nodes: int) -> str:
-    """Generate nodes.csv content with metadata header."""
+def generate_nodes_csv(seen_profiles: Dict, max_degree: int, max_edges: int, max_nodes: int, network_metrics: Dict = None) -> str:
+    """Generate nodes.csv content with metadata header and optional network metrics."""
     nodes_data = []
+    
+    # Get node metrics if available
+    node_metrics = {}
+    if network_metrics:
+        node_metrics = network_metrics.get('node_metrics', {})
+    
     for node in seen_profiles.values():
         node_dict = {
             'id': node['id'],
@@ -753,6 +961,15 @@ def generate_nodes_csv(seen_profiles: Dict, max_degree: int, max_edges: int, max
             node_dict['organization'] = node.get('organization', '')
         if 'sector' in node:
             node_dict['sector'] = node.get('sector', '')
+        
+        # Add network metrics if available (advanced mode)
+        if node['id'] in node_metrics:
+            metrics = node_metrics[node['id']]
+            node_dict['connections'] = metrics.get('degree', 0)
+            node_dict['degree_centrality'] = metrics.get('degree_centrality', 0)
+            node_dict['betweenness_centrality'] = metrics.get('betweenness_centrality', 0)
+            node_dict['eigenvector_centrality'] = metrics.get('eigenvector_centrality', 0)
+            node_dict['closeness_centrality'] = metrics.get('closeness_centrality', 0)
         
         nodes_data.append(node_dict)
     
@@ -787,9 +1004,9 @@ def generate_raw_json(raw_profiles: List) -> str:
     return json.dumps(raw_profiles, indent=2)
 
 
-def create_download_zip(nodes_csv: str, edges_csv: str, raw_json: str) -> bytes:
+def create_download_zip(nodes_csv: str, edges_csv: str, raw_json: str, analysis_json: str = None) -> bytes:
     """
-    Create a ZIP file containing all three output files.
+    Create a ZIP file containing all output files.
     Returns ZIP file as bytes.
     """
     zip_buffer = BytesIO()
@@ -801,6 +1018,9 @@ def create_download_zip(nodes_csv: str, edges_csv: str, raw_json: str) -> bytes:
         zip_file.writestr('edges.csv', edges_csv)
         # Add raw_profiles.json
         zip_file.writestr('raw_profiles.json', raw_json)
+        # Add network_analysis.json if available
+        if analysis_json:
+            zip_file.writestr('network_analysis.json', analysis_json)
     
     zip_buffer.seek(0)
     return zip_buffer.getvalue()
@@ -1077,6 +1297,12 @@ def main():
                 "or that the crawl depth was too shallow."
             )
         
+        # Calculate network metrics (in advanced mode or always for usefulness)
+        network_metrics = None
+        if len(edges) > 0:
+            with st.spinner("📊 Calculating network metrics..."):
+                network_metrics = calculate_network_metrics(seen_profiles, edges)
+        
         # Store results in session state so they persist across reruns (e.g., after downloads)
         st.session_state.crawl_results = {
             'seen_profiles': seen_profiles,
@@ -1084,7 +1310,8 @@ def main():
             'raw_profiles': raw_profiles,
             'stats': stats,
             'max_degree': max_degree,
-            'advanced_mode': advanced_mode  # Store mode setting
+            'advanced_mode': advanced_mode,  # Store mode setting
+            'network_metrics': network_metrics  # Store network metrics
         }
     
     # Display results if available (either from current run or session state)
@@ -1096,6 +1323,7 @@ def main():
         stats = results['stats']
         max_degree = results['max_degree']
         was_advanced_mode = results.get('advanced_mode', False)
+        network_metrics = results.get('network_metrics', None)
         
         # ====================================================================
         # RESULTS SUMMARY
@@ -1228,6 +1456,100 @@ Profiles With No Neighbors: {stats.get('profiles_with_no_neighbors', 0)}
 
         
         # ====================================================================
+        # NETWORK METRICS (Always shown - calculated for all crawls)
+        # ====================================================================
+        
+        if network_metrics and network_metrics.get('top_nodes'):
+            st.markdown("---")
+            st.header("📊 Network Centrality Metrics")
+            
+            top_nodes = network_metrics['top_nodes']
+            network_stats = network_metrics.get('network_stats', {})
+            
+            # Network-level statistics
+            st.markdown("**Network Overview:**")
+            stats_cols = st.columns(5)
+            stats_cols[0].metric("Nodes", network_stats.get('nodes', 0))
+            stats_cols[1].metric("Edges", network_stats.get('edges', 0))
+            stats_cols[2].metric("Density", f"{network_stats.get('density', 0):.4f}")
+            stats_cols[3].metric("Avg Degree", network_stats.get('avg_degree', 0))
+            stats_cols[4].metric("Avg Clustering", f"{network_stats.get('avg_clustering', 0):.4f}")
+            
+            # Additional network stats if available
+            if 'num_components' in network_stats:
+                st.caption(f"📈 Components: {network_stats['num_components']} | Largest component: {network_stats.get('largest_component_size', 'N/A')} nodes")
+            
+            st.markdown("---")
+            
+            # Top nodes by different centrality measures
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.markdown("**🔗 Top Connectors** (by Degree)")
+                st.caption("Most direct connections")
+                if 'degree' in top_nodes:
+                    for i, (node_id, score) in enumerate(top_nodes['degree'][:5], 1):
+                        name = seen_profiles.get(node_id, {}).get('name', node_id)
+                        org = seen_profiles.get(node_id, {}).get('organization', '')
+                        connections = network_metrics['node_metrics'].get(node_id, {}).get('degree', 0)
+                        org_text = f" ({org})" if org else ""
+                        st.markdown(f"{i}. **{name}**{org_text} — {connections} connections")
+                else:
+                    st.info("No degree data available")
+                
+                st.markdown("")
+                st.markdown("**📍 Top Accessible** (by Closeness)")
+                st.caption("Shortest average distance to others")
+                if 'closeness' in top_nodes:
+                    for i, (node_id, score) in enumerate(top_nodes['closeness'][:5], 1):
+                        name = seen_profiles.get(node_id, {}).get('name', node_id)
+                        org = seen_profiles.get(node_id, {}).get('organization', '')
+                        org_text = f" ({org})" if org else ""
+                        st.markdown(f"{i}. **{name}**{org_text} — {score:.4f}")
+                else:
+                    st.info("No closeness data available")
+            
+            with col2:
+                st.markdown("**🌉 Top Brokers** (by Betweenness)")
+                st.caption("Bridge between groups")
+                if 'betweenness' in top_nodes:
+                    for i, (node_id, score) in enumerate(top_nodes['betweenness'][:5], 1):
+                        name = seen_profiles.get(node_id, {}).get('name', node_id)
+                        org = seen_profiles.get(node_id, {}).get('organization', '')
+                        org_text = f" ({org})" if org else ""
+                        st.markdown(f"{i}. **{name}**{org_text} — {score:.4f}")
+                else:
+                    st.info("No betweenness data available")
+                
+                st.markdown("")
+                st.markdown("**⭐ Top Influencers** (by Eigenvector)")
+                st.caption("Connected to well-connected people")
+                if 'eigenvector' in top_nodes:
+                    for i, (node_id, score) in enumerate(top_nodes['eigenvector'][:5], 1):
+                        name = seen_profiles.get(node_id, {}).get('name', node_id)
+                        org = seen_profiles.get(node_id, {}).get('organization', '')
+                        org_text = f" ({org})" if org else ""
+                        st.markdown(f"{i}. **{name}**{org_text} — {score:.4f}")
+                else:
+                    st.info("No eigenvector data available")
+            
+            # Metric definitions
+            with st.expander("ℹ️ What do these metrics mean?"):
+                st.markdown("""
+                | Metric | What It Measures | Identifies |
+                |--------|------------------|------------|
+                | **Degree Centrality** | Number of direct connections | **Connectors** — well-networked individuals |
+                | **Betweenness Centrality** | How often on shortest paths between others | **Brokers** — bridge different groups |
+                | **Eigenvector Centrality** | Connected to influential people | **Influencers** — access to power |
+                | **Closeness Centrality** | Average distance to everyone | **Accessible hubs** — can reach anyone quickly |
+                
+                **Network-level metrics:**
+                - **Density**: Proportion of possible connections that exist (0-1)
+                - **Clustering**: How much nodes cluster together
+                - **Components**: Disconnected subgroups in the network
+                """)
+        
+        # ====================================================================
         # ADVANCED ANALYTICS (if advanced mode was enabled)
         # ====================================================================
         
@@ -1323,10 +1645,6 @@ Profiles With No Neighbors: {stats.get('profiles_with_no_neighbors', 0)}
             st.subheader("📋 Coming Soon")
             
             st.markdown("""
-            **Network Metrics** (Next Release)
-            - Degree, betweenness, eigenvector, closeness centrality
-            - Identify top connectors and brokers
-            
             **Community Detection** (In Progress)  
             - Algorithmic cluster identification
             - Modularity scores
@@ -1349,13 +1667,18 @@ Profiles With No Neighbors: {stats.get('profiles_with_no_neighbors', 0)}
         st.header("💾 Download Results")
         
         # Generate files
-        nodes_csv = generate_nodes_csv(seen_profiles, max_degree=max_degree, max_edges=5000, max_nodes=2500)
+        nodes_csv = generate_nodes_csv(seen_profiles, max_degree=max_degree, max_edges=5000, max_nodes=2500, network_metrics=network_metrics)
         edges_csv = generate_edges_csv(edges, max_degree=max_degree, max_edges=5000, max_nodes=2500)
         raw_json = generate_raw_json(raw_profiles)
         
+        # Generate network analysis JSON if metrics available
+        analysis_json = None
+        if network_metrics:
+            analysis_json = generate_network_analysis_json(network_metrics, seen_profiles)
+        
         # Primary action: Download all as ZIP
         st.markdown("### 📦 Download All Files")
-        zip_data = create_download_zip(nodes_csv, edges_csv, raw_json)
+        zip_data = create_download_zip(nodes_csv, edges_csv, raw_json, analysis_json)
         
         col1, col2 = st.columns([3, 1])
         with col1:
@@ -1366,7 +1689,7 @@ Profiles With No Neighbors: {stats.get('profiles_with_no_neighbors', 0)}
                 mime="application/zip",
                 type="primary",
                 use_container_width=True,
-                help="Download all three files (nodes.csv, edges.csv, raw_profiles.json) in one ZIP file"
+                help="Download all files (nodes.csv, edges.csv, raw_profiles.json, network_analysis.json) in one ZIP file"
             )
         with col2:
             if st.button("🗑️ Clear Results", use_container_width=True, help="Clear results to start a new crawl"):
