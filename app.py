@@ -1288,6 +1288,83 @@ def extract_organization(occupation: str = '', experiences: List = None) -> str:
     return ''
 
 
+def extract_org_from_summary(summary: str) -> str:
+    """
+    Extract organization name from a LinkedIn summary/headline string.
+    
+    Common formats:
+    - "Senior Manager at Google"
+    - "CEO @ Microsoft"
+    - "Director, Apple Inc"
+    
+    Args:
+        summary: LinkedIn headline/summary string
+        
+    Returns:
+        Organization name or empty string
+    """
+    if not summary:
+        return ''
+    
+    # Pattern 1: "Title at Organization" (most common and reliable)
+    match = re.search(r'\bat\s+([A-Z][A-Za-z0-9\s&\-\'\.,()]+?)(?:\s*[|•,]|$)', summary)
+    if match:
+        org = match.group(1).strip()
+        # Clean up trailing punctuation and common words
+        org = re.sub(r'\s+(and|for|in|of|the)\s*$', '', org, flags=re.IGNORECASE)
+        org = re.sub(r'[,.]$', '', org).strip()
+        if 2 < len(org) < 80:
+            return org
+    
+    # Pattern 2: "Title @ Organization"  
+    match = re.search(r'@\s*([A-Z][A-Za-z0-9\s&\-\']+?)(?:\s*[|•,]|$)', summary)
+    if match:
+        org = match.group(1).strip()
+        if 2 < len(org) < 80:
+            return org
+    
+    return ''
+
+
+def extract_title_from_summary(summary: str) -> str:
+    """
+    Extract job title from a LinkedIn summary/headline string.
+    
+    Args:
+        summary: LinkedIn headline/summary string
+        
+    Returns:
+        Job title or empty string
+    """
+    if not summary:
+        return ''
+    
+    # Pattern: "Title at Organization" - extract the title part
+    match = re.search(r'^([^|•\n]+?)\s+at\s+', summary)
+    if match:
+        title = match.group(1).strip()
+        if len(title) < 80:
+            return title
+    
+    # Pattern: "Title @ Organization"
+    match = re.search(r'^([^|•\n@]+?)\s*@\s*', summary)
+    if match:
+        title = match.group(1).strip()
+        if len(title) < 80:
+            return title
+    
+    # Fallback: Take first segment before pipe/bullet (often the title)
+    parts = re.split(r'\s*[|•]\s*', summary)
+    if parts:
+        first = parts[0].strip()
+        # Remove "at Organization" if still present
+        first = re.sub(r'\s+at\s+.+$', '', first, flags=re.IGNORECASE)
+        if len(first) < 80:
+            return first
+    
+    return ''
+
+
 def infer_sector(organization: str, headline: str = '') -> str:
     """
     Infer sector/industry from organization name and headline.
@@ -1879,10 +1956,17 @@ def run_crawler(
                 'source_type': 'discovered'
             }
             
-            # Advanced mode: Add organization and sector (will be populated when fetched)
+            # Advanced mode: Extract organization from summary and infer sector
             if advanced_mode:
-                neighbor_node['organization'] = ''  # Will be filled when profile is fetched
-                neighbor_node['sector'] = ''
+                # Try to extract organization from the summary/headline
+                extracted_org = extract_org_from_summary(neighbor_headline)
+                neighbor_node['organization'] = extracted_org
+                
+                # Infer sector if we have an organization
+                if extracted_org:
+                    neighbor_node['sector'] = infer_sector(extracted_org, neighbor_headline)
+                else:
+                    neighbor_node['sector'] = ''
             
             seen_profiles[neighbor_id] = neighbor_node
             stats['nodes_added'] += 1
