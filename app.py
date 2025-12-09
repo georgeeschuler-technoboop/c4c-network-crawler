@@ -2479,16 +2479,20 @@ def create_brokerage_role_chart(brokerage_roles: Dict[str, str]) -> 'go.Figure':
     return fig
 
 
-def fig_to_png_bytes(fig: 'go.Figure') -> bytes:
+def fig_to_png_bytes(fig: 'go.Figure') -> Tuple[Optional[bytes], Optional[str]]:
     """
     Convert a Plotly figure to PNG bytes.
     Requires kaleido package.
+    Returns (png_bytes, error_message)
     """
     try:
-        return fig.to_image(format="png", width=800, height=400, scale=2)
+        import kaleido
+        png_bytes = fig.to_image(format="png", width=800, height=400, scale=2)
+        return png_bytes, None
+    except ImportError:
+        return None, "kaleido not installed"
     except Exception as e:
-        # Fallback if kaleido not available
-        return None
+        return None, str(e)
 
 
 def create_download_zip(
@@ -3355,8 +3359,6 @@ Profiles With No Neighbors: {stats.get('profiles_with_no_neighbors', 0)}
         # Generate network analysis JSON if metrics available
         analysis_json = None
         insights_report = None
-        sector_chart_png = None
-        brokerage_chart_png = None
         brokerage_chart_fig = None
         
         if network_metrics and advanced_mode:
@@ -3424,55 +3426,12 @@ Profiles With No Neighbors: {stats.get('profiles_with_no_neighbors', 0)}
             except Exception as e:
                 st.warning(f"Could not generate insights report: {e}")
             
-            # Create brokerage chart
+            # Create brokerage chart for display (not export)
             if brokerage_roles:
                 try:
                     brokerage_chart_fig = create_brokerage_role_chart(brokerage_roles)
                 except Exception as e:
                     st.warning(f"Could not create brokerage chart: {e}")
-            
-            # Try to generate PNG exports (requires kaleido)
-            try:
-                # For sector chart, we need to recreate it
-                if sector_analysis and len(sector_analysis.df) > 0:
-                    df_sorted = sector_analysis.df.sort_values("pct_classified", ascending=True)
-                    
-                    # Assign colors
-                    colors = []
-                    for _, row in df_sorted.iterrows():
-                        pct = row["pct_classified"]
-                        if pct >= 40:
-                            colors.append("#F97316")  # Orange - dominant
-                        elif pct >= 10:
-                            colors.append("#10B981")  # Green - healthy
-                        else:
-                            colors.append("#D1D5DB")  # Gray - underrepresented
-                    
-                    sector_fig = go.Figure()
-                    sector_fig.add_trace(go.Bar(
-                        y=df_sorted["sector"],
-                        x=df_sorted["pct_classified"],
-                        orientation='h',
-                        marker_color=colors,
-                        text=[f"{p:.1f}%" for p in df_sorted["pct_classified"]],
-                        textposition='auto',
-                    ))
-                    sector_fig.update_layout(
-                        title="Sector Distribution",
-                        xaxis_title="% of Classified Actors",
-                        yaxis_title="",
-                        height=max(300, len(df_sorted) * 35),
-                        margin=dict(l=20, r=20, t=40, b=20),
-                    )
-                    
-                    sector_chart_png = fig_to_png_bytes(sector_fig)
-                
-                if brokerage_chart_fig:
-                    brokerage_chart_png = fig_to_png_bytes(brokerage_chart_fig)
-                    
-            except Exception as e:
-                # Kaleido not available or other error - PNGs won't be included
-                pass
         
         # Primary action: Download all as ZIP
         st.markdown("### 📦 Download All Files")
@@ -3482,8 +3441,6 @@ Profiles With No Neighbors: {stats.get('profiles_with_no_neighbors', 0)}
             raw_json, 
             analysis_json,
             insights_report,
-            sector_chart_png,
-            brokerage_chart_png,
         )
         
         col1, col2 = st.columns([3, 1])
@@ -3493,8 +3450,6 @@ Profiles With No Neighbors: {stats.get('profiles_with_no_neighbors', 0)}
                 zip_contents += ", network_analysis.json"
             if insights_report:
                 zip_contents += ", network_insights_report.md"
-            if sector_chart_png or brokerage_chart_png:
-                zip_contents += ", charts/"
             
             st.download_button(
                 label="⬇️ Download All as ZIP (Recommended)",
@@ -3546,51 +3501,20 @@ Profiles With No Neighbors: {stats.get('profiles_with_no_neighbors', 0)}
                 key="download_raw"
             )
         
-        # Advanced Mode Downloads - Insights Report & Charts
-        if advanced_mode and (insights_report or sector_chart_png or brokerage_chart_png):
-            st.markdown("### 📊 Download Insights & Charts")
-            st.caption("Advanced mode analysis exports")
+        # Advanced Mode Downloads - Insights Report
+        if advanced_mode and insights_report:
+            st.markdown("### 📊 Download Insights Report")
+            st.caption("Comprehensive analysis in Markdown format")
             
-            col1, col2, col3 = st.columns(3)
-            
-            with col1:
-                if insights_report:
-                    st.download_button(
-                        label="📝 Insights Report (.md)",
-                        data=insights_report,
-                        file_name="network_insights_report.md",
-                        mime="text/markdown",
-                        use_container_width=True,
-                        key="download_report"
-                    )
-                else:
-                    st.info("Report not available")
-            
-            with col2:
-                if sector_chart_png:
-                    st.download_button(
-                        label="📊 Sector Chart (.png)",
-                        data=sector_chart_png,
-                        file_name="sector_distribution.png",
-                        mime="image/png",
-                        use_container_width=True,
-                        key="download_sector_png"
-                    )
-                else:
-                    st.info("PNG export requires kaleido")
-            
-            with col3:
-                if brokerage_chart_png:
-                    st.download_button(
-                        label="🎭 Brokerage Chart (.png)",
-                        data=brokerage_chart_png,
-                        file_name="brokerage_roles.png",
-                        mime="image/png",
-                        use_container_width=True,
-                        key="download_brokerage_png"
-                    )
-                else:
-                    st.info("PNG export requires kaleido")
+            st.download_button(
+                label="📝 Download Insights Report (.md)",
+                data=insights_report,
+                file_name="network_insights_report.md",
+                mime="text/markdown",
+                use_container_width=True,
+                key="download_report"
+            )
+            st.caption("💡 Tip: Charts are visible in the app above — use screenshots if needed for presentations.")
         
         # ====================================================================
         # DATA PREVIEW
