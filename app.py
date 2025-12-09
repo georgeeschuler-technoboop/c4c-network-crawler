@@ -2412,7 +2412,254 @@ def generate_insights_report(
     return "\n".join(lines)
 
 
-def create_brokerage_role_chart(brokerage_roles: Dict[str, str]) -> 'go.Figure':
+# ============================================================================
+# AI-ENHANCED NARRATIVES (Claude API Integration)
+# ============================================================================
+
+def build_network_context_prompt(
+    network_stats: Dict,
+    health_score: int,
+    health_label: str,
+    sector_analysis: 'SectorAnalysis',
+    brokerage_roles: Dict[str, str],
+    top_connectors: List[Tuple],
+    top_brokers: List[Tuple],
+    seen_profiles: Dict,
+    node_metrics: Dict = None,
+    project_context: str = "",
+) -> str:
+    """
+    Build a structured prompt with all network metrics for the LLM.
+    """
+    
+    # Count brokerage roles
+    role_counts = {}
+    if brokerage_roles:
+        for role in brokerage_roles.values():
+            role_counts[role] = role_counts.get(role, 0) + 1
+    
+    # Build top connectors list
+    top_connectors_text = ""
+    for i, (node_id, score) in enumerate(top_connectors[:5], 1):
+        profile = seen_profiles.get(node_id, {})
+        name = profile.get('name', 'Unknown')
+        org = profile.get('organization', 'Unknown')
+        sector = profile.get('sector', 'Unknown')
+        role = brokerage_roles.get(node_id, 'unknown') if brokerage_roles else 'unknown'
+        connections = node_metrics.get(node_id, {}).get('degree', 0) if node_metrics else 0
+        top_connectors_text += f"  {i}. {name} ({org}) - {connections} connections, Sector: {sector}, Role: {role}\n"
+    
+    # Build top brokers list
+    top_brokers_text = ""
+    for i, (node_id, score) in enumerate(top_brokers[:5], 1):
+        profile = seen_profiles.get(node_id, {})
+        name = profile.get('name', 'Unknown')
+        org = profile.get('organization', 'Unknown')
+        sector = profile.get('sector', 'Unknown')
+        role = brokerage_roles.get(node_id, 'unknown') if brokerage_roles else 'unknown'
+        top_brokers_text += f"  {i}. {name} ({org}) - Betweenness: {score:.4f}, Sector: {sector}, Role: {role}\n"
+    
+    # Sector distribution
+    sector_text = ""
+    if sector_analysis:
+        sector_text = f"""
+Sector Distribution:
+- Diversity Score: {sector_analysis.diversity_score:.2f} ({sector_analysis.diversity_label})
+- Dominant Sectors (≥40%): {', '.join(sector_analysis.dominant_sectors) if sector_analysis.dominant_sectors else 'None'}
+- Underrepresented Sectors (≤10%): {', '.join(sector_analysis.underrepresented_sectors) if sector_analysis.underrepresented_sectors else 'None'}
+"""
+    
+    prompt = f"""You are a network strategist at Connecting for Change (C4C), a consultancy that helps organizations understand and strengthen their collaborative networks. You specialize in translating social network analysis into actionable insights.
+
+{f'PROJECT CONTEXT: {project_context}' if project_context else ''}
+
+NETWORK METRICS:
+================
+
+Basic Statistics:
+- Total Nodes: {network_stats.get('nodes', 0)}
+- Total Edges: {network_stats.get('edges', 0)}
+- Network Density: {network_stats.get('density', 0):.4f}
+- Average Connections per Person: {network_stats.get('avg_degree', 0):.1f}
+- Number of Disconnected Groups: {network_stats.get('num_components', 1)}
+- Largest Connected Group: {network_stats.get('largest_component_size', 0)} people
+
+Network Health Score: {health_score}/100 ({health_label})
+{sector_text}
+Brokerage Role Distribution:
+- Liaisons (cross-group bridges): {role_counts.get('liaison', 0)}
+- Gatekeepers (control access): {role_counts.get('gatekeeper', 0)}
+- Representatives (outbound voices): {role_counts.get('representative', 0)}
+- Coordinators (internal organizers): {role_counts.get('coordinator', 0)}
+- Consultants (multi-group advisors): {role_counts.get('consultant', 0)}
+- Peripheral (edge of network): {role_counts.get('peripheral', 0)}
+
+Top 5 Most Connected People:
+{top_connectors_text}
+Top 5 Brokers (bridge different groups):
+{top_brokers_text}
+
+TASK:
+=====
+Write a strategic network briefing (3-4 paragraphs) that:
+
+1. **Opens with the big picture** - What kind of network is this? Is it healthy, fragile, concentrated, distributed? What's the overall story?
+
+2. **Highlights key people and why they matter** - Don't just list names. Explain what their position means for the network. Who should be protected from burnout? Who might be an emerging leader? Who controls critical pathways?
+
+3. **Identifies structural risks and opportunities** - Based on the metrics, what could go wrong? What's working well? Where are the gaps?
+
+4. **Ends with 2-3 specific, actionable next steps** - Not generic advice. Concrete suggestions based on THIS network's specific patterns.
+
+Write in a warm but professional tone. Avoid jargon. Make it feel like advice from a trusted colleague, not a technical report.
+"""
+    
+    return prompt
+
+
+def generate_ai_narrative(
+    network_stats: Dict,
+    health_score: int,
+    health_label: str,
+    sector_analysis: 'SectorAnalysis',
+    brokerage_roles: Dict[str, str],
+    top_connectors: List[Tuple],
+    top_brokers: List[Tuple],
+    seen_profiles: Dict,
+    node_metrics: Dict = None,
+    project_context: str = "",
+    api_key: str = None,
+) -> Tuple[Optional[str], Optional[str]]:
+    """
+    Generate an AI-enhanced narrative using the Claude API.
+    
+    Returns (narrative, error_message)
+    """
+    try:
+        import anthropic
+    except ImportError:
+        return None, "anthropic package not installed"
+    
+    if not api_key:
+        api_key = os.environ.get("ANTHROPIC_API_KEY")
+    
+    if not api_key:
+        return None, "No Anthropic API key provided"
+    
+    try:
+        client = anthropic.Anthropic(api_key=api_key)
+        
+        prompt = build_network_context_prompt(
+            network_stats=network_stats,
+            health_score=health_score,
+            health_label=health_label,
+            sector_analysis=sector_analysis,
+            brokerage_roles=brokerage_roles,
+            top_connectors=top_connectors,
+            top_brokers=top_brokers,
+            seen_profiles=seen_profiles,
+            node_metrics=node_metrics,
+            project_context=project_context,
+        )
+        
+        message = client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=1500,
+            messages=[
+                {"role": "user", "content": prompt}
+            ]
+        )
+        
+        narrative = message.content[0].text
+        return narrative, None
+        
+    except anthropic.AuthenticationError:
+        return None, "Invalid Anthropic API key"
+    except anthropic.RateLimitError:
+        return None, "Anthropic API rate limit exceeded"
+    except Exception as e:
+        return None, f"API error: {str(e)}"
+
+
+def generate_ai_person_insight(
+    name: str,
+    organization: str,
+    sector: str,
+    role: str,
+    degree_pct: float,
+    betweenness_pct: float,
+    eigenvector_pct: float,
+    closeness_pct: float,
+    is_dominant_sector: bool,
+    is_underrepresented_sector: bool,
+    network_context: str = "",
+    api_key: str = None,
+) -> Tuple[Optional[str], Optional[str]]:
+    """
+    Generate an AI-enhanced insight for a specific person.
+    
+    Returns (insight, error_message)
+    """
+    try:
+        import anthropic
+    except ImportError:
+        return None, "anthropic package not installed"
+    
+    if not api_key:
+        api_key = os.environ.get("ANTHROPIC_API_KEY")
+    
+    if not api_key:
+        return None, "No Anthropic API key provided"
+    
+    def pct_to_label(p):
+        if p is None:
+            return "unknown"
+        if p >= 0.95:
+            return "very high (top 5%)"
+        if p >= 0.75:
+            return "high (top 25%)"
+        if p >= 0.40:
+            return "moderate"
+        return "low"
+    
+    prompt = f"""You are a network strategist writing a brief insight about one person in a collaborative network.
+
+PERSON: {name}
+ORGANIZATION: {organization}
+SECTOR: {sector}
+BROKERAGE ROLE: {role}
+
+THEIR NETWORK POSITION:
+- Direct connections: {pct_to_label(degree_pct)}
+- Bridging/brokerage: {pct_to_label(betweenness_pct)}
+- Influence (connected to influencers): {pct_to_label(eigenvector_pct)}
+- Accessibility (can reach others quickly): {pct_to_label(closeness_pct)}
+- Their sector is: {'dominant in this network' if is_dominant_sector else 'underrepresented in this network' if is_underrepresented_sector else 'moderately represented'}
+
+{f'NETWORK CONTEXT: {network_context}' if network_context else ''}
+
+Write 2-3 sentences about this person's strategic importance and ONE specific suggestion for how to work with them. Be concrete and actionable. Warm, professional tone.
+"""
+    
+    try:
+        client = anthropic.Anthropic(api_key=api_key)
+        
+        message = client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=300,
+            messages=[
+                {"role": "user", "content": prompt}
+            ]
+        )
+        
+        insight = message.content[0].text
+        return insight, None
+        
+    except Exception as e:
+        return None, f"API error: {str(e)}"
+
+
+
     """
     Create a horizontal bar chart showing brokerage role distribution.
     Returns a Plotly Figure.
@@ -2601,6 +2848,54 @@ def main():
             
             *⚡ Quick results, simple outputs*
             """)
+    
+    # AI-Enhanced Insights (only show in Advanced Mode)
+    ai_enabled = False
+    anthropic_api_key = None
+    project_context = ""
+    
+    if advanced_mode:
+        with st.expander("🤖 AI-Enhanced Insights (Optional)", expanded=False):
+            st.markdown("""
+            **Upgrade your insights with Claude AI**
+            
+            Instead of templated narratives, get a custom strategic briefing written by Claude 
+            that interprets your network's unique patterns and provides tailored recommendations.
+            """)
+            
+            ai_enabled = st.toggle(
+                "Enable AI-Enhanced Insights",
+                value=False,
+                help="Use Claude API to generate custom narrative insights"
+            )
+            
+            if ai_enabled:
+                # API Key input
+                anthropic_api_key = st.text_input(
+                    "Anthropic API Key",
+                    type="password",
+                    help="Your Anthropic API key. Get one at console.anthropic.com",
+                    placeholder="sk-ant-..."
+                )
+                
+                # Check for environment variable fallback
+                if not anthropic_api_key:
+                    env_key = os.environ.get("ANTHROPIC_API_KEY")
+                    if env_key:
+                        st.success("✅ Using API key from environment variable")
+                        anthropic_api_key = env_key
+                    else:
+                        st.warning("⚠️ Enter your Anthropic API key above, or set ANTHROPIC_API_KEY environment variable")
+                
+                # Project context
+                project_context = st.text_area(
+                    "Project Context (optional)",
+                    placeholder="e.g., 'This is a Great Lakes water coalition focused on increasing tribal nation participation in regional governance.'",
+                    help="Give Claude context about this network to get more relevant insights",
+                    height=80
+                )
+                
+                st.caption("💡 AI insights cost ~$0.01-0.03 per report (Claude Sonnet)")
     
     st.markdown("---")
     
@@ -3423,6 +3718,44 @@ Profiles With No Neighbors: {stats.get('profiles_with_no_neighbors', 0)}
                     eigenvector_pcts=eigenvector_pcts,
                     closeness_pcts=closeness_pcts,
                 )
+                
+                # Generate AI-enhanced narrative if enabled
+                ai_narrative = None
+                if ai_enabled and anthropic_api_key:
+                    with st.spinner("🤖 Generating AI-enhanced insights..."):
+                        ai_narrative, ai_error = generate_ai_narrative(
+                            network_stats=network_stats,
+                            health_score=health_score,
+                            health_label=health_label,
+                            sector_analysis=sector_analysis,
+                            brokerage_roles=brokerage_roles,
+                            top_connectors=top_connectors,
+                            top_brokers=top_brokers_list,
+                            seen_profiles=seen_profiles,
+                            node_metrics=node_metrics,
+                            project_context=project_context,
+                            api_key=anthropic_api_key,
+                        )
+                        
+                        if ai_error:
+                            st.warning(f"⚠️ AI narrative generation failed: {ai_error}")
+                        elif ai_narrative:
+                            # Prepend AI narrative to the insights report
+                            ai_section = f"""## 🤖 AI Strategic Briefing
+
+*Generated by Claude based on your network's unique patterns*
+
+{ai_narrative}
+
+---
+
+"""
+                            insights_report = insights_report.replace(
+                                "# Network Analysis Report",
+                                "# Network Analysis Report\n\n" + ai_section
+                            )
+                            st.success("✅ AI-enhanced insights generated!")
+                
             except Exception as e:
                 st.warning(f"Could not generate insights report: {e}")
             
@@ -3531,7 +3864,7 @@ Profiles With No Neighbors: {stats.get('profiles_with_no_neighbors', 0)}
         
         # Preview insights report
         if insights_report:
-            with st.expander("📝 Preview Insights Report"):
+            with st.expander("📝 Preview Insights Report", expanded=False):
                 st.markdown(insights_report)
 
 
