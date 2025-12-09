@@ -304,6 +304,159 @@ The share of all actors who are part of the same overall connected system.
 Whether influence (measured through network metrics) sits with a few actors or is spread out.
             """)
 
+
+# ============================================================================
+# SECTOR ANALYSIS (Diversity, Imbalance, Narrative)
+# ============================================================================
+
+@dataclass
+class SectorAnalysis:
+    """Container for sector distribution analysis results."""
+    df: pd.DataFrame
+    dominant_sectors: List[str]
+    underrepresented_sectors: List[str]
+    diversity_score: float
+    diversity_label: str
+    summary_text: str
+
+
+def analyze_sectors(sector_counts: Dict[str, int], total_nodes: int) -> SectorAnalysis:
+    """
+    Analyze sector distribution for imbalance and diversity.
+    
+    Args:
+        sector_counts: {"Philanthropy": 12, "Academia": 9, ...}
+        total_nodes: total # of nodes in the network
+    
+    Returns:
+        SectorAnalysis with dataframe, dominant/underrepresented lists,
+        diversity score, and narrative summary.
+    """
+    # Build dataframe of counts
+    data = []
+    total_classified = sum(sector_counts.values()) or 1  # avoid div by zero
+
+    for sector, count in sector_counts.items():
+        pct_classified = (count / total_classified) * 100
+        pct_network = (count / max(total_nodes, 1)) * 100
+        data.append({
+            "sector": sector,
+            "count": count,
+            "pct_classified": pct_classified,
+            "pct_network": pct_network,
+        })
+
+    df = pd.DataFrame(data).sort_values("pct_classified", ascending=False)
+
+    # Dominant = any sector with >= 40% of all classified actors
+    dominant_sectors = df[df["pct_classified"] >= 40.0]["sector"].tolist()
+
+    # Underrepresented = sectors with <= 10% of classified actors
+    underrepresented_sectors = df[df["pct_classified"] <= 10.0]["sector"].tolist()
+
+    # Diversity: simple Shannon index normalized 0–1
+    p = df["pct_classified"].values / 100.0
+    p = p[p > 0]
+    if len(p) > 0:
+        H = -np.sum(p * np.log(p))
+        H_max = np.log(len(p))
+        diversity = float(H / H_max) if H_max > 0 else 0.0
+    else:
+        diversity = 0.0
+
+    if diversity >= 0.75:
+        diversity_label = "Broad cross-sector mix"
+    elif diversity >= 0.45:
+        diversity_label = "Moderate mix with some skew"
+    else:
+        diversity_label = "Highly concentrated"
+
+    # Narrative summary
+    if len(df) > 0:
+        top_row = df.iloc[0]
+        top_sector = top_row["sector"]
+        top_pct = top_row["pct_classified"]
+
+        summary_parts = [
+            f"{len(df)} sectors identified among classified actors.",
+            f"The largest share comes from **{top_sector}** ({top_pct:.1f}% of classified actors).",
+        ]
+
+        if dominant_sectors:
+            ds = ", ".join(dominant_sectors)
+            summary_parts.append(f"These sector(s) dominate the network: **{ds}**.")
+
+        if underrepresented_sectors and len(underrepresented_sectors) != len(df):
+            us = ", ".join(underrepresented_sectors)
+            summary_parts.append(f"These sectors are underrepresented: **{us}** (each ≤10% of classified actors).")
+
+        summary_parts.append(f"Overall sector diversity: **{diversity_label}**.")
+        summary_text = " ".join(summary_parts)
+    else:
+        summary_text = "No sector data available."
+
+    return SectorAnalysis(
+        df=df,
+        dominant_sectors=dominant_sectors,
+        underrepresented_sectors=underrepresented_sectors,
+        diversity_score=diversity,
+        diversity_label=diversity_label,
+        summary_text=summary_text,
+    )
+
+
+def render_sector_analysis(sectors: Dict[str, int], total_nodes: int):
+    """Render the enhanced sector distribution with bar chart and narrative."""
+    
+    if not sectors:
+        st.info("No sector classification available")
+        return
+    
+    # Analyze sectors
+    analysis = analyze_sectors(sectors, total_nodes)
+    df = analysis.df
+    
+    # Header metric
+    st.metric("Sectors Identified", len(sectors))
+    
+    # Bar chart
+    st.markdown("**Share of classified actors by sector:**")
+    
+    # Create chart data - use sector as index for bar chart
+    chart_df = df.set_index("sector")[["pct_classified"]].rename(columns={"pct_classified": "% of Network"})
+    st.bar_chart(chart_df, height=250)
+    
+    # Summary narrative
+    st.markdown("---")
+    st.markdown(analysis.summary_text)
+    
+    # Diversity indicator
+    st.markdown("---")
+    if analysis.diversity_score >= 0.75:
+        st.success(f"🟢 **Sector Diversity: {analysis.diversity_label}** — The network includes a healthy mix of perspectives from different sectors.")
+    elif analysis.diversity_score >= 0.45:
+        st.warning(f"🟡 **Sector Diversity: {analysis.diversity_label}** — Some sectors are more represented than others, but there's reasonable variety.")
+    else:
+        st.error(f"🔴 **Sector Diversity: {analysis.diversity_label}** — The network is dominated by one or two sectors, which may limit perspective diversity.")
+    
+    # Callout boxes for imbalance
+    if analysis.dominant_sectors:
+        st.warning(
+            "⚠️ **Sector Dominance**\n\n"
+            f"The network is heavily shaped by **{', '.join(analysis.dominant_sectors)}**. "
+            "Voices from other sectors may have less visibility or influence."
+        )
+    
+    if analysis.underrepresented_sectors and len(analysis.underrepresented_sectors) != len(df):
+        underrep_list = "\n".join([f"- {s}" for s in analysis.underrepresented_sectors])
+        st.info(
+            "💡 **Underrepresented Sectors**\n\n"
+            "These sectors appear in small numbers and may represent "
+            "critical but less-heard perspectives:\n\n"
+            f"{underrep_list}"
+        )
+
+
 # ============================================================================
 # CONFIGURATION
 # ============================================================================
@@ -1795,19 +1948,7 @@ Profiles With No Neighbors: {stats.get('profiles_with_no_neighbors', 0)}
                 
                 with col2:
                     st.subheader("🎯 Sector Distribution")
-                    
-                    if sectors:
-                        # Sort by count
-                        sorted_sectors = sorted(sectors.items(), key=lambda x: x[1], reverse=True)
-                        
-                        st.metric("Sectors Identified", len(sectors))
-                        
-                        st.markdown("**Sector Breakdown:**")
-                        for sector, count in sorted_sectors:
-                            percentage = (count / len(seen_profiles)) * 100
-                            st.markdown(f"- **{sector}**: {count} ({percentage:.1f}%)")
-                    else:
-                        st.info("No sector classification available")
+                    render_sector_analysis(sectors, len(seen_profiles))
                 
                 # Note about what this enables
                 st.markdown("---")
