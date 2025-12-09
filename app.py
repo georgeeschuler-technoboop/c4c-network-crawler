@@ -13,6 +13,15 @@ from datetime import datetime
 import socket
 import zipfile
 import networkx as nx
+import numpy as np
+
+# Import network insights module for badges, health score, etc.
+from network_insights import (
+    compute_breakpoints, classify_value,
+    compute_network_health, NetworkStats,
+    render_health_summary, render_health_details, render_badge,
+    describe_node_role, METRIC_TOOLTIPS, get_badge_text
+)
 
 # ============================================================================
 # CONFIGURATION
@@ -1221,7 +1230,7 @@ def main():
     
     with col2:
         st.markdown("**Crawl Limits:**")
-        st.metric("Max Edges", 5000)
+        st.metric("Max Edges", 10000)
         st.metric("Max Nodes", 2500)
     
     # Rate Limit Information (cleaner version per team feedback)
@@ -1267,7 +1276,7 @@ def main():
             seeds=seeds,
             api_token=api_token,
             max_degree=max_degree,
-            max_edges=5000,
+            max_edges=10000,
             max_nodes=2500,
             status_container=status_container,
             mock_mode=mock_mode,
@@ -1418,7 +1427,7 @@ Error Breakdown:
 
 Crawl Configuration:
 - Max Degree: {max_degree}
-- Max Edges Limit: 5000
+- Max Edges Limit: 10000
 - Max Nodes Limit: 2500
 - API Delay: {API_DELAY} seconds between calls
 - Stopped Reason: {stats.get('stopped_reason', 'unknown')}
@@ -1555,8 +1564,43 @@ Profiles With No Neighbors: {stats.get('profiles_with_no_neighbors', 0)}
             if network_metrics and network_metrics.get('top_nodes'):
                 top_nodes = network_metrics['top_nodes']
                 network_stats = network_metrics.get('network_stats', {})
+                node_metrics = network_metrics.get('node_metrics', {})
                 
-                # Network-level statistics
+                # Extract metric values for breakpoint calculation
+                degree_values = [m.get('degree_centrality', 0) for m in node_metrics.values()]
+                betweenness_values = [m.get('betweenness_centrality', 0) for m in node_metrics.values()]
+                closeness_values = [m.get('closeness_centrality', 0) for m in node_metrics.values()]
+                eigenvector_values = [m.get('eigenvector_centrality', 0) for m in node_metrics.values()]
+                
+                # Compute adaptive breakpoints
+                deg_bp = compute_breakpoints(degree_values) if degree_values else None
+                btw_bp = compute_breakpoints(betweenness_values) if betweenness_values else None
+                clo_bp = compute_breakpoints(closeness_values) if closeness_values else None
+                eig_bp = compute_breakpoints(eigenvector_values) if eigenvector_values else None
+                
+                # ----- NETWORK HEALTH SCORE -----
+                health_stats = NetworkStats(
+                    n_nodes=network_stats.get('nodes', 0),
+                    n_edges=network_stats.get('edges', 0),
+                    density=network_stats.get('density', 0),
+                    avg_degree=network_stats.get('avg_degree', 0),
+                    avg_clustering=network_stats.get('avg_clustering', 0),
+                    n_components=network_stats.get('num_components', 1),
+                    largest_component_size=network_stats.get('largest_component_size', network_stats.get('nodes', 0))
+                )
+                
+                health_score, health_label = compute_network_health(
+                    health_stats,
+                    degree_values=degree_values,
+                    betweenness_values=betweenness_values
+                )
+                
+                render_health_summary(health_score, health_label)
+                render_health_details(health_stats, degree_values, betweenness_values)
+                
+                st.markdown("---")
+                
+                # ----- NETWORK OVERVIEW STATS -----
                 st.markdown("**Network Overview:**")
                 stats_cols = st.columns(5)
                 stats_cols[0].metric("Nodes", network_stats.get('nodes', 0))
@@ -1571,55 +1615,86 @@ Profiles With No Neighbors: {stats.get('profiles_with_no_neighbors', 0)}
                 
                 st.markdown("---")
                 
-                # Top nodes by different centrality measures
+                # ----- TOP NODES WITH BADGES -----
                 col1, col2 = st.columns(2)
                 
                 with col1:
                     st.markdown("**🔗 Top Connectors** (by Degree)")
-                    st.caption("Most direct connections")
-                    if 'degree' in top_nodes:
+                    st.caption(METRIC_TOOLTIPS["degree"])
+                    if 'degree' in top_nodes and deg_bp:
                         for i, (node_id, score) in enumerate(top_nodes['degree'][:5], 1):
                             name = seen_profiles.get(node_id, {}).get('name', node_id)
                             org = seen_profiles.get(node_id, {}).get('organization', '')
-                            connections = network_metrics['node_metrics'].get(node_id, {}).get('degree', 0)
-                            org_text = f" ({org})" if org else ""
-                            st.markdown(f"{i}. **{name}**{org_text} — {connections} connections")
+                            connections = node_metrics.get(node_id, {}).get('degree', 0)
+                            
+                            # Get level and badge
+                            level = classify_value(score, deg_bp)
+                            badge = render_badge("degree", level, small=True)
+                            
+                            # Get all levels for this node
+                            levels = {
+                                "degree": level,
+                                "betweenness": classify_value(node_metrics.get(node_id, {}).get('betweenness_centrality', 0), btw_bp) if btw_bp else "low",
+                                "closeness": classify_value(node_metrics.get(node_id, {}).get('closeness_centrality', 0), clo_bp) if clo_bp else "low",
+                                "eigenvector": classify_value(node_metrics.get(node_id, {}).get('eigenvector_centrality', 0), eig_bp) if eig_bp else "low",
+                            }
+                            
+                            st.markdown(f"{i}. **{name}** ({org}) — {connections} connections {badge}", unsafe_allow_html=True)
+                            st.caption(describe_node_role(name, org, levels))
                     else:
                         st.info("No degree data available")
                     
                     st.markdown("")
                     st.markdown("**📍 Top Accessible** (by Closeness)")
-                    st.caption("Shortest average distance to others")
-                    if 'closeness' in top_nodes:
+                    st.caption(METRIC_TOOLTIPS["closeness"])
+                    if 'closeness' in top_nodes and clo_bp:
                         for i, (node_id, score) in enumerate(top_nodes['closeness'][:5], 1):
                             name = seen_profiles.get(node_id, {}).get('name', node_id)
                             org = seen_profiles.get(node_id, {}).get('organization', '')
-                            org_text = f" ({org})" if org else ""
-                            st.markdown(f"{i}. **{name}**{org_text} — {score:.4f}")
+                            
+                            level = classify_value(score, clo_bp)
+                            badge = render_badge("closeness", level, small=True)
+                            
+                            st.markdown(f"{i}. **{name}** ({org}) — {score:.4f} {badge}", unsafe_allow_html=True)
                     else:
                         st.info("No closeness data available")
                 
                 with col2:
                     st.markdown("**🌉 Top Brokers** (by Betweenness)")
-                    st.caption("Bridge between groups")
-                    if 'betweenness' in top_nodes:
+                    st.caption(METRIC_TOOLTIPS["betweenness"])
+                    if 'betweenness' in top_nodes and btw_bp:
                         for i, (node_id, score) in enumerate(top_nodes['betweenness'][:5], 1):
                             name = seen_profiles.get(node_id, {}).get('name', node_id)
                             org = seen_profiles.get(node_id, {}).get('organization', '')
-                            org_text = f" ({org})" if org else ""
-                            st.markdown(f"{i}. **{name}**{org_text} — {score:.4f}")
+                            
+                            level = classify_value(score, btw_bp)
+                            badge = render_badge("betweenness", level, small=True)
+                            
+                            # Get all levels for description
+                            levels = {
+                                "degree": classify_value(node_metrics.get(node_id, {}).get('degree_centrality', 0), deg_bp) if deg_bp else "low",
+                                "betweenness": level,
+                                "closeness": classify_value(node_metrics.get(node_id, {}).get('closeness_centrality', 0), clo_bp) if clo_bp else "low",
+                                "eigenvector": classify_value(node_metrics.get(node_id, {}).get('eigenvector_centrality', 0), eig_bp) if eig_bp else "low",
+                            }
+                            
+                            st.markdown(f"{i}. **{name}** ({org}) — {score:.4f} {badge}", unsafe_allow_html=True)
+                            st.caption(describe_node_role(name, org, levels))
                     else:
                         st.info("No betweenness data available")
                     
                     st.markdown("")
                     st.markdown("**⭐ Top Influencers** (by Eigenvector)")
-                    st.caption("Connected to well-connected people")
-                    if 'eigenvector' in top_nodes:
+                    st.caption(METRIC_TOOLTIPS["eigenvector"])
+                    if 'eigenvector' in top_nodes and eig_bp:
                         for i, (node_id, score) in enumerate(top_nodes['eigenvector'][:5], 1):
                             name = seen_profiles.get(node_id, {}).get('name', node_id)
                             org = seen_profiles.get(node_id, {}).get('organization', '')
-                            org_text = f" ({org})" if org else ""
-                            st.markdown(f"{i}. **{name}**{org_text} — {score:.4f}")
+                            
+                            level = classify_value(score, eig_bp)
+                            badge = render_badge("eigenvector", level, small=True)
+                            
+                            st.markdown(f"{i}. **{name}** ({org}) — {score:.4f} {badge}", unsafe_allow_html=True)
                     else:
                         st.info("No eigenvector data available")
                 
@@ -1633,10 +1708,17 @@ Profiles With No Neighbors: {stats.get('profiles_with_no_neighbors', 0)}
                     | **Eigenvector Centrality** | Connected to influential people | **Influencers** — access to power |
                     | **Closeness Centrality** | Average distance to everyone | **Accessible hubs** — can reach anyone quickly |
                     
-                    **Network-level metrics:**
-                    - **Density**: Proportion of possible connections that exist (0-1)
-                    - **Clustering**: How much nodes cluster together
-                    - **Components**: Disconnected subgroups in the network
+                    **Badge Levels** (based on network distribution):
+                    - ⚪ **Low** — Bottom 40% of network
+                    - 🔹 **Medium** — 40th-80th percentile
+                    - 🟢/🟠/💫/⭐ **High** — 80th-95th percentile
+                    - 🔥/🚨/🚀/👑 **Extreme** — Top 5%
+                    
+                    **Network Health Score** (0-100):
+                    - Combines connectivity, cohesion, fragmentation, and centralization
+                    - 🟢 70+ = Healthy cohesion
+                    - 🟡 40-69 = Mixed signals
+                    - 🔴 0-39 = Fragile / at risk
                     """)
             else:
                 st.info("Network metrics require edges to calculate. Run a crawl with connections to see centrality analysis.")
@@ -1668,8 +1750,8 @@ Profiles With No Neighbors: {stats.get('profiles_with_no_neighbors', 0)}
         st.header("💾 Download Results")
         
         # Generate files
-        nodes_csv = generate_nodes_csv(seen_profiles, max_degree=max_degree, max_edges=5000, max_nodes=2500, network_metrics=network_metrics)
-        edges_csv = generate_edges_csv(edges, max_degree=max_degree, max_edges=5000, max_nodes=2500)
+        nodes_csv = generate_nodes_csv(seen_profiles, max_degree=max_degree, max_edges=10000, max_nodes=2500, network_metrics=network_metrics)
+        edges_csv = generate_edges_csv(edges, max_degree=max_degree, max_edges=10000, max_nodes=2500)
         raw_json = generate_raw_json(raw_profiles)
         
         # Generate network analysis JSON if metrics available
