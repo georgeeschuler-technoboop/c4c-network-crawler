@@ -1297,9 +1297,9 @@ def main():
                 "or that the crawl depth was too shallow."
             )
         
-        # Calculate network metrics (in advanced mode or always for usefulness)
+        # Calculate network metrics (only in advanced mode)
         network_metrics = None
-        if len(edges) > 0:
+        if advanced_mode and len(edges) > 0:
             with st.spinner("📊 Calculating network metrics..."):
                 network_metrics = calculate_network_metrics(seen_profiles, edges)
         
@@ -1456,100 +1456,6 @@ Profiles With No Neighbors: {stats.get('profiles_with_no_neighbors', 0)}
 
         
         # ====================================================================
-        # NETWORK METRICS (Always shown - calculated for all crawls)
-        # ====================================================================
-        
-        if network_metrics and network_metrics.get('top_nodes'):
-            st.markdown("---")
-            st.header("📊 Network Centrality Metrics")
-            
-            top_nodes = network_metrics['top_nodes']
-            network_stats = network_metrics.get('network_stats', {})
-            
-            # Network-level statistics
-            st.markdown("**Network Overview:**")
-            stats_cols = st.columns(5)
-            stats_cols[0].metric("Nodes", network_stats.get('nodes', 0))
-            stats_cols[1].metric("Edges", network_stats.get('edges', 0))
-            stats_cols[2].metric("Density", f"{network_stats.get('density', 0):.4f}")
-            stats_cols[3].metric("Avg Degree", network_stats.get('avg_degree', 0))
-            stats_cols[4].metric("Avg Clustering", f"{network_stats.get('avg_clustering', 0):.4f}")
-            
-            # Additional network stats if available
-            if 'num_components' in network_stats:
-                st.caption(f"📈 Components: {network_stats['num_components']} | Largest component: {network_stats.get('largest_component_size', 'N/A')} nodes")
-            
-            st.markdown("---")
-            
-            # Top nodes by different centrality measures
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                st.markdown("**🔗 Top Connectors** (by Degree)")
-                st.caption("Most direct connections")
-                if 'degree' in top_nodes:
-                    for i, (node_id, score) in enumerate(top_nodes['degree'][:5], 1):
-                        name = seen_profiles.get(node_id, {}).get('name', node_id)
-                        org = seen_profiles.get(node_id, {}).get('organization', '')
-                        connections = network_metrics['node_metrics'].get(node_id, {}).get('degree', 0)
-                        org_text = f" ({org})" if org else ""
-                        st.markdown(f"{i}. **{name}**{org_text} — {connections} connections")
-                else:
-                    st.info("No degree data available")
-                
-                st.markdown("")
-                st.markdown("**📍 Top Accessible** (by Closeness)")
-                st.caption("Shortest average distance to others")
-                if 'closeness' in top_nodes:
-                    for i, (node_id, score) in enumerate(top_nodes['closeness'][:5], 1):
-                        name = seen_profiles.get(node_id, {}).get('name', node_id)
-                        org = seen_profiles.get(node_id, {}).get('organization', '')
-                        org_text = f" ({org})" if org else ""
-                        st.markdown(f"{i}. **{name}**{org_text} — {score:.4f}")
-                else:
-                    st.info("No closeness data available")
-            
-            with col2:
-                st.markdown("**🌉 Top Brokers** (by Betweenness)")
-                st.caption("Bridge between groups")
-                if 'betweenness' in top_nodes:
-                    for i, (node_id, score) in enumerate(top_nodes['betweenness'][:5], 1):
-                        name = seen_profiles.get(node_id, {}).get('name', node_id)
-                        org = seen_profiles.get(node_id, {}).get('organization', '')
-                        org_text = f" ({org})" if org else ""
-                        st.markdown(f"{i}. **{name}**{org_text} — {score:.4f}")
-                else:
-                    st.info("No betweenness data available")
-                
-                st.markdown("")
-                st.markdown("**⭐ Top Influencers** (by Eigenvector)")
-                st.caption("Connected to well-connected people")
-                if 'eigenvector' in top_nodes:
-                    for i, (node_id, score) in enumerate(top_nodes['eigenvector'][:5], 1):
-                        name = seen_profiles.get(node_id, {}).get('name', node_id)
-                        org = seen_profiles.get(node_id, {}).get('organization', '')
-                        org_text = f" ({org})" if org else ""
-                        st.markdown(f"{i}. **{name}**{org_text} — {score:.4f}")
-                else:
-                    st.info("No eigenvector data available")
-            
-            # Metric definitions
-            with st.expander("ℹ️ What do these metrics mean?"):
-                st.markdown("""
-                | Metric | What It Measures | Identifies |
-                |--------|------------------|------------|
-                | **Degree Centrality** | Number of direct connections | **Connectors** — well-networked individuals |
-                | **Betweenness Centrality** | How often on shortest paths between others | **Brokers** — bridge different groups |
-                | **Eigenvector Centrality** | Connected to influential people | **Influencers** — access to power |
-                | **Closeness Centrality** | Average distance to everyone | **Accessible hubs** — can reach anyone quickly |
-                
-                **Network-level metrics:**
-                - **Density**: Proportion of possible connections that exist (0-1)
-                - **Clustering**: How much nodes cluster together
-                - **Components**: Disconnected subgroups in the network
-                """)
-        
-        # ====================================================================
         # ADVANCED ANALYTICS (if advanced mode was enabled)
         # ====================================================================
         
@@ -1639,6 +1545,101 @@ Profiles With No Neighbors: {stats.get('profiles_with_no_neighbors', 0)}
                 
                 **Tip:** Run with real API token and degree 1 or 2 to get organization data for fetched profiles.
                 """)
+            
+            # ================================================================
+            # NETWORK CENTRALITY METRICS (Advanced Mode)
+            # ================================================================
+            st.markdown("---")
+            st.subheader("📊 Network Centrality Metrics")
+            
+            if network_metrics and network_metrics.get('top_nodes'):
+                top_nodes = network_metrics['top_nodes']
+                network_stats = network_metrics.get('network_stats', {})
+                
+                # Network-level statistics
+                st.markdown("**Network Overview:**")
+                stats_cols = st.columns(5)
+                stats_cols[0].metric("Nodes", network_stats.get('nodes', 0))
+                stats_cols[1].metric("Edges", network_stats.get('edges', 0))
+                stats_cols[2].metric("Density", f"{network_stats.get('density', 0):.4f}")
+                stats_cols[3].metric("Avg Degree", network_stats.get('avg_degree', 0))
+                stats_cols[4].metric("Avg Clustering", f"{network_stats.get('avg_clustering', 0):.4f}")
+                
+                # Additional network stats if available
+                if 'num_components' in network_stats:
+                    st.caption(f"📈 Components: {network_stats['num_components']} | Largest component: {network_stats.get('largest_component_size', 'N/A')} nodes")
+                
+                st.markdown("---")
+                
+                # Top nodes by different centrality measures
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    st.markdown("**🔗 Top Connectors** (by Degree)")
+                    st.caption("Most direct connections")
+                    if 'degree' in top_nodes:
+                        for i, (node_id, score) in enumerate(top_nodes['degree'][:5], 1):
+                            name = seen_profiles.get(node_id, {}).get('name', node_id)
+                            org = seen_profiles.get(node_id, {}).get('organization', '')
+                            connections = network_metrics['node_metrics'].get(node_id, {}).get('degree', 0)
+                            org_text = f" ({org})" if org else ""
+                            st.markdown(f"{i}. **{name}**{org_text} — {connections} connections")
+                    else:
+                        st.info("No degree data available")
+                    
+                    st.markdown("")
+                    st.markdown("**📍 Top Accessible** (by Closeness)")
+                    st.caption("Shortest average distance to others")
+                    if 'closeness' in top_nodes:
+                        for i, (node_id, score) in enumerate(top_nodes['closeness'][:5], 1):
+                            name = seen_profiles.get(node_id, {}).get('name', node_id)
+                            org = seen_profiles.get(node_id, {}).get('organization', '')
+                            org_text = f" ({org})" if org else ""
+                            st.markdown(f"{i}. **{name}**{org_text} — {score:.4f}")
+                    else:
+                        st.info("No closeness data available")
+                
+                with col2:
+                    st.markdown("**🌉 Top Brokers** (by Betweenness)")
+                    st.caption("Bridge between groups")
+                    if 'betweenness' in top_nodes:
+                        for i, (node_id, score) in enumerate(top_nodes['betweenness'][:5], 1):
+                            name = seen_profiles.get(node_id, {}).get('name', node_id)
+                            org = seen_profiles.get(node_id, {}).get('organization', '')
+                            org_text = f" ({org})" if org else ""
+                            st.markdown(f"{i}. **{name}**{org_text} — {score:.4f}")
+                    else:
+                        st.info("No betweenness data available")
+                    
+                    st.markdown("")
+                    st.markdown("**⭐ Top Influencers** (by Eigenvector)")
+                    st.caption("Connected to well-connected people")
+                    if 'eigenvector' in top_nodes:
+                        for i, (node_id, score) in enumerate(top_nodes['eigenvector'][:5], 1):
+                            name = seen_profiles.get(node_id, {}).get('name', node_id)
+                            org = seen_profiles.get(node_id, {}).get('organization', '')
+                            org_text = f" ({org})" if org else ""
+                            st.markdown(f"{i}. **{name}**{org_text} — {score:.4f}")
+                    else:
+                        st.info("No eigenvector data available")
+                
+                # Metric definitions
+                with st.expander("ℹ️ What do these metrics mean?"):
+                    st.markdown("""
+                    | Metric | What It Measures | Identifies |
+                    |--------|------------------|------------|
+                    | **Degree Centrality** | Number of direct connections | **Connectors** — well-networked individuals |
+                    | **Betweenness Centrality** | How often on shortest paths between others | **Brokers** — bridge different groups |
+                    | **Eigenvector Centrality** | Connected to influential people | **Influencers** — access to power |
+                    | **Closeness Centrality** | Average distance to everyone | **Accessible hubs** — can reach anyone quickly |
+                    
+                    **Network-level metrics:**
+                    - **Density**: Proportion of possible connections that exist (0-1)
+                    - **Clustering**: How much nodes cluster together
+                    - **Components**: Disconnected subgroups in the network
+                    """)
+            else:
+                st.info("Network metrics require edges to calculate. Run a crawl with connections to see centrality analysis.")
             
             # Roadmap for future features
             st.markdown("---")
