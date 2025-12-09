@@ -704,26 +704,177 @@ def render_broker_badge(role: str, small: bool = True) -> str:
     )
 
 
+def _bucket_from_percentile(p: float) -> str:
+    """
+    Simple human label for a 0–1 percentile value.
+    Expects p in [0, 1] (e.g., 0.87 = 87th percentile).
+    """
+    if p is None:
+        return "unknown"
+    if p >= 0.95:
+        return "very high"
+    if p >= 0.75:
+        return "high"
+    if p >= 0.40:
+        return "moderate"
+    return "low"
+
+
+def describe_node_narrative(
+    name: str,
+    organization: Optional[str],
+    role: Optional[str],
+    degree_pct: Optional[float] = None,
+    betweenness_pct: Optional[float] = None,
+    eigenvector_pct: Optional[float] = None,
+    closeness_pct: Optional[float] = None,
+    sector: Optional[str] = None,
+) -> str:
+    """
+    Return a short, C4C-style narrative paragraph about a node.
+    
+    All *_pct arguments are percentiles in [0, 1] for that metric
+    (e.g., 0.90 = top 10% of the network).
+    """
+    org_str = f" at {organization}" if organization else ""
+    sector_str = f" in the {sector} space" if sector else ""
+
+    deg_bucket = _bucket_from_percentile(degree_pct)
+    btw_bucket = _bucket_from_percentile(betweenness_pct)
+    eig_bucket = _bucket_from_percentile(eigenvector_pct)
+    clo_bucket = _bucket_from_percentile(closeness_pct)
+
+    # --- Base phrases for centralities ---
+    connection_phrase = ""
+    if deg_bucket == "very high":
+        connection_phrase = "is connected to many people in the network"
+    elif deg_bucket == "high":
+        connection_phrase = "is connected to a large share of the network"
+    elif deg_bucket == "moderate":
+        connection_phrase = "has a solid set of direct relationships"
+    elif deg_bucket == "low":
+        connection_phrase = "has a focused set of direct relationships"
+
+    broker_phrase = ""
+    if btw_bucket == "very high":
+        broker_phrase = "sits on many of the shortest paths between groups"
+    elif btw_bucket == "high":
+        broker_phrase = "often links people who would not otherwise connect"
+    elif btw_bucket == "moderate":
+        broker_phrase = "sometimes plays a bridging role between groups"
+    elif btw_bucket == "low":
+        broker_phrase = "mainly operates within already well-connected areas"
+
+    influence_phrase = ""
+    if eig_bucket == "very high":
+        influence_phrase = "is closely tied to other highly influential actors"
+    elif eig_bucket == "high":
+        influence_phrase = "is well positioned near other visible actors"
+    elif eig_bucket == "moderate":
+        influence_phrase = "is reasonably well embedded in the core network"
+    elif eig_bucket == "low":
+        influence_phrase = "sits more on the edge of the core network"
+
+    accessibility_phrase = ""
+    if clo_bucket == "very high":
+        accessibility_phrase = "can reach most other actors with very few steps"
+    elif clo_bucket == "high":
+        accessibility_phrase = "can reach others relatively quickly"
+    elif clo_bucket == "moderate":
+        accessibility_phrase = "reaches others in an average number of steps"
+    elif clo_bucket == "low":
+        accessibility_phrase = "is further away from much of the network"
+
+    # --- Role-specific framing ---
+    role = (role or "").lower()
+
+    if role == "liaison":
+        role_sentence = (
+            f"{name}{org_str}{sector_str} acts as a cross-group liaison, "
+            f"helping information and relationships move between otherwise "
+            f"separate parts of the network."
+        )
+    elif role == "gatekeeper":
+        role_sentence = (
+            f"{name}{org_str}{sector_str} functions as a gatekeeper, controlling "
+            f"many of the key entry points into their part of the network."
+        )
+    elif role == "representative":
+        role_sentence = (
+            f"{name}{org_str}{sector_str} often represents their group to others, "
+            f"serving as a visible point of contact between communities."
+        )
+    elif role == "coordinator":
+        role_sentence = (
+            f"{name}{org_str}{sector_str} primarily coordinates relationships "
+            f"within their own group, helping keep that cluster connected."
+        )
+    elif role == "consultant":
+        role_sentence = (
+            f"{name}{org_str}{sector_str} spans several groups without belonging "
+            f"strongly to any single one, often acting as an informal advisor or "
+            f"connector across contexts."
+        )
+    elif role == "peripheral":
+        role_sentence = (
+            f"{name}{org_str}{sector_str} sits closer to the edge of the network, "
+            f"connecting in through a smaller number of ties."
+        )
+    else:
+        role_sentence = (
+            f"{name}{org_str}{sector_str} holds a meaningful position in the "
+            f"network based on their pattern of connections."
+        )
+
+    # --- Assemble the blurb ---
+    pieces = [role_sentence]
+
+    # Add 1–2 centrality phrases if they add value
+    if connection_phrase:
+        pieces.append(f"{name} {connection_phrase}.")
+    if broker_phrase and btw_bucket in ("high", "very high"):
+        pieces.append(f"{name} {broker_phrase}, giving them leverage as a broker.")
+    if influence_phrase and eig_bucket in ("high", "very high") and btw_bucket != "very high":
+        pieces.append(f"{name} {influence_phrase}.")
+    if accessibility_phrase and clo_bucket in ("high", "very high") and btw_bucket not in ("high", "very high"):
+        pieces.append(f"{name} {accessibility_phrase}.")
+
+    return " ".join(pieces)
+
+
+def compute_percentiles(values: Dict[str, float]) -> Dict[str, float]:
+    """
+    Convert raw metric values to percentiles (0-1).
+    Returns {node_id: percentile}
+    """
+    if not values:
+        return {}
+    
+    sorted_values = sorted(values.values())
+    n = len(sorted_values)
+    
+    percentiles = {}
+    for node_id, value in values.items():
+        # Find position in sorted list
+        rank = sorted_values.index(value)
+        percentiles[node_id] = rank / max(n - 1, 1)
+    
+    return percentiles
+
+
+# Legacy function for backward compatibility
 def describe_broker_role(name: str, org: str, role: str, betweenness_level: str) -> str:
-    """Generate a narrative description of a broker's role."""
-    org_part = f" at {org}" if org else ""
+    """Generate a narrative description of a broker's role (simplified version)."""
+    # Map level to approximate percentile
+    level_to_pct = {"low": 0.2, "medium": 0.5, "high": 0.85, "extreme": 0.97}
+    btw_pct = level_to_pct.get(betweenness_level, 0.5)
     
-    role_descriptions = {
-        "liaison": f"{name}{org_part} serves as a critical cross-group liaison — one of the few people who bridge otherwise disconnected clusters. If they disengage, cross-sector information flow may collapse.",
-        "gatekeeper": f"{name}{org_part} acts as a gatekeeper, controlling access into their group. They are a key node for sector handoffs and should have backup to avoid bottlenecks.",
-        "representative": f"{name}{org_part} is an outbound representative who brings their group's voice into other clusters. They help ensure their sector's perspectives are heard elsewhere.",
-        "coordinator": f"{name}{org_part} serves as an internal coordinator, keeping their group cohesive. They may not bridge outward, but they strengthen internal collaboration.",
-        "consultant": f"{name}{org_part} operates as a multi-group advisor, connecting across several clusters without belonging strongly to any single one.",
-        "peripheral": f"{name}{org_part} currently plays a peripheral role with limited brokerage influence.",
-    }
-    
-    description = role_descriptions.get(role, role_descriptions["peripheral"])
-    
-    # Add betweenness context
-    if betweenness_level in ("high", "extreme") and role != "peripheral":
-        description += " Their high betweenness means many paths in the network run through them."
-    
-    return description
+    return describe_node_narrative(
+        name=name,
+        organization=org,
+        role=role,
+        betweenness_pct=btw_pct
+    )
 
 
 # ============================================================================
@@ -2535,6 +2686,12 @@ Profiles With No Neighbors: {stats.get('profiles_with_no_neighbors', 0)}
                 clo_bp = compute_breakpoints(closeness_values) if closeness_values else None
                 eig_bp = compute_breakpoints(eigenvector_values) if eigenvector_values else None
                 
+                # Compute percentiles for narrative generation
+                degree_pcts = compute_percentiles({nid: m.get('degree_centrality', 0) for nid, m in node_metrics.items()})
+                betweenness_pcts = compute_percentiles({nid: m.get('betweenness_centrality', 0) for nid, m in node_metrics.items()})
+                closeness_pcts = compute_percentiles({nid: m.get('closeness_centrality', 0) for nid, m in node_metrics.items()})
+                eigenvector_pcts = compute_percentiles({nid: m.get('eigenvector_centrality', 0) for nid, m in node_metrics.items()})
+                
                 # ----- NETWORK HEALTH SCORE -----
                 health_stats = NetworkStats(
                     n_nodes=network_stats.get('nodes', 0),
@@ -2582,22 +2739,30 @@ Profiles With No Neighbors: {stats.get('profiles_with_no_neighbors', 0)}
                         for i, (node_id, score) in enumerate(top_nodes['degree'][:5], 1):
                             name = seen_profiles.get(node_id, {}).get('name', node_id)
                             org = seen_profiles.get(node_id, {}).get('organization', '')
+                            sector = seen_profiles.get(node_id, {}).get('sector', '')
                             connections = node_metrics.get(node_id, {}).get('degree', 0)
                             
                             # Get level and badge
                             level = classify_value(score, deg_bp)
                             badge = render_badge("degree", level, small=True)
                             
-                            # Get all levels for this node
-                            levels = {
-                                "degree": level,
-                                "betweenness": classify_value(node_metrics.get(node_id, {}).get('betweenness_centrality', 0), btw_bp) if btw_bp else "low",
-                                "closeness": classify_value(node_metrics.get(node_id, {}).get('closeness_centrality', 0), clo_bp) if clo_bp else "low",
-                                "eigenvector": classify_value(node_metrics.get(node_id, {}).get('eigenvector_centrality', 0), eig_bp) if eig_bp else "low",
-                            }
+                            # Get brokerage role
+                            broker_role = brokerage_roles.get(node_id, 'peripheral')
                             
                             st.markdown(f"{i}. **{name}** ({org}) — {connections} connections {badge}", unsafe_allow_html=True)
-                            st.caption(describe_node_role(name, org, levels))
+                            
+                            # Generate rich narrative
+                            narrative = describe_node_narrative(
+                                name=name,
+                                organization=org,
+                                role=broker_role,
+                                degree_pct=degree_pcts.get(node_id),
+                                betweenness_pct=betweenness_pcts.get(node_id),
+                                eigenvector_pct=eigenvector_pcts.get(node_id),
+                                closeness_pct=closeness_pcts.get(node_id),
+                                sector=sector
+                            )
+                            st.caption(narrative)
                     else:
                         st.info("No degree data available")
                     
@@ -2626,6 +2791,7 @@ Profiles With No Neighbors: {stats.get('profiles_with_no_neighbors', 0)}
                         for i, (node_id, score) in enumerate(top_nodes['betweenness'][:5], 1):
                             name = seen_profiles.get(node_id, {}).get('name', node_id)
                             org = seen_profiles.get(node_id, {}).get('organization', '')
+                            sector = seen_profiles.get(node_id, {}).get('sector', '')
                             
                             level = classify_value(score, btw_bp)
                             badge = render_badge("betweenness", level, small=True)
@@ -2638,16 +2804,20 @@ Profiles With No Neighbors: {stats.get('profiles_with_no_neighbors', 0)}
                             if level in ('high', 'extreme'):
                                 critical_broker_ids.append(node_id)
                             
-                            # Get all levels for description
-                            levels = {
-                                "degree": classify_value(node_metrics.get(node_id, {}).get('degree_centrality', 0), deg_bp) if deg_bp else "low",
-                                "betweenness": level,
-                                "closeness": classify_value(node_metrics.get(node_id, {}).get('closeness_centrality', 0), clo_bp) if clo_bp else "low",
-                                "eigenvector": classify_value(node_metrics.get(node_id, {}).get('eigenvector_centrality', 0), eig_bp) if eig_bp else "low",
-                            }
-                            
                             st.markdown(f"{i}. **{name}** ({org}) — {score:.4f} {badge} {role_badge}", unsafe_allow_html=True)
-                            st.caption(describe_broker_role(name, org, broker_role, level))
+                            
+                            # Generate rich narrative with all percentiles
+                            narrative = describe_node_narrative(
+                                name=name,
+                                organization=org,
+                                role=broker_role,
+                                degree_pct=degree_pcts.get(node_id),
+                                betweenness_pct=betweenness_pcts.get(node_id),
+                                eigenvector_pct=eigenvector_pcts.get(node_id),
+                                closeness_pct=closeness_pcts.get(node_id),
+                                sector=sector
+                            )
+                            st.caption(narrative)
                     else:
                         st.info("No betweenness data available")
                     
