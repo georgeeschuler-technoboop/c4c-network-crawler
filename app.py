@@ -15,6 +15,7 @@ import zipfile
 import networkx as nx
 import numpy as np
 from dataclasses import dataclass
+import plotly.graph_objects as go
 
 
 # ============================================================================
@@ -434,8 +435,6 @@ def render_sector_analysis(sectors: Dict[str, int], total_nodes: int, seen_profi
     df_sorted = df.sort_values("pct_classified", ascending=True)
     
     # Create Plotly horizontal bar chart
-    import plotly.graph_objects as go
-    
     fig = go.Figure()
     
     fig.add_trace(go.Bar(
