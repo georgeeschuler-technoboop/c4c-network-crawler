@@ -2412,6 +2412,73 @@ def generate_insights_report(
     return "\n".join(lines)
 
 
+def create_brokerage_role_chart(brokerage_roles: Dict[str, str]) -> 'go.Figure':
+    """
+    Create a horizontal bar chart showing brokerage role distribution.
+    Returns a Plotly Figure.
+    """
+    if not brokerage_roles:
+        return None
+    
+    # Count roles
+    role_counts = {}
+    for role in brokerage_roles.values():
+        role_counts[role] = role_counts.get(role, 0) + 1
+    
+    # Define order and colors
+    role_order = ["liaison", "gatekeeper", "representative", "coordinator", "consultant", "peripheral"]
+    role_labels = {
+        "liaison": "🌉 Liaison",
+        "gatekeeper": "🚪 Gatekeeper", 
+        "representative": "🔗 Representative",
+        "coordinator": "🧩 Coordinator",
+        "consultant": "🧠 Consultant",
+        "peripheral": "⚪ Peripheral",
+    }
+    role_colors = {
+        "liaison": "#D97706",      # Amber
+        "gatekeeper": "#F97316",   # Orange
+        "representative": "#10B981", # Green
+        "coordinator": "#3B82F6",  # Blue
+        "consultant": "#6366F1",   # Indigo
+        "peripheral": "#9CA3AF",   # Gray
+    }
+    
+    # Build data in order
+    roles = []
+    counts = []
+    colors = []
+    for role in role_order:
+        if role in role_counts:
+            roles.append(role_labels.get(role, role))
+            counts.append(role_counts[role])
+            colors.append(role_colors.get(role, "#9CA3AF"))
+    
+    # Create chart
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        y=roles,
+        x=counts,
+        orientation='h',
+        marker_color=colors,
+        text=counts,
+        textposition='auto',
+        hovertemplate="<b>%{y}</b><br>%{x} people<extra></extra>"
+    ))
+    
+    fig.update_layout(
+        title="Brokerage Role Distribution",
+        xaxis_title="Number of People",
+        yaxis_title="",
+        height=300,
+        margin=dict(l=20, r=20, t=40, b=20),
+        yaxis=dict(autorange="reversed"),
+        showlegend=False,
+    )
+    
+    return fig
+
+
 # ============================================================================
 # AI-ENHANCED NARRATIVES (Claude API Integration)
 # ============================================================================
