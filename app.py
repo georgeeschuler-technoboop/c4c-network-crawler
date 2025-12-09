@@ -2853,7 +2853,7 @@ def create_download_zip(
 
 def main():
     st.set_page_config(
-        page_title="C4C Network Seed Crawler",
+        page_title="C4C Network Intelligence Engine",
         page_icon="https://static.wixstatic.com/media/275a3f_9c48d5079fcf4b688606c81d8f34d5a5~mv2.jpg",
         layout="wide"
     )
@@ -2870,9 +2870,8 @@ def main():
             width=80
         )
     with col2:
-        st.title("C4C Network Seed Crawler")
-    
-    st.markdown("Convert LinkedIn seed profiles into a Polinode-ready network using EnrichLayer")
+        st.title("C4C Network Intelligence Engine")
+        st.caption("From LinkedIn profiles to actionable system insights.")
     
     # ========================================================================
     # MODE SELECTION
@@ -2882,39 +2881,53 @@ def main():
     
     st.subheader("🎛️ Select Mode")
     
-    col1, col2 = st.columns([1, 3])
-    
-    with col1:
-        advanced_mode = st.toggle(
-            "Intelligence Engine",
-            value=False,
-            help="Enable Network Intelligence Engine for deeper analysis"
-        )
+    # Toggle with labels on both sides
+    col1, col2, col3 = st.columns([2, 1, 2])
     
     with col2:
+        advanced_mode = st.toggle(
+            "mode_toggle",
+            value=False,
+            label_visibility="collapsed",
+            key="_advanced_mode"
+        )
+    
+    with col1:
         if advanced_mode:
-            st.info("""
-            **🔬 Network Intelligence Engine**  
-            Full strategic analysis:
-            - Centrality metrics (degree, betweenness, eigenvector, closeness)
-            - Community detection and clustering
-            - Brokerage analysis (coordinators, gatekeepers, liaisons)
-            - Key position identification (connectors, brokers, bridges)
-            - Network insights and strategic recommendations
-            
-            *⏱️ Longer processing time, richer insights*
-            """)
+            st.markdown("📊 Seed Crawler")
         else:
-            st.success("""
-            **📊 Network Seed Crawler**  
-            Quick network mapping:
-            - Crawl LinkedIn networks (1 or 2 degrees)
-            - Export nodes, edges, and raw profiles
-            - Import directly to Polinode or other tools
-            - Fast processing, clean data
-            
-            *⚡ Quick results, simple outputs*
-            """)
+            st.markdown("**📊 Seed Crawler**")
+    
+    with col3:
+        if advanced_mode:
+            st.markdown("**🔬 Intelligence Engine**")
+        else:
+            st.markdown("🔬 Intelligence Engine")
+    
+    # Mode description box
+    if advanced_mode:
+        st.info("""
+        **🔬 Network Intelligence Engine**  
+        Full strategic analysis:
+        - Centrality metrics (degree, betweenness, eigenvector, closeness)
+        - Community detection and clustering
+        - Brokerage analysis (coordinators, gatekeepers, liaisons)
+        - Key position identification (connectors, brokers, bridges)
+        - Network insights and strategic recommendations
+        
+        *⏱️ Longer processing time, richer insights*
+        """)
+    else:
+        st.success("""
+        **📊 Network Seed Crawler**  
+        Quick network mapping:
+        - Crawl LinkedIn networks (1 or 2 degrees)
+        - Export nodes, edges, and raw profiles
+        - Import directly to Polinode or other tools
+        - Fast processing, clean data
+        
+        *⚡ Quick results, simple outputs*
+        """)
     
     # AI-Enhanced Insights (only show in Intelligence Engine mode)
     ai_enabled = False
