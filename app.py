@@ -405,8 +405,8 @@ def analyze_sectors(sector_counts: Dict[str, int], total_nodes: int) -> SectorAn
     )
 
 
-def render_sector_analysis(sectors: Dict[str, int], total_nodes: int):
-    """Render the enhanced sector distribution with bar chart and narrative."""
+def render_sector_analysis(sectors: Dict[str, int], total_nodes: int, seen_profiles: Dict = None):
+    """Render the enhanced sector distribution with Plotly bar chart and narrative."""
     
     if not sectors:
         st.info("No sector classification available")
@@ -419,19 +419,72 @@ def render_sector_analysis(sectors: Dict[str, int], total_nodes: int):
     # Header metric
     st.metric("Sectors Identified", len(sectors))
     
-    # Bar chart
-    st.markdown("**Share of classified actors by sector:**")
+    # Determine bar colors based on dominance
+    def get_bar_color(pct):
+        if pct >= 40:
+            return "#F97316"  # Orange - dominant
+        elif pct <= 10:
+            return "#9CA3AF"  # Gray - underrepresented
+        else:
+            return "#10B981"  # Green - healthy
     
-    # Create chart data - use sector as index for bar chart
-    chart_df = df.set_index("sector")[["pct_classified"]].rename(columns={"pct_classified": "% of Network"})
-    st.bar_chart(chart_df, height=250)
+    df["color"] = df["pct_classified"].apply(get_bar_color)
+    
+    # Sort for display (largest at top for horizontal bars)
+    df_sorted = df.sort_values("pct_classified", ascending=True)
+    
+    # Create Plotly horizontal bar chart
+    import plotly.graph_objects as go
+    
+    fig = go.Figure()
+    
+    fig.add_trace(go.Bar(
+        y=df_sorted["sector"],
+        x=df_sorted["pct_classified"],
+        orientation='h',
+        marker_color=df_sorted["color"],
+        text=[f"{p:.1f}%" for p in df_sorted["pct_classified"]],
+        textposition='auto',
+        textfont=dict(color='white', size=12),
+        hovertemplate="<b>%{y}</b><br>%{x:.1f}% of network<br>%{customdata} people<extra></extra>",
+        customdata=df_sorted["count"]
+    ))
+    
+    fig.update_layout(
+        height=max(200, len(df) * 40),  # Dynamic height based on sector count
+        margin=dict(l=10, r=10, t=10, b=10),
+        xaxis_title="% of Classified Actors",
+        yaxis_title="",
+        showlegend=False,
+        plot_bgcolor='rgba(0,0,0,0)',
+        paper_bgcolor='rgba(0,0,0,0)',
+        xaxis=dict(
+            showgrid=True,
+            gridcolor='rgba(128,128,128,0.2)',
+            range=[0, max(df["pct_classified"]) * 1.15]  # Add padding for labels
+        ),
+        yaxis=dict(
+            showgrid=False,
+        )
+    )
+    
+    st.markdown("**Share of classified actors by sector:**")
+    st.plotly_chart(fig, use_container_width=True)
+    
+    # Color legend
+    st.markdown("""
+    <div style="display: flex; gap: 20px; font-size: 12px; margin-bottom: 10px;">
+        <span><span style="color: #F97316;">●</span> Dominant (≥40%)</span>
+        <span><span style="color: #10B981;">●</span> Healthy (10-40%)</span>
+        <span><span style="color: #9CA3AF;">●</span> Underrepresented (≤10%)</span>
+    </div>
+    """, unsafe_allow_html=True)
     
     # Summary narrative
     st.markdown("---")
     st.markdown(analysis.summary_text)
     
     # Diversity indicator
-    st.markdown("---")
     if analysis.diversity_score >= 0.75:
         st.success(f"🟢 **Sector Diversity: {analysis.diversity_label}** — The network includes a healthy mix of perspectives from different sectors.")
     elif analysis.diversity_score >= 0.45:
@@ -455,6 +508,74 @@ def render_sector_analysis(sectors: Dict[str, int], total_nodes: int):
             "critical but less-heard perspectives:\n\n"
             f"{underrep_list}"
         )
+    
+    # Sector detail expanders - show who's in each sector
+    if seen_profiles:
+        st.markdown("---")
+        st.markdown("**👥 Explore People by Sector:**")
+        
+        # Group profiles by sector
+        profiles_by_sector = {}
+        for node_id, profile in seen_profiles.items():
+            sector = profile.get('sector', 'Unknown')
+            if sector not in profiles_by_sector:
+                profiles_by_sector[sector] = []
+            profiles_by_sector[sector].append(profile)
+        
+        # Create expanders for each sector (sorted by count)
+        for _, row in df.iterrows():
+            sector = row["sector"]
+            count = int(row["count"])
+            pct = row["pct_classified"]
+            
+            # Get color indicator
+            if pct >= 40:
+                indicator = "🟠"
+            elif pct <= 10:
+                indicator = "⚪"
+            else:
+                indicator = "🟢"
+            
+            profiles = profiles_by_sector.get(sector, [])
+            
+            with st.expander(f"{indicator} **{sector}** — {count} people ({pct:.1f}%)"):
+                if profiles:
+                    # Show up to 10 sample profiles
+                    sample_profiles = profiles[:10]
+                    
+                    for p in sample_profiles:
+                        name = p.get('name', 'Unknown')
+                        org = p.get('organization', '')
+                        headline = p.get('headline', '')
+                        
+                        org_text = f" • {org}" if org else ""
+                        headline_text = f"\n  _{headline}_" if headline and len(headline) < 100 else ""
+                        
+                        st.markdown(f"**{name}**{org_text}{headline_text}")
+                    
+                    if len(profiles) > 10:
+                        st.caption(f"...and {len(profiles) - 10} more people in this sector")
+                else:
+                    st.caption("No profile details available")
+        
+        # Special handling for "Unknown" or "Other" category
+        unknown_profiles = profiles_by_sector.get('Unknown', []) + profiles_by_sector.get('Other', [])
+        if unknown_profiles and 'Unknown' not in [row["sector"] for _, row in df.iterrows()]:
+            with st.expander(f"❓ **Unclassified** — {len(unknown_profiles)} people"):
+                st.caption("These profiles couldn't be automatically classified into a sector:")
+                for p in unknown_profiles[:10]:
+                    name = p.get('name', 'Unknown')
+                    org = p.get('organization', '')
+                    headline = p.get('headline', '')
+                    
+                    org_text = f" • {org}" if org else ""
+                    st.markdown(f"**{name}**{org_text}")
+                    if headline:
+                        st.caption(f"  {headline[:80]}...")
+                
+                if len(unknown_profiles) > 10:
+                    st.caption(f"...and {len(unknown_profiles) - 10} more unclassified profiles")
+
 
 
 # ============================================================================
@@ -1948,7 +2069,7 @@ Profiles With No Neighbors: {stats.get('profiles_with_no_neighbors', 0)}
                 
                 with col2:
                     st.subheader("🎯 Sector Distribution")
-                    render_sector_analysis(sectors, len(seen_profiles))
+                    render_sector_analysis(sectors, len(seen_profiles), seen_profiles)
                 
                 # Note about what this enables
                 st.markdown("---")
