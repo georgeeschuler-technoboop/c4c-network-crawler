@@ -2891,14 +2891,72 @@ def fig_to_png_bytes(fig: 'go.Figure') -> Tuple[Optional[bytes], Optional[str]]:
         return None, str(e)
 
 
+def generate_crawl_log(
+    stats: Dict,
+    seen_profiles: Dict,
+    edges: List,
+    max_degree: int,
+    max_edges: int,
+    max_nodes: int,
+    api_delay: float,
+    mode: str,
+    mock_mode: bool,
+) -> str:
+    """
+    Generate a JSON log of the crawl session for record-keeping.
+    """
+    # Count org extraction stats
+    nodes_with_org = sum(1 for n in seen_profiles.values() if n.get('organization'))
+    nodes_with_sector = sum(1 for n in seen_profiles.values() if n.get('sector'))
+    
+    # Count source types
+    seed_count = sum(1 for n in seen_profiles.values() if n.get('source_type') == 'seed')
+    discovered_count = sum(1 for n in seen_profiles.values() if n.get('source_type') == 'discovered')
+    
+    log_data = {
+        'crawl_metadata': {
+            'timestamp': datetime.now(timezone.utc).isoformat(),
+            'mode': mode,
+            'mock_mode': mock_mode,
+            'version': '1.0',
+        },
+        'configuration': {
+            'max_degree': max_degree,
+            'max_edges': max_edges,
+            'max_nodes': max_nodes,
+            'api_delay_seconds': api_delay,
+        },
+        'api_statistics': {
+            'total_calls': stats.get('api_calls', 0),
+            'successful_calls': stats.get('successful_calls', 0),
+            'failed_calls': stats.get('failed_calls', 0),
+            'success_rate': round((stats.get('successful_calls', 0) / max(stats.get('api_calls', 1), 1)) * 100, 2),
+        },
+        'error_breakdown': stats.get('error_breakdown', {}),
+        'network_statistics': {
+            'total_nodes': len(seen_profiles),
+            'total_edges': len(edges),
+            'seed_nodes': seed_count,
+            'discovered_nodes': discovered_count,
+            'nodes_with_organization': nodes_with_org,
+            'nodes_with_sector': nodes_with_sector,
+            'organization_coverage_pct': round((nodes_with_org / max(len(seen_profiles), 1)) * 100, 2),
+            'max_degree_reached': stats.get('max_degree_reached', 0),
+            'profiles_with_no_neighbors': stats.get('profiles_with_no_neighbors', 0),
+        },
+        'stop_reason': stats.get('stopped_reason', 'unknown'),
+    }
+    
+    return json.dumps(log_data, indent=2)
+
+
 def create_download_zip(
     nodes_csv: str, 
     edges_csv: str, 
     raw_json: str, 
     analysis_json: str = None,
     insights_report: str = None,
-    sector_chart_png: bytes = None,
-    brokerage_chart_png: bytes = None,
+    crawl_log: str = None,
 ) -> bytes:
     """
     Create a ZIP file containing all output files.
@@ -2919,11 +2977,9 @@ def create_download_zip(
         # Add insights report if available
         if insights_report:
             zip_file.writestr('network_insights_report.md', insights_report)
-        # Add charts if available
-        if sector_chart_png:
-            zip_file.writestr('charts/sector_distribution.png', sector_chart_png)
-        if brokerage_chart_png:
-            zip_file.writestr('charts/brokerage_roles.png', brokerage_chart_png)
+        # Add crawl log if available
+        if crawl_log:
+            zip_file.writestr('crawl_log.json', crawl_log)
     
     zip_buffer.seek(0)
     return zip_buffer.getvalue()
@@ -3275,6 +3331,7 @@ def main():
             'stats': stats,
             'max_degree': max_degree,
             'advanced_mode': advanced_mode,  # Store mode setting
+            'mock_mode': mock_mode,  # Store mock mode setting
             'network_metrics': network_metrics  # Store network metrics
         }
     
@@ -3285,8 +3342,9 @@ def main():
         edges = results['edges']
         raw_profiles = results['raw_profiles']
         stats = results['stats']
-        max_degree = results['max_degree']
+        was_max_degree = results['max_degree']
         was_advanced_mode = results.get('advanced_mode', False)
+        was_mock_mode = results.get('mock_mode', False)
         network_metrics = results.get('network_metrics', None)
         
         # ====================================================================
@@ -3381,7 +3439,7 @@ Error Breakdown:
 - Other Errors: {error_breakdown.get('other', 0)}
 
 Crawl Configuration:
-- Max Degree: {max_degree}
+- Max Degree: {was_max_degree}
 - Max Edges Limit: 10000
 - Max Nodes Limit: 7500
 - API Delay: {API_DELAY} seconds between calls
@@ -3809,8 +3867,8 @@ Profiles With No Neighbors: {stats.get('profiles_with_no_neighbors', 0)}
         st.header("💾 Download Results")
         
         # Generate files
-        nodes_csv = generate_nodes_csv(seen_profiles, max_degree=max_degree, max_edges=10000, max_nodes=7500, network_metrics=network_metrics)
-        edges_csv = generate_edges_csv(edges, max_degree=max_degree, max_edges=10000, max_nodes=7500)
+        nodes_csv = generate_nodes_csv(seen_profiles, max_degree=was_max_degree, max_edges=10000, max_nodes=7500, network_metrics=network_metrics)
+        edges_csv = generate_edges_csv(edges, max_degree=was_max_degree, max_edges=10000, max_nodes=7500)
         raw_json = generate_raw_json(raw_profiles)
         
         # Generate network analysis JSON if metrics available
@@ -3818,7 +3876,7 @@ Profiles With No Neighbors: {stats.get('profiles_with_no_neighbors', 0)}
         insights_report = None
         brokerage_chart_fig = None
         
-        if network_metrics and advanced_mode:
+        if network_metrics and was_advanced_mode:
             analysis_json = generate_network_analysis_json(network_metrics, seen_profiles)
             
             # Generate insights report
@@ -3930,17 +3988,32 @@ Profiles With No Neighbors: {stats.get('profiles_with_no_neighbors', 0)}
         
         # Primary action: Download all as ZIP
         st.markdown("### 📦 Download All Files")
+        
+        # Generate crawl log
+        crawl_log = generate_crawl_log(
+            stats=stats,
+            seen_profiles=seen_profiles,
+            edges=edges,
+            max_degree=was_max_degree,
+            max_edges=10000,
+            max_nodes=7500,
+            api_delay=1.0,
+            mode='Intelligence Engine' if was_advanced_mode else 'Seed Crawler',
+            mock_mode=was_mock_mode,
+        )
+        
         zip_data = create_download_zip(
             nodes_csv, 
             edges_csv, 
             raw_json, 
             analysis_json,
             insights_report,
+            crawl_log,
         )
         
         col1, col2 = st.columns([3, 1])
         with col1:
-            zip_contents = "nodes.csv, edges.csv, raw_profiles.json"
+            zip_contents = "nodes.csv, edges.csv, raw_profiles.json, crawl_log.json"
             if analysis_json:
                 zip_contents += ", network_analysis.json"
             if insights_report:
@@ -3964,7 +4037,7 @@ Profiles With No Neighbors: {stats.get('profiles_with_no_neighbors', 0)}
         st.markdown("### 📄 Download Data Files")
         st.caption("Download data files individually")
         
-        col1, col2, col3 = st.columns(3)
+        col1, col2, col3, col4 = st.columns(4)
         
         with col1:
             st.download_button(
@@ -3996,8 +4069,19 @@ Profiles With No Neighbors: {stats.get('profiles_with_no_neighbors', 0)}
                 key="download_raw"
             )
         
+        with col4:
+            st.download_button(
+                label="📥 crawl_log.json",
+                data=crawl_log,
+                file_name="crawl_log.json",
+                mime="application/json",
+                use_container_width=True,
+                key="download_crawl_log",
+                help="API statistics, error breakdown, and crawl configuration"
+            )
+        
         # Intelligence Engine Downloads - Insights Report
-        if advanced_mode and insights_report:
+        if was_advanced_mode and insights_report:
             st.markdown("### 📊 Download Insights Report")
             st.caption("Comprehensive analysis in Markdown format")
             
