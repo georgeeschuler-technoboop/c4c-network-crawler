@@ -324,7 +324,7 @@ class RateLimiter:
     def get_status(self) -> str:
         """Get current rate limiter status for display."""
         return f"{self.calls_in_window}/{self.allowed_per_min} calls this minute"
-DEFAULT_MOCK_MODE = os.getenv("C4C_MOCK_MODE", "false").lower() == "true"
+DEFAULT_MOCK_MODE = True  # Default to mock mode for safe testing
 
 # ============================================================================
 # UTILITY FUNCTIONS
@@ -1479,7 +1479,7 @@ def main():
     with col2:
         st.markdown("**Crawl Limits:**")
         st.metric("Max Edges", 10000)
-        st.metric("Max Nodes", 2500)
+        st.metric("Max Nodes", 5000)
     
     # Rate Limit Information (cleaner version per team feedback)
     st.caption(f"""
@@ -1525,7 +1525,7 @@ def main():
             api_token=api_token,
             max_degree=max_degree,
             max_edges=10000,
-            max_nodes=2500,
+            max_nodes=5000,
             status_container=status_container,
             mock_mode=mock_mode,
             advanced_mode=advanced_mode,
@@ -1676,7 +1676,7 @@ Error Breakdown:
 Crawl Configuration:
 - Max Degree: {max_degree}
 - Max Edges Limit: 10000
-- Max Nodes Limit: 2500
+- Max Nodes Limit: 5000
 - API Delay: {API_DELAY} seconds between calls
 - Stopped Reason: {stats.get('stopped_reason', 'unknown')}
                 """, language="text")
@@ -1998,8 +1998,8 @@ Profiles With No Neighbors: {stats.get('profiles_with_no_neighbors', 0)}
         st.header("💾 Download Results")
         
         # Generate files
-        nodes_csv = generate_nodes_csv(seen_profiles, max_degree=max_degree, max_edges=10000, max_nodes=2500, network_metrics=network_metrics)
-        edges_csv = generate_edges_csv(edges, max_degree=max_degree, max_edges=10000, max_nodes=2500)
+        nodes_csv = generate_nodes_csv(seen_profiles, max_degree=max_degree, max_edges=10000, max_nodes=5000, network_metrics=network_metrics)
+        edges_csv = generate_edges_csv(edges, max_degree=max_degree, max_edges=10000, max_nodes=5000)
         raw_json = generate_raw_json(raw_profiles)
         
         # Generate network analysis JSON if metrics available
