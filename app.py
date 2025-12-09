@@ -720,7 +720,7 @@ def _bucket_from_percentile(p: float) -> str:
     return "low"
 
 
-def describe_node_narrative(
+def describe_node_with_recommendation(
     name: str,
     organization: Optional[str],
     role: Optional[str],
@@ -729,12 +729,16 @@ def describe_node_narrative(
     eigenvector_pct: Optional[float] = None,
     closeness_pct: Optional[float] = None,
     sector: Optional[str] = None,
-) -> str:
+    is_dominant_sector: bool = False,
+    is_underrepresented_sector: bool = False,
+    include_recommendation: bool = True,
+) -> Tuple[str, Optional[str]]:
     """
-    Return a short, C4C-style narrative paragraph about a node.
+    Returns (blurb, recommendation) for a single node.
     
     All *_pct arguments are percentiles in [0, 1] for that metric
     (e.g., 0.90 = top 10% of the network).
+    is_dominant_sector / is_underrepresented_sector derived from SectorAnalysis.
     """
     org_str = f" at {organization}" if organization else ""
     sector_str = f" in the {sector} space" if sector else ""
@@ -744,78 +748,37 @@ def describe_node_narrative(
     eig_bucket = _bucket_from_percentile(eigenvector_pct)
     clo_bucket = _bucket_from_percentile(closeness_pct)
 
-    # --- Base phrases for centralities ---
-    connection_phrase = ""
-    if deg_bucket == "very high":
-        connection_phrase = "is connected to many people in the network"
-    elif deg_bucket == "high":
-        connection_phrase = "is connected to a large share of the network"
-    elif deg_bucket == "moderate":
-        connection_phrase = "has a solid set of direct relationships"
-    elif deg_bucket == "low":
-        connection_phrase = "has a focused set of direct relationships"
-
-    broker_phrase = ""
-    if btw_bucket == "very high":
-        broker_phrase = "sits on many of the shortest paths between groups"
-    elif btw_bucket == "high":
-        broker_phrase = "often links people who would not otherwise connect"
-    elif btw_bucket == "moderate":
-        broker_phrase = "sometimes plays a bridging role between groups"
-    elif btw_bucket == "low":
-        broker_phrase = "mainly operates within already well-connected areas"
-
-    influence_phrase = ""
-    if eig_bucket == "very high":
-        influence_phrase = "is closely tied to other highly influential actors"
-    elif eig_bucket == "high":
-        influence_phrase = "is well positioned near other visible actors"
-    elif eig_bucket == "moderate":
-        influence_phrase = "is reasonably well embedded in the core network"
-    elif eig_bucket == "low":
-        influence_phrase = "sits more on the edge of the core network"
-
-    accessibility_phrase = ""
-    if clo_bucket == "very high":
-        accessibility_phrase = "can reach most other actors with very few steps"
-    elif clo_bucket == "high":
-        accessibility_phrase = "can reach others relatively quickly"
-    elif clo_bucket == "moderate":
-        accessibility_phrase = "reaches others in an average number of steps"
-    elif clo_bucket == "low":
-        accessibility_phrase = "is further away from much of the network"
-
     # --- Role-specific framing ---
-    role = (role or "").lower()
+    role_key = (role or "").lower()
 
-    if role == "liaison":
+    if role_key == "liaison":
         role_sentence = (
             f"{name}{org_str}{sector_str} acts as a cross-group liaison, "
             f"helping information and relationships move between otherwise "
             f"separate parts of the network."
         )
-    elif role == "gatekeeper":
+    elif role_key == "gatekeeper":
         role_sentence = (
             f"{name}{org_str}{sector_str} functions as a gatekeeper, controlling "
-            f"many of the key entry points into their part of the network."
+            f"key entry points into their part of the network."
         )
-    elif role == "representative":
+    elif role_key == "representative":
         role_sentence = (
             f"{name}{org_str}{sector_str} often represents their group to others, "
             f"serving as a visible point of contact between communities."
         )
-    elif role == "coordinator":
+    elif role_key == "coordinator":
         role_sentence = (
             f"{name}{org_str}{sector_str} primarily coordinates relationships "
             f"within their own group, helping keep that cluster connected."
         )
-    elif role == "consultant":
+    elif role_key == "consultant":
         role_sentence = (
             f"{name}{org_str}{sector_str} spans several groups without belonging "
             f"strongly to any single one, often acting as an informal advisor or "
             f"connector across contexts."
         )
-    elif role == "peripheral":
+    elif role_key == "peripheral":
         role_sentence = (
             f"{name}{org_str}{sector_str} sits closer to the edge of the network, "
             f"connecting in through a smaller number of ties."
@@ -826,20 +789,134 @@ def describe_node_narrative(
             f"network based on their pattern of connections."
         )
 
+    # --- Centrality context phrases ---
+    context_bits = []
+
+    if deg_bucket in ("very high", "high"):
+        context_bits.append("is connected to many people in the network")
+    elif deg_bucket == "moderate":
+        context_bits.append("has a solid set of direct relationships")
+    elif deg_bucket == "low":
+        context_bits.append("has a focused set of direct relationships")
+
+    if btw_bucket in ("very high", "high"):
+        context_bits.append("often links people who would not otherwise connect")
+
+    if eig_bucket in ("very high", "high"):
+        context_bits.append("is closely tied to other visible or influential actors")
+
+    if clo_bucket in ("very high", "high") and btw_bucket not in ("very high", "high"):
+        context_bits.append("can reach much of the network in only a few steps")
+
     # --- Assemble the blurb ---
-    pieces = [role_sentence]
+    blurb = role_sentence
+    if context_bits:
+        blurb += " " + f"{name} " + "; ".join(context_bits) + "."
 
-    # Add 1–2 centrality phrases if they add value
-    if connection_phrase:
-        pieces.append(f"{name} {connection_phrase}.")
-    if broker_phrase and btw_bucket in ("high", "very high"):
-        pieces.append(f"{name} {broker_phrase}, giving them leverage as a broker.")
-    if influence_phrase and eig_bucket in ("high", "very high") and btw_bucket != "very high":
-        pieces.append(f"{name} {influence_phrase}.")
-    if accessibility_phrase and clo_bucket in ("high", "very high") and btw_bucket not in ("high", "very high"):
-        pieces.append(f"{name} {accessibility_phrase}.")
+    # --- Generate recommendation ---
+    if not include_recommendation:
+        return blurb, None
 
-    return " ".join(pieces)
+    rec_bits = []
+
+    # High centrality + liaison → protect and support
+    if role_key == "liaison" and btw_bucket in ("very high", "high"):
+        rec_bits.append(
+            "Protect this person from overload and involve them early when you "
+            "need to connect groups or sectors that rarely work together."
+        )
+
+    # Gatekeeper with high betweenness → backup & transparency
+    if role_key == "gatekeeper" and btw_bucket in ("very high", "high"):
+        rec_bits.append(
+            "Make sure there are backup pathways into their group and that others "
+            "understand how to engage without everything running through one person."
+        )
+
+    # Coordinator with very high degree → internal organizer
+    if role_key == "coordinator" and deg_bucket in ("very high", "high"):
+        rec_bits.append(
+            "Leverage them as an internal organizer for their group and include "
+            "them when you need to align priorities or share updates within that cluster."
+        )
+
+    # Representative → outward voice
+    if role_key == "representative" and btw_bucket in ("very high", "high", "moderate"):
+        rec_bits.append(
+            "Include them when presenting to external stakeholders or forming "
+            "cross-sector partnerships."
+        )
+
+    # Consultant → multi-group advisor
+    if role_key == "consultant" and eig_bucket in ("very high", "high"):
+        rec_bits.append(
+            "Tap them for advice on cross-cutting issues; they see patterns across groups."
+        )
+
+    # Representative or liaison from underrepresented sector
+    if role_key in ("representative", "liaison") and is_underrepresented_sector:
+        rec_bits.append(
+            "Treat them as a key voice for an underrepresented sector and invite "
+            "them into design, strategy, or sensemaking spaces."
+        )
+
+    # Very high degree or betweenness in any role → risk of overload
+    if (deg_bucket == "very high" or btw_bucket == "very high") and role_key not in ("peripheral",):
+        rec_bits.append(
+            "Check in on their workload and relational burden; consider sharing "
+            "responsibilities with 1–2 additional connectors."
+        )
+
+    # Peripheral in dominant sector → quiet entry point
+    if role_key == "peripheral" and is_dominant_sector:
+        rec_bits.append(
+            "If you need fresh perspectives from the dominant sector, this person "
+            "may be a quieter entry point without going through the usual hubs."
+        )
+
+    # Peripheral with moderate/high closeness → emerging connector
+    if role_key == "peripheral" and clo_bucket in ("very high", "high"):
+        rec_bits.append(
+            "Despite being peripheral, they can reach others quickly — consider "
+            "developing them as an emerging connector."
+        )
+
+    # If nothing matched, offer a generic but useful prompt
+    if not rec_bits:
+        rec_bits.append(
+            "Keep them informed and connected to relevant conversations; their "
+            "position may become more important as initiatives evolve."
+        )
+
+    recommendation = " ".join(rec_bits)
+
+    return blurb, recommendation
+
+
+# Backward-compatible wrapper
+def describe_node_narrative(
+    name: str,
+    organization: Optional[str],
+    role: Optional[str],
+    degree_pct: Optional[float] = None,
+    betweenness_pct: Optional[float] = None,
+    eigenvector_pct: Optional[float] = None,
+    closeness_pct: Optional[float] = None,
+    sector: Optional[str] = None,
+) -> str:
+    """Return just the blurb (for backward compatibility)."""
+    blurb, _ = describe_node_with_recommendation(
+        name=name,
+        organization=organization,
+        role=role,
+        degree_pct=degree_pct,
+        betweenness_pct=betweenness_pct,
+        eigenvector_pct=eigenvector_pct,
+        closeness_pct=closeness_pct,
+        sector=sector,
+        include_recommendation=False,
+    )
+    return blurb
 
 
 def compute_percentiles(values: Dict[str, float]) -> Dict[str, float]:
@@ -2729,6 +2806,16 @@ Profiles With No Neighbors: {stats.get('profiles_with_no_neighbors', 0)}
                 
                 st.markdown("---")
                 
+                # Get sector flags for recommendations
+                dominant_sectors = set(sector_analysis.dominant_sectors) if sector_analysis else set()
+                underrep_sectors = set(sector_analysis.underrepresented_sectors) if sector_analysis else set()
+                
+                def get_sector_flags(node_sector):
+                    """Check if a sector is dominant or underrepresented."""
+                    if not node_sector:
+                        return False, False
+                    return (node_sector in dominant_sectors, node_sector in underrep_sectors)
+                
                 # ----- TOP NODES WITH BADGES -----
                 col1, col2 = st.columns(2)
                 
@@ -2749,10 +2836,13 @@ Profiles With No Neighbors: {stats.get('profiles_with_no_neighbors', 0)}
                             # Get brokerage role
                             broker_role = brokerage_roles.get(node_id, 'peripheral')
                             
+                            # Get sector flags
+                            is_dom, is_under = get_sector_flags(sector)
+                            
                             st.markdown(f"{i}. **{name}** ({org}) — {connections} connections {badge}", unsafe_allow_html=True)
                             
-                            # Generate rich narrative
-                            narrative = describe_node_narrative(
+                            # Generate rich narrative with recommendation
+                            blurb, rec = describe_node_with_recommendation(
                                 name=name,
                                 organization=org,
                                 role=broker_role,
@@ -2760,9 +2850,13 @@ Profiles With No Neighbors: {stats.get('profiles_with_no_neighbors', 0)}
                                 betweenness_pct=betweenness_pcts.get(node_id),
                                 eigenvector_pct=eigenvector_pcts.get(node_id),
                                 closeness_pct=closeness_pcts.get(node_id),
-                                sector=sector
+                                sector=sector,
+                                is_dominant_sector=is_dom,
+                                is_underrepresented_sector=is_under,
                             )
-                            st.caption(narrative)
+                            st.caption(blurb)
+                            if rec:
+                                st.markdown(f"**💡 Suggested focus:** {rec}")
                     else:
                         st.info("No degree data available")
                     
@@ -2804,10 +2898,13 @@ Profiles With No Neighbors: {stats.get('profiles_with_no_neighbors', 0)}
                             if level in ('high', 'extreme'):
                                 critical_broker_ids.append(node_id)
                             
+                            # Get sector flags
+                            is_dom, is_under = get_sector_flags(sector)
+                            
                             st.markdown(f"{i}. **{name}** ({org}) — {score:.4f} {badge} {role_badge}", unsafe_allow_html=True)
                             
-                            # Generate rich narrative with all percentiles
-                            narrative = describe_node_narrative(
+                            # Generate rich narrative with recommendation
+                            blurb, rec = describe_node_with_recommendation(
                                 name=name,
                                 organization=org,
                                 role=broker_role,
@@ -2815,9 +2912,13 @@ Profiles With No Neighbors: {stats.get('profiles_with_no_neighbors', 0)}
                                 betweenness_pct=betweenness_pcts.get(node_id),
                                 eigenvector_pct=eigenvector_pcts.get(node_id),
                                 closeness_pct=closeness_pcts.get(node_id),
-                                sector=sector
+                                sector=sector,
+                                is_dominant_sector=is_dom,
+                                is_underrepresented_sector=is_under,
                             )
-                            st.caption(narrative)
+                            st.caption(blurb)
+                            if rec:
+                                st.markdown(f"**💡 Suggested focus:** {rec}")
                     else:
                         st.info("No betweenness data available")
                     
