@@ -2205,7 +2205,301 @@ def generate_raw_json(raw_profiles: List) -> str:
     return json.dumps(raw_profiles, indent=2)
 
 
-def create_download_zip(nodes_csv: str, edges_csv: str, raw_json: str, analysis_json: str = None) -> bytes:
+def generate_insights_report(
+    network_stats: Dict,
+    health_score: int,
+    health_label: str,
+    health_details: List[str],
+    sector_analysis: 'SectorAnalysis',
+    top_connectors: List[Tuple],
+    top_brokers: List[Tuple],
+    brokerage_roles: Dict[str, str],
+    recommendations: str,
+    seen_profiles: Dict,
+    node_metrics: Dict = None,
+    degree_pcts: Dict = None,
+    betweenness_pcts: Dict = None,
+    eigenvector_pcts: Dict = None,
+    closeness_pcts: Dict = None,
+) -> str:
+    """
+    Generate a comprehensive Markdown report of network insights.
+    """
+    from datetime import datetime
+    
+    lines = []
+    
+    # Header
+    lines.append("# Network Analysis Report")
+    lines.append(f"**Generated:** {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+    lines.append(f"**Nodes:** {network_stats.get('nodes', 0)} | **Edges:** {network_stats.get('edges', 0)}")
+    lines.append("")
+    
+    # Network Health
+    lines.append("---")
+    lines.append(f"## 🏥 Network Health: {health_score}/100 ({health_label})")
+    lines.append("")
+    for detail in health_details:
+        lines.append(f"- {detail}")
+    lines.append("")
+    
+    # Key Statistics
+    lines.append("---")
+    lines.append("## 📊 Network Statistics")
+    lines.append("")
+    lines.append(f"| Metric | Value |")
+    lines.append(f"|--------|-------|")
+    lines.append(f"| Nodes | {network_stats.get('nodes', 0)} |")
+    lines.append(f"| Edges | {network_stats.get('edges', 0)} |")
+    lines.append(f"| Density | {network_stats.get('density', 0):.4f} |")
+    lines.append(f"| Avg Degree | {network_stats.get('avg_degree', 0):.1f} |")
+    lines.append(f"| Avg Clustering | {network_stats.get('avg_clustering', 0):.4f} |")
+    lines.append(f"| Components | {network_stats.get('num_components', 1)} |")
+    lines.append(f"| Largest Component | {network_stats.get('largest_component_size', 0)} nodes |")
+    lines.append("")
+    
+    # Sector Distribution
+    if sector_analysis:
+        lines.append("---")
+        lines.append("## 🏢 Sector Distribution")
+        lines.append("")
+        lines.append(f"**Diversity Score:** {sector_analysis.diversity_score:.2f} ({sector_analysis.diversity_label})")
+        lines.append("")
+        
+        if sector_analysis.dominant_sectors:
+            lines.append(f"**⚠️ Dominant Sectors:** {', '.join(sector_analysis.dominant_sectors)}")
+        if sector_analysis.underrepresented_sectors:
+            lines.append(f"**💡 Underrepresented:** {', '.join(sector_analysis.underrepresented_sectors)}")
+        lines.append("")
+        
+        lines.append("| Sector | Count | % of Classified |")
+        lines.append("|--------|-------|-----------------|")
+        for _, row in sector_analysis.df.iterrows():
+            lines.append(f"| {row['sector']} | {row['count']} | {row['pct_classified']:.1f}% |")
+        lines.append("")
+    
+    # Brokerage Roles
+    if brokerage_roles:
+        lines.append("---")
+        lines.append("## 🎭 Brokerage Roles")
+        lines.append("")
+        lines.append("*How people connect groups in the network*")
+        lines.append("")
+        
+        role_counts = {}
+        for role in brokerage_roles.values():
+            role_counts[role] = role_counts.get(role, 0) + 1
+        
+        role_labels = {
+            "liaison": "🌉 Liaison (cross-group bridge)",
+            "gatekeeper": "🚪 Gatekeeper (controls access)",
+            "representative": "🔗 Representative (outbound voice)",
+            "coordinator": "🧩 Coordinator (internal organizer)",
+            "consultant": "🧠 Consultant (multi-group advisor)",
+            "peripheral": "⚪ Peripheral (edge of network)",
+        }
+        
+        lines.append("| Role | Count | Description |")
+        lines.append("|------|-------|-------------|")
+        for role_key in ["liaison", "gatekeeper", "representative", "coordinator", "consultant", "peripheral"]:
+            count = role_counts.get(role_key, 0)
+            label = role_labels.get(role_key, role_key)
+            lines.append(f"| {label} | {count} | |")
+        lines.append("")
+    
+    # Top Connectors
+    if top_connectors:
+        lines.append("---")
+        lines.append("## 🔗 Top Connectors (by Degree)")
+        lines.append("")
+        lines.append("*People with the most direct connections*")
+        lines.append("")
+        
+        for i, (node_id, score) in enumerate(top_connectors[:10], 1):
+            profile = seen_profiles.get(node_id, {})
+            name = profile.get('name', node_id)
+            org = profile.get('organization', 'Unknown')
+            sector = profile.get('sector', '')
+            connections = node_metrics.get(node_id, {}).get('degree', 0) if node_metrics else int(score * 100)
+            role = brokerage_roles.get(node_id, 'unknown') if brokerage_roles else 'unknown'
+            
+            lines.append(f"### {i}. {name} ({org})")
+            lines.append(f"- **Connections:** {connections}")
+            lines.append(f"- **Sector:** {sector or 'Unknown'}")
+            lines.append(f"- **Role:** {role.title()}")
+            
+            # Generate recommendation if we have percentiles
+            if degree_pcts and betweenness_pcts:
+                dominant = set(sector_analysis.dominant_sectors) if sector_analysis else set()
+                underrep = set(sector_analysis.underrepresented_sectors) if sector_analysis else set()
+                is_dom = sector in dominant if sector else False
+                is_under = sector in underrep if sector else False
+                
+                blurb, rec = describe_node_with_recommendation(
+                    name=name,
+                    organization=org,
+                    role=role,
+                    degree_pct=degree_pcts.get(node_id),
+                    betweenness_pct=betweenness_pcts.get(node_id),
+                    eigenvector_pct=eigenvector_pcts.get(node_id) if eigenvector_pcts else None,
+                    closeness_pct=closeness_pcts.get(node_id) if closeness_pcts else None,
+                    sector=sector,
+                    is_dominant_sector=is_dom,
+                    is_underrepresented_sector=is_under,
+                )
+                lines.append(f"- **Analysis:** {blurb}")
+                if rec:
+                    lines.append(f"- **💡 Suggested Focus:** {rec}")
+            lines.append("")
+    
+    # Top Brokers
+    if top_brokers:
+        lines.append("---")
+        lines.append("## 🌉 Top Brokers (by Betweenness)")
+        lines.append("")
+        lines.append("*People who bridge different parts of the network*")
+        lines.append("")
+        
+        for i, (node_id, score) in enumerate(top_brokers[:10], 1):
+            profile = seen_profiles.get(node_id, {})
+            name = profile.get('name', node_id)
+            org = profile.get('organization', 'Unknown')
+            sector = profile.get('sector', '')
+            role = brokerage_roles.get(node_id, 'unknown') if brokerage_roles else 'unknown'
+            
+            lines.append(f"### {i}. {name} ({org})")
+            lines.append(f"- **Betweenness:** {score:.4f}")
+            lines.append(f"- **Sector:** {sector or 'Unknown'}")
+            lines.append(f"- **Role:** {role.title()}")
+            
+            # Generate recommendation if we have percentiles
+            if degree_pcts and betweenness_pcts:
+                dominant = set(sector_analysis.dominant_sectors) if sector_analysis else set()
+                underrep = set(sector_analysis.underrepresented_sectors) if sector_analysis else set()
+                is_dom = sector in dominant if sector else False
+                is_under = sector in underrep if sector else False
+                
+                blurb, rec = describe_node_with_recommendation(
+                    name=name,
+                    organization=org,
+                    role=role,
+                    degree_pct=degree_pcts.get(node_id),
+                    betweenness_pct=betweenness_pcts.get(node_id),
+                    eigenvector_pct=eigenvector_pcts.get(node_id) if eigenvector_pcts else None,
+                    closeness_pct=closeness_pcts.get(node_id) if closeness_pcts else None,
+                    sector=sector,
+                    is_dominant_sector=is_dom,
+                    is_underrepresented_sector=is_under,
+                )
+                lines.append(f"- **Analysis:** {blurb}")
+                if rec:
+                    lines.append(f"- **💡 Suggested Focus:** {rec}")
+            lines.append("")
+    
+    # Recommendations
+    if recommendations:
+        lines.append("---")
+        lines.append("## 🚀 Strategic Recommendations")
+        lines.append("")
+        lines.append(recommendations)
+        lines.append("")
+    
+    # Footer
+    lines.append("---")
+    lines.append("*Report generated by C4C Network Seed Crawler*")
+    lines.append("")
+    
+    return "\n".join(lines)
+
+
+def create_brokerage_role_chart(brokerage_roles: Dict[str, str]) -> 'go.Figure':
+    """
+    Create a horizontal bar chart showing brokerage role distribution.
+    Returns a Plotly Figure.
+    """
+    if not brokerage_roles:
+        return None
+    
+    # Count roles
+    role_counts = {}
+    for role in brokerage_roles.values():
+        role_counts[role] = role_counts.get(role, 0) + 1
+    
+    # Define order and colors
+    role_order = ["liaison", "gatekeeper", "representative", "coordinator", "consultant", "peripheral"]
+    role_labels = {
+        "liaison": "🌉 Liaison",
+        "gatekeeper": "🚪 Gatekeeper", 
+        "representative": "🔗 Representative",
+        "coordinator": "🧩 Coordinator",
+        "consultant": "🧠 Consultant",
+        "peripheral": "⚪ Peripheral",
+    }
+    role_colors = {
+        "liaison": "#D97706",      # Amber
+        "gatekeeper": "#F97316",   # Orange
+        "representative": "#10B981", # Green
+        "coordinator": "#3B82F6",  # Blue
+        "consultant": "#6366F1",   # Indigo
+        "peripheral": "#9CA3AF",   # Gray
+    }
+    
+    # Build data in order
+    roles = []
+    counts = []
+    colors = []
+    for role in role_order:
+        if role in role_counts:
+            roles.append(role_labels.get(role, role))
+            counts.append(role_counts[role])
+            colors.append(role_colors.get(role, "#9CA3AF"))
+    
+    # Create chart
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        y=roles,
+        x=counts,
+        orientation='h',
+        marker_color=colors,
+        text=counts,
+        textposition='auto',
+        hovertemplate="<b>%{y}</b><br>%{x} people<extra></extra>"
+    ))
+    
+    fig.update_layout(
+        title="Brokerage Role Distribution",
+        xaxis_title="Number of People",
+        yaxis_title="",
+        height=300,
+        margin=dict(l=20, r=20, t=40, b=20),
+        yaxis=dict(autorange="reversed"),
+        showlegend=False,
+    )
+    
+    return fig
+
+
+def fig_to_png_bytes(fig: 'go.Figure') -> bytes:
+    """
+    Convert a Plotly figure to PNG bytes.
+    Requires kaleido package.
+    """
+    try:
+        return fig.to_image(format="png", width=800, height=400, scale=2)
+    except Exception as e:
+        # Fallback if kaleido not available
+        return None
+
+
+def create_download_zip(
+    nodes_csv: str, 
+    edges_csv: str, 
+    raw_json: str, 
+    analysis_json: str = None,
+    insights_report: str = None,
+    sector_chart_png: bytes = None,
+    brokerage_chart_png: bytes = None,
+) -> bytes:
     """
     Create a ZIP file containing all output files.
     Returns ZIP file as bytes.
@@ -2222,6 +2516,14 @@ def create_download_zip(nodes_csv: str, edges_csv: str, raw_json: str, analysis_
         # Add network_analysis.json if available
         if analysis_json:
             zip_file.writestr('network_analysis.json', analysis_json)
+        # Add insights report if available
+        if insights_report:
+            zip_file.writestr('network_insights_report.md', insights_report)
+        # Add charts if available
+        if sector_chart_png:
+            zip_file.writestr('charts/sector_distribution.png', sector_chart_png)
+        if brokerage_chart_png:
+            zip_file.writestr('charts/brokerage_roles.png', brokerage_chart_png)
     
     zip_buffer.seek(0)
     return zip_buffer.getvalue()
@@ -2975,7 +3277,7 @@ Profiles With No Neighbors: {stats.get('profiles_with_no_neighbors', 0)}
                 for role in brokerage_roles.values():
                     role_counts[role] = role_counts.get(role, 0) + 1
                 
-                # Display role counts
+                # Display role counts as metrics
                 role_cols = st.columns(6)
                 role_order = ["liaison", "gatekeeper", "representative", "coordinator", "consultant", "peripheral"]
                 
@@ -2985,6 +3287,11 @@ Profiles With No Neighbors: {stats.get('profiles_with_no_neighbors', 0)}
                     emoji = cfg.get('emoji', '⚪')
                     label = cfg.get('label', role.title())
                     role_cols[i].metric(f"{emoji} {label}", count)
+                
+                # Display brokerage chart
+                brokerage_chart = create_brokerage_role_chart(brokerage_roles)
+                if brokerage_chart:
+                    st.plotly_chart(brokerage_chart, use_container_width=True, key="brokerage_chart_display")
                 
                 # Role definitions
                 with st.expander("📖 What do these roles mean?"):
@@ -3047,15 +3354,148 @@ Profiles With No Neighbors: {stats.get('profiles_with_no_neighbors', 0)}
         
         # Generate network analysis JSON if metrics available
         analysis_json = None
-        if network_metrics:
+        insights_report = None
+        sector_chart_png = None
+        brokerage_chart_png = None
+        brokerage_chart_fig = None
+        
+        if network_metrics and advanced_mode:
             analysis_json = generate_network_analysis_json(network_metrics, seen_profiles)
+            
+            # Generate insights report
+            try:
+                # Collect health details for report
+                health_details = []
+                cohesion = health_stats.largest_component_size / max(health_stats.n_nodes, 1)
+                if cohesion >= 0.9:
+                    health_details.append(f"✅ Highly unified — {cohesion*100:.0f}% of people can reach each other")
+                elif cohesion >= 0.7:
+                    health_details.append(f"🟡 Moderately unified — {cohesion*100:.0f}% in main component")
+                else:
+                    health_details.append(f"🔴 Fragmented — only {cohesion*100:.0f}% in main component")
+                
+                if health_stats.n_components == 1:
+                    health_details.append("✅ Fully connected — everyone can reach everyone")
+                elif health_stats.n_components <= 3:
+                    health_details.append(f"🟡 {health_stats.n_components} separate clusters exist")
+                else:
+                    health_details.append(f"🔴 {health_stats.n_components} disconnected groups")
+                
+                if health_stats.avg_degree >= 4:
+                    health_details.append(f"✅ Strong connectivity — avg {health_stats.avg_degree:.1f} connections per person")
+                elif health_stats.avg_degree >= 2:
+                    health_details.append(f"🟡 Moderate connectivity — avg {health_stats.avg_degree:.1f} connections")
+                else:
+                    health_details.append(f"🔴 Low connectivity — avg {health_stats.avg_degree:.1f} connections")
+                
+                # Generate recommendations text
+                recommendations_text = generate_recommendations(
+                    stats=health_stats,
+                    sector_analysis=sector_analysis,
+                    degree_values=degree_values,
+                    betweenness_values=betweenness_values,
+                    health_score=health_score,
+                    health_label=health_label,
+                    brokerage_roles=brokerage_roles,
+                    critical_brokers=critical_broker_ids if 'critical_broker_ids' in dir() else [],
+                )
+                
+                # Get top nodes
+                top_connectors = top_nodes.get('degree', [])[:10] if top_nodes else []
+                top_brokers_list = top_nodes.get('betweenness', [])[:10] if top_nodes else []
+                
+                insights_report = generate_insights_report(
+                    network_stats=network_stats,
+                    health_score=health_score,
+                    health_label=health_label,
+                    health_details=health_details,
+                    sector_analysis=sector_analysis,
+                    top_connectors=top_connectors,
+                    top_brokers=top_brokers_list,
+                    brokerage_roles=brokerage_roles,
+                    recommendations=recommendations_text,
+                    seen_profiles=seen_profiles,
+                    node_metrics=node_metrics,
+                    degree_pcts=degree_pcts,
+                    betweenness_pcts=betweenness_pcts,
+                    eigenvector_pcts=eigenvector_pcts,
+                    closeness_pcts=closeness_pcts,
+                )
+            except Exception as e:
+                st.warning(f"Could not generate insights report: {e}")
+            
+            # Create brokerage chart
+            if brokerage_roles:
+                try:
+                    brokerage_chart_fig = create_brokerage_role_chart(brokerage_roles)
+                except Exception as e:
+                    st.warning(f"Could not create brokerage chart: {e}")
+            
+            # Try to generate PNG exports (requires kaleido)
+            try:
+                # For sector chart, we need to recreate it
+                if sector_analysis and len(sector_analysis.df) > 0:
+                    df_sorted = sector_analysis.df.sort_values("pct_classified", ascending=True)
+                    
+                    # Assign colors
+                    colors = []
+                    for _, row in df_sorted.iterrows():
+                        pct = row["pct_classified"]
+                        if pct >= 40:
+                            colors.append("#F97316")  # Orange - dominant
+                        elif pct >= 10:
+                            colors.append("#10B981")  # Green - healthy
+                        else:
+                            colors.append("#D1D5DB")  # Gray - underrepresented
+                    
+                    sector_fig = go.Figure()
+                    sector_fig.add_trace(go.Bar(
+                        y=df_sorted["sector"],
+                        x=df_sorted["pct_classified"],
+                        orientation='h',
+                        marker_color=colors,
+                        text=[f"{p:.1f}%" for p in df_sorted["pct_classified"]],
+                        textposition='auto',
+                    ))
+                    sector_fig.update_layout(
+                        title="Sector Distribution",
+                        xaxis_title="% of Classified Actors",
+                        yaxis_title="",
+                        height=max(300, len(df_sorted) * 35),
+                        margin=dict(l=20, r=20, t=40, b=20),
+                    )
+                    
+                    sector_chart_png = fig_to_png_bytes(sector_fig)
+                
+                if brokerage_chart_fig:
+                    brokerage_chart_png = fig_to_png_bytes(brokerage_chart_fig)
+                    
+            except Exception as e:
+                # Kaleido not available or other error - PNGs won't be included
+                pass
         
         # Primary action: Download all as ZIP
         st.markdown("### 📦 Download All Files")
-        zip_data = create_download_zip(nodes_csv, edges_csv, raw_json, analysis_json)
+        zip_data = create_download_zip(
+            nodes_csv, 
+            edges_csv, 
+            raw_json, 
+            analysis_json,
+            insights_report,
+            sector_chart_png,
+            brokerage_chart_png,
+        )
         
         col1, col2 = st.columns([3, 1])
         with col1:
+            zip_contents = "nodes.csv, edges.csv, raw_profiles.json"
+            if analysis_json:
+                zip_contents += ", network_analysis.json"
+            if insights_report:
+                zip_contents += ", network_insights_report.md"
+            if sector_chart_png or brokerage_chart_png:
+                zip_contents += ", charts/"
+            
             st.download_button(
                 label="⬇️ Download All as ZIP (Recommended)",
                 data=zip_data,
@@ -3063,22 +3503,22 @@ Profiles With No Neighbors: {stats.get('profiles_with_no_neighbors', 0)}
                 mime="application/zip",
                 type="primary",
                 use_container_width=True,
-                help="Download all files (nodes.csv, edges.csv, raw_profiles.json, network_analysis.json) in one ZIP file"
+                help=f"Download all files ({zip_contents}) in one ZIP file"
             )
         with col2:
             if st.button("🗑️ Clear Results", use_container_width=True, help="Clear results to start a new crawl"):
                 st.session_state.crawl_results = None
                 st.rerun()
         
-        # Individual downloads
-        st.markdown("### 📄 Download Individual Files")
-        st.caption("Or download files individually (results will stay available)")
+        # Individual downloads - Data Files
+        st.markdown("### 📄 Download Data Files")
+        st.caption("Download data files individually")
         
         col1, col2, col3 = st.columns(3)
         
         with col1:
             st.download_button(
-                label="📥 Download nodes.csv",
+                label="📥 nodes.csv",
                 data=nodes_csv,
                 file_name="nodes.csv",
                 mime="text/csv",
@@ -3088,7 +3528,7 @@ Profiles With No Neighbors: {stats.get('profiles_with_no_neighbors', 0)}
         
         with col2:
             st.download_button(
-                label="📥 Download edges.csv",
+                label="📥 edges.csv",
                 data=edges_csv,
                 file_name="edges.csv",
                 mime="text/csv",
@@ -3098,13 +3538,59 @@ Profiles With No Neighbors: {stats.get('profiles_with_no_neighbors', 0)}
         
         with col3:
             st.download_button(
-                label="📥 Download raw_profiles.json",
+                label="📥 raw_profiles.json",
                 data=raw_json,
                 file_name="raw_profiles.json",
                 mime="application/json",
                 use_container_width=True,
                 key="download_raw"
             )
+        
+        # Advanced Mode Downloads - Insights Report & Charts
+        if advanced_mode and (insights_report or sector_chart_png or brokerage_chart_png):
+            st.markdown("### 📊 Download Insights & Charts")
+            st.caption("Advanced mode analysis exports")
+            
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                if insights_report:
+                    st.download_button(
+                        label="📝 Insights Report (.md)",
+                        data=insights_report,
+                        file_name="network_insights_report.md",
+                        mime="text/markdown",
+                        use_container_width=True,
+                        key="download_report"
+                    )
+                else:
+                    st.info("Report not available")
+            
+            with col2:
+                if sector_chart_png:
+                    st.download_button(
+                        label="📊 Sector Chart (.png)",
+                        data=sector_chart_png,
+                        file_name="sector_distribution.png",
+                        mime="image/png",
+                        use_container_width=True,
+                        key="download_sector_png"
+                    )
+                else:
+                    st.info("PNG export requires kaleido")
+            
+            with col3:
+                if brokerage_chart_png:
+                    st.download_button(
+                        label="🎭 Brokerage Chart (.png)",
+                        data=brokerage_chart_png,
+                        file_name="brokerage_roles.png",
+                        mime="image/png",
+                        use_container_width=True,
+                        key="download_brokerage_png"
+                    )
+                else:
+                    st.info("PNG export requires kaleido")
         
         # ====================================================================
         # DATA PREVIEW
@@ -3118,6 +3604,11 @@ Profiles With No Neighbors: {stats.get('profiles_with_no_neighbors', 0)}
                 st.dataframe(pd.DataFrame(edges))
             else:
                 st.info("No edges to display")
+        
+        # Preview insights report
+        if insights_report:
+            with st.expander("📝 Preview Insights Report"):
+                st.markdown(insights_report)
 
 
 if __name__ == "__main__":
