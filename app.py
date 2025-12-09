@@ -2886,16 +2886,16 @@ def main():
     
     with col1:
         advanced_mode = st.toggle(
-            "Advanced Mode",
+            "Intelligence Engine",
             value=False,
-            help="Enable network analysis and insights"
+            help="Enable Network Intelligence Engine for deeper analysis"
         )
     
     with col2:
         if advanced_mode:
             st.info("""
-            **🔬 Advanced Mode** - Network Intelligence  
-            Includes everything in Basic Mode plus:
+            **🔬 Network Intelligence Engine**  
+            Full strategic analysis:
             - Centrality metrics (degree, betweenness, eigenvector, closeness)
             - Community detection and clustering
             - Brokerage analysis (coordinators, gatekeepers, liaisons)
@@ -2906,8 +2906,8 @@ def main():
             """)
         else:
             st.success("""
-            **📊 Basic Mode** - Quick Network Crawl  
-            Perfect for rapid exploration:
+            **📊 Network Seed Crawler**  
+            Quick network mapping:
             - Crawl LinkedIn networks (1 or 2 degrees)
             - Export nodes, edges, and raw profiles
             - Import directly to Polinode or other tools
@@ -2916,7 +2916,7 @@ def main():
             *⚡ Quick results, simple outputs*
             """)
     
-    # AI-Enhanced Insights (only show in Advanced Mode)
+    # AI-Enhanced Insights (only show in Intelligence Engine mode)
     ai_enabled = False
     anthropic_api_key = None
     project_context = ""
@@ -3330,7 +3330,7 @@ Profiles With No Neighbors: {stats.get('profiles_with_no_neighbors', 0)}
         
         if was_advanced_mode:
             st.markdown("---")
-            st.header("🔬 Advanced Network Analytics")
+            st.header("🔬 Network Intelligence")
             
             # Check if organization data is available
             has_org_data = any('organization' in node for node in seen_profiles.values())
@@ -3407,7 +3407,7 @@ Profiles With No Neighbors: {stats.get('profiles_with_no_neighbors', 0)}
                 """)
             
             # ================================================================
-            # NETWORK CENTRALITY METRICS (Advanced Mode)
+            # NETWORK CENTRALITY METRICS (Intelligence Engine)
             # ================================================================
             st.markdown("---")
             st.subheader("📊 Network Centrality Metrics")
@@ -3901,7 +3901,7 @@ Profiles With No Neighbors: {stats.get('profiles_with_no_neighbors', 0)}
                 key="download_raw"
             )
         
-        # Advanced Mode Downloads - Insights Report
+        # Intelligence Engine Downloads - Insights Report
         if advanced_mode and insights_report:
             st.markdown("### 📊 Download Insights Report")
             st.caption("Comprehensive analysis in Markdown format")
