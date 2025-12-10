@@ -438,8 +438,8 @@ if parse_button and uploaded_files:
         ]
         
         # Add board member count
-        if not people_df.empty:
-            board_counts = people_df.groupby('foundation_name').size().reset_index()
+        if not people_df.empty and 'org_name' in people_df.columns:
+            board_counts = people_df.groupby('org_name').size().reset_index()
             board_counts.columns = ['Foundation', 'Board Members']
             foundation_stats = foundation_stats.merge(board_counts, on='Foundation', how='left')
             foundation_stats['Board Members'] = foundation_stats['Board Members'].fillna(0).astype(int)
