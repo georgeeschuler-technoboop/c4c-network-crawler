@@ -1,16 +1,13 @@
 """
 C4C 990 Funder Flow Prototype
 
-Upload IRS 990/990-PF filings and generate Polinode-ready network data:
+Upload IRS 990-PF filings and generate Polinode-ready network data:
 - Grants table (funder → grantee)
 - Unified nodes list (foundations, grantees, people)
 - Unified edges list (grant + board membership edges)
 
 Part of the C4C Network Intelligence Engine.
 """
-import sys
-from pathlib import Path
-sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import streamlit as st
 import pandas as pd
@@ -19,10 +16,16 @@ import sys
 import os
 
 # Add the project root to path for imports
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from c4c_utils.irs990_parser import parse_990_pdf
 from c4c_utils.network_export import build_nodes_df, build_edges_df
+
+
+# =============================================================================
+# Constants
+# =============================================================================
+MAX_FILES = 5
 
 
 # =============================================================================
@@ -41,7 +44,7 @@ st.set_page_config(
 st.title("🔍 C4C 990 Funder Flow Prototype")
 
 st.markdown("""
-Upload IRS 990/990-PF filings (e.g., Porter Family Foundation) and generate:
+Upload IRS **990-PF** filings (private foundations) and generate:
 - A **grants table** (funder → grantee)
 - A **unified nodes list** (foundations, grantees, people)
 - A **unified edges list** (grant + board membership edges)
@@ -56,19 +59,28 @@ st.divider()
 # =============================================================================
 # Step 1: File Upload
 # =============================================================================
-st.subheader("Step 1 – Upload 990/990-PF PDFs")
+st.subheader("Step 1 – Upload 990-PF PDFs")
 
-st.markdown("""
-*Start with one filing (like the Porter Family Foundation 990-PF) to validate 
-the parser. You can upload more than one later to see overlap across multiple funders.*
+st.markdown(f"""
+Upload up to **{MAX_FILES} private foundation 990-PF filings** to extract grant data.
+
+*Note: This tool works with **990-PF** (private foundation) filings, which include 
+grants schedules. Standard **990** filings from public charities typically don't 
+include itemized grants.*
 """)
 
 uploaded_files = st.file_uploader(
-    "Upload 990/990-PF PDF(s)",
+    f"Upload 990-PF PDF(s) (max {MAX_FILES})",
     type=["pdf"],
     accept_multiple_files=True,
-    help="Upload one or more IRS 990-PF PDF files"
+    help=f"Upload 1–{MAX_FILES} IRS 990-PF PDF files from private foundations"
 )
+
+# Enforce file limit
+if uploaded_files and len(uploaded_files) > MAX_FILES:
+    st.warning(f"⚠️ Please upload at most {MAX_FILES} files. You uploaded {len(uploaded_files)}.")
+    uploaded_files = uploaded_files[:MAX_FILES]
+    st.info(f"Processing first {MAX_FILES} files only.")
 
 tax_year_override = st.text_input(
     "Tax Year (optional)",
@@ -85,8 +97,8 @@ st.divider()
 st.subheader("Step 2 – Parse Filings")
 
 st.markdown("""
-*The app will extract grant schedules and board/officer tables from each filing 
-and build three CSVs: `grants.csv`, `nodes.csv`, `edges.csv`*
+The app will extract grant schedules and board/officer tables from each filing 
+and build three CSVs: `grants.csv`, `nodes.csv`, `edges.csv`
 """)
 
 parse_button = st.button("🔍 Parse 990 Filings", type="primary", disabled=not uploaded_files)
@@ -121,6 +133,13 @@ if parse_button and uploaded_files:
                         tax_year_override
                     )
                     
+                    # Get diagnostics if available
+                    diagnostics = result.get('diagnostics', {})
+                    form_type = diagnostics.get('form_type', 'unknown')
+                    is_990pf = diagnostics.get('is_990pf', False)
+                    grants_reported = diagnostics.get('grants_reported_amount')
+                    org_name = diagnostics.get('org_name', '') or result['foundation_meta'].get('foundation_name', 'Unknown')
+                    
                     # Collect results
                     foundations_meta.append(result['foundation_meta'])
                     
@@ -130,21 +149,56 @@ if parse_button and uploaded_files:
                     if not result['people_df'].empty:
                         all_people.append(result['people_df'])
                     
-                    # Report success
+                    # Report results with appropriate messaging
                     grants_count = len(result['grants_df'])
                     people_count = len(result['people_df'])
-                    foundation_name = result['foundation_meta'].get('foundation_name', 'Unknown')
                     
                     if grants_count > 0:
+                        # Success - found grants
+                        total_amount = result['grants_df']['grant_amount'].sum()
                         st.success(
-                            f"✅ Parsed **{uploaded_file.name}** – "
-                            f"{grants_count} grants, {people_count} board members "
-                            f"({foundation_name})"
+                            f"✅ **{uploaded_file.name}** – "
+                            f"{grants_count} grants (${total_amount:,.0f}), {people_count} board members "
+                            f"({org_name})"
                         )
+                    
+                    elif not is_990pf and form_type != 'unknown':
+                        # Wrong form type - this is a 990, not 990-PF
+                        msg = f"📋 **{uploaded_file.name}** is a **Form {form_type}** (not a 990-PF)"
+                        
+                        if grants_reported is not None:
+                            if grants_reported == 0:
+                                msg += f"\n\n• Organization: **{org_name}**\n• This organization reported **$0 in grants** paid during the year."
+                            else:
+                                msg += f"\n\n• Organization: **{org_name}**\n• Grants reported: ${grants_reported:,}"
+                        else:
+                            msg += f"\n\n• Organization: **{org_name}**"
+                        
+                        msg += "\n\n*Form 990 is for public charities. This tool extracts grants from **990-PF** (private foundation) filings.*"
+                        
+                        st.info(msg)
+                        
+                        # Still report board members if found
+                        if people_count > 0:
+                            st.caption(f"   ↳ Found {people_count} board members (added to network)")
+                    
+                    elif is_990pf and grants_count == 0:
+                        # Is a 990-PF but no grants found
+                        msg = f"⚠️ **{uploaded_file.name}** – No grants extracted"
+                        msg += f"\n\n• Organization: **{org_name}**"
+                        msg += "\n• This appears to be a 990-PF, but no grants were found in the expected location (Part XV)."
+                        msg += "\n\n*The foundation may not have made any grants this year, or the PDF format may be different than expected.*"
+                        
+                        st.warning(msg)
+                        
+                        if people_count > 0:
+                            st.caption(f"   ↳ Found {people_count} board members (added to network)")
+                    
                     else:
+                        # Unknown form type, no grants
                         st.warning(
-                            f"⚠️ Could not find a grants schedule in **{uploaded_file.name}**. "
-                            f"Check that this is a 990-PF with a grants schedule."
+                            f"⚠️ **{uploaded_file.name}** – Could not identify form type or extract grants.\n\n"
+                            f"Please ensure this is a 990-PF filing from a private foundation."
                         )
                 
                 except Exception as e:
@@ -230,6 +284,12 @@ if parse_button and uploaded_files:
     """)
     
     if not nodes_df.empty:
+        # Show type breakdown
+        type_counts = nodes_df['type'].value_counts()
+        cols = st.columns(len(type_counts))
+        for i, (node_type, count) in enumerate(type_counts.items()):
+            cols[i].metric(f"{node_type.title()}s", count)
+        
         st.dataframe(nodes_df.head(50), use_container_width=True)
         if len(nodes_df) > 50:
             st.caption(f"Showing 50 of {len(nodes_df)} nodes")
@@ -249,6 +309,13 @@ if parse_button and uploaded_files:
     """)
     
     if not edges_df.empty:
+        # Show edge type breakdown
+        edge_type_counts = edges_df['edge_type'].value_counts()
+        cols = st.columns(len(edge_type_counts))
+        for i, (edge_type, count) in enumerate(edge_type_counts.items()):
+            label = edge_type.replace('_', ' ').title()
+            cols[i].metric(f"{label} Edges", count)
+        
         st.dataframe(edges_df.head(50), use_container_width=True)
         if len(edges_df) > 50:
             st.caption(f"Showing 50 of {len(edges_df)} edges")
@@ -271,7 +338,8 @@ if parse_button and uploaded_files:
             data=grants_csv,
             file_name="grants.csv",
             mime="text/csv",
-            help="Raw grant table (one row per grant line item)"
+            help="Raw grant table (one row per grant line item)",
+            disabled=grants_df.empty
         )
     
     with col2:
@@ -281,7 +349,8 @@ if parse_button and uploaded_files:
             data=nodes_csv,
             file_name="nodes.csv",
             mime="text/csv",
-            help="Unified list of foundations, grantees, and people (Polinode-ready)"
+            help="Unified list of foundations, grantees, and people (Polinode-ready)",
+            disabled=nodes_df.empty
         )
     
     with col3:
@@ -291,7 +360,8 @@ if parse_button and uploaded_files:
             data=edges_csv,
             file_name="edges.csv",
             mime="text/csv",
-            help="Unified list of grant and board membership edges (Polinode-ready)"
+            help="Unified list of grant and board membership edges (Polinode-ready)",
+            disabled=edges_df.empty
         )
 
 
@@ -300,6 +370,6 @@ if parse_button and uploaded_files:
 # =============================================================================
 st.divider()
 st.caption(
-    "C4C 990 Funder Flow Prototype v0.1 | "
+    "C4C 990 Funder Flow Prototype v0.2 | "
     "Part of the [Connecting for Change](https://connectingforchange.io) Network Intelligence Engine"
 )
