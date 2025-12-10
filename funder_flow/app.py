@@ -12,6 +12,7 @@ Part of the C4C Network Intelligence Engine.
 import streamlit as st
 import pandas as pd
 from io import BytesIO
+import zipfile
 import sys
 import os
 
@@ -164,17 +165,20 @@ if parse_button and uploaded_files:
                     
                     elif not is_990pf and form_type != 'unknown':
                         # Wrong form type - this is a 990, not 990-PF
-                        msg = f"📋 **{uploaded_file.name}** is a **Form {form_type}** (not a 990-PF)"
+                        msg = f"📋 **{uploaded_file.name}** is a **Form {form_type}** (public charity)"
+                        
+                        msg += f"\n\n• Organization: **{org_name}**"
                         
                         if grants_reported is not None:
                             if grants_reported == 0:
-                                msg += f"\n\n• Organization: **{org_name}**\n• This organization reported **$0 in grants** paid during the year."
+                                msg += "\n• This organization reported **$0 in grants** paid during the year."
                             else:
-                                msg += f"\n\n• Organization: **{org_name}**\n• Grants reported: ${grants_reported:,}"
-                        else:
-                            msg += f"\n\n• Organization: **{org_name}**"
+                                msg += f"\n• Grants reported: **${grants_reported:,}**"
+                                if grants_reported < 5000:
+                                    msg += " *(below $5,000 itemization threshold)*"
                         
-                        msg += "\n\n*Form 990 is for public charities. This tool extracts grants from **990-PF** (private foundation) filings.*"
+                        msg += "\n\n*Form 990 is for public charities. Grants are only itemized on Schedule I if over $5,000. "
+                        msg += "This tool is designed for **990-PF** (private foundation) filings, which include detailed grant schedules.*"
                         
                         st.info(msg)
                         
@@ -186,8 +190,12 @@ if parse_button and uploaded_files:
                         # Is a 990-PF but no grants found
                         msg = f"⚠️ **{uploaded_file.name}** – No grants extracted"
                         msg += f"\n\n• Organization: **{org_name}**"
-                        msg += "\n• This appears to be a 990-PF, but no grants were found in the expected location (Part XV)."
-                        msg += "\n\n*The foundation may not have made any grants this year, or the PDF format may be different than expected.*"
+                        msg += "\n• This appears to be a 990-PF filing."
+                        msg += "\n\n**Possible reasons:**"
+                        msg += "\n• The foundation may not have made any grants this year"
+                        msg += "\n• Grants may be listed in a different format than expected"
+                        msg += "\n• The PDF structure may differ from typical ProPublica exports"
+                        msg += "\n\n*Tip: Check Part XV of the original filing to verify grant activity.*"
                         
                         st.warning(msg)
                         
@@ -196,10 +204,21 @@ if parse_button and uploaded_files:
                     
                     else:
                         # Unknown form type, no grants
-                        st.warning(
-                            f"⚠️ **{uploaded_file.name}** – Could not identify form type or extract grants.\n\n"
-                            f"Please ensure this is a 990-PF filing from a private foundation."
-                        )
+                        msg = f"⚠️ **{uploaded_file.name}** – No grants found"
+                        if org_name:
+                            msg += f"\n\n• Organization: **{org_name}**"
+                        
+                        msg += "\n\n**Possible reasons:**"
+                        msg += "\n• This may be a **Form 990** (public charity) rather than a **990-PF** (private foundation)"
+                        msg += "\n• The organization may have reported **less than $5,000** in grants (not itemized on Form 990)"
+                        msg += "\n• The organization may not have made any grants this year"
+                        msg += "\n• The PDF format may differ from expected structure"
+                        msg += "\n\n*Tip: Check the original filing to verify grant activity.*"
+                        
+                        st.warning(msg)
+                        
+                        if people_count > 0:
+                            st.caption(f"   ↳ Found {people_count} board members (added to network)")
                 
                 except Exception as e:
                     st.error(f"❌ Error parsing **{uploaded_file.name}**: {str(e)}")
@@ -329,6 +348,37 @@ if parse_button and uploaded_files:
     # =============================================================================
     st.subheader("📥 Download CSVs")
     
+    # Create zip file with all CSVs
+    def create_zip_download():
+        """Create a zip file containing all CSVs."""
+        zip_buffer = BytesIO()
+        with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
+            if not grants_df.empty:
+                zf.writestr('grants.csv', grants_df.to_csv(index=False))
+            if not nodes_df.empty:
+                zf.writestr('nodes.csv', nodes_df.to_csv(index=False))
+            if not edges_df.empty:
+                zf.writestr('edges.csv', edges_df.to_csv(index=False))
+        zip_buffer.seek(0)
+        return zip_buffer.getvalue()
+    
+    # Download All button (prominent)
+    has_data = not grants_df.empty or not nodes_df.empty or not edges_df.empty
+    
+    if has_data:
+        st.download_button(
+            label="📦 Download All (ZIP)",
+            data=create_zip_download(),
+            file_name="c4c_funder_flow_export.zip",
+            mime="application/zip",
+            help="Download all CSVs in a single ZIP file",
+            type="primary",
+            use_container_width=True
+        )
+        
+        st.caption("Or download individual files:")
+    
+    # Individual file downloads
     col1, col2, col3 = st.columns(3)
     
     with col1:
