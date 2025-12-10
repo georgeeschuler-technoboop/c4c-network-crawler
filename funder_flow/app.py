@@ -60,6 +60,16 @@ These CSVs are **Polinode-ready** and will eventually plug into the broader
 C4C Network Intelligence Engine.
 """)
 
+# Mode toggle
+st.divider()
+mode = st.radio(
+    "Mode",
+    ["📋 Basic (Parse & Export)", "📊 Advanced (Analytics)"],
+    horizontal=True,
+    help="Basic mode: Parse 990-PFs and download CSVs. Advanced mode: Additional network analytics and insights."
+)
+is_analytics_mode = "Advanced" in mode
+
 st.divider()
 
 
@@ -276,6 +286,175 @@ if parse_button and uploaded_files:
         st.metric("Total Grant Amount", f"${total_amount:,.0f}")
     
     st.divider()
+    
+    # =============================================================================
+    # Analytics Mode Section
+    # =============================================================================
+    if is_analytics_mode and not grants_df.empty:
+        st.subheader("📊 Network Analytics")
+        
+        # --- Funder Overlap Analysis ---
+        st.markdown("#### 🔗 Funder Overlap: Grantees Receiving from Multiple Foundations")
+        st.markdown("*Which organizations are funded by multiple foundations in this network?*")
+        
+        # Count how many foundations fund each grantee
+        grantee_funder_counts = grants_df.groupby('grantee_name')['funder_name'].nunique().reset_index()
+        grantee_funder_counts.columns = ['Grantee', 'Number of Funders']
+        
+        # Get total funding per grantee
+        grantee_totals = grants_df.groupby('grantee_name')['grant_amount'].sum().reset_index()
+        grantee_totals.columns = ['Grantee', 'Total Funding']
+        
+        # Merge
+        overlap_df = grantee_funder_counts.merge(grantee_totals, on='Grantee')
+        overlap_df = overlap_df.sort_values('Number of Funders', ascending=False)
+        
+        # Filter to multi-funder grantees
+        multi_funder = overlap_df[overlap_df['Number of Funders'] > 1].copy()
+        
+        if not multi_funder.empty:
+            st.success(f"**{len(multi_funder)}** grantees receive funding from multiple foundations")
+            
+            # Format for display
+            multi_funder['Total Funding'] = multi_funder['Total Funding'].apply(lambda x: f"${x:,.0f}")
+            st.dataframe(multi_funder.head(20), use_container_width=True, hide_index=True)
+            
+            if len(multi_funder) > 20:
+                st.caption(f"Showing top 20 of {len(multi_funder)} multi-funder grantees")
+            
+            # Show which funders for top overlaps
+            st.markdown("**Funding details for top overlapping grantees:**")
+            for _, row in multi_funder.head(5).iterrows():
+                grantee = row['Grantee']
+                funders = grants_df[grants_df['grantee_name'] == grantee].groupby('funder_name')['grant_amount'].sum()
+                funder_list = ", ".join([f"{f} (${amt:,.0f})" for f, amt in funders.items()])
+                st.caption(f"• **{grantee}**: {funder_list}")
+        else:
+            st.info("No grantees receive funding from multiple foundations in this dataset.")
+        
+        st.divider()
+        
+        # --- Top Grantees by Total Funding ---
+        st.markdown("#### 💰 Top Grantees by Total Funding")
+        st.markdown("*Which organizations receive the most funding across all foundations?*")
+        
+        top_grantees = overlap_df.sort_values('Total Funding' if 'Total Funding' in overlap_df.columns else overlap_df.columns[2], ascending=False).head(15).copy()
+        
+        # Re-merge to get numeric values for sorting
+        top_grantees = grants_df.groupby('grantee_name').agg({
+            'grant_amount': 'sum',
+            'funder_name': 'nunique'
+        }).reset_index()
+        top_grantees.columns = ['Grantee', 'Total Funding', 'Number of Funders']
+        top_grantees = top_grantees.sort_values('Total Funding', ascending=False).head(15)
+        
+        # Display as bar chart
+        chart_data = top_grantees.set_index('Grantee')['Total Funding']
+        st.bar_chart(chart_data)
+        
+        # Also show table
+        top_grantees_display = top_grantees.copy()
+        top_grantees_display['Total Funding'] = top_grantees_display['Total Funding'].apply(lambda x: f"${x:,.0f}")
+        st.dataframe(top_grantees_display, use_container_width=True, hide_index=True)
+        
+        st.divider()
+        
+        # --- Geographic Distribution ---
+        st.markdown("#### 🗺️ Geographic Distribution")
+        st.markdown("*Where are grants going? (by state)*")
+        
+        if 'grantee_state' in grants_df.columns:
+            # Group by state
+            state_funding = grants_df.groupby('grantee_state').agg({
+                'grant_amount': 'sum',
+                'grantee_name': 'nunique'
+            }).reset_index()
+            state_funding.columns = ['State', 'Total Funding', 'Unique Grantees']
+            state_funding = state_funding.sort_values('Total Funding', ascending=False)
+            
+            # Filter out empty states
+            state_funding = state_funding[state_funding['State'].str.strip() != '']
+            
+            if not state_funding.empty:
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    st.markdown("**By Total Funding:**")
+                    top_states = state_funding.head(10).copy()
+                    top_states['Total Funding'] = top_states['Total Funding'].apply(lambda x: f"${x:,.0f}")
+                    st.dataframe(top_states, use_container_width=True, hide_index=True)
+                
+                with col2:
+                    st.markdown("**Funding by State (Top 10):**")
+                    chart_states = state_funding.head(10).set_index('State')['Total Funding']
+                    st.bar_chart(chart_states)
+            else:
+                st.info("No state data available in grants.")
+        else:
+            st.info("State data not available in parsed grants.")
+        
+        st.divider()
+        
+        # --- Grant Size Analysis ---
+        st.markdown("#### 📏 Grant Size Distribution")
+        st.markdown("*What's the typical grant size?*")
+        
+        col1, col2, col3, col4 = st.columns(4)
+        
+        amounts = grants_df['grant_amount']
+        
+        with col1:
+            st.metric("Median Grant", f"${amounts.median():,.0f}")
+        with col2:
+            st.metric("Average Grant", f"${amounts.mean():,.0f}")
+        with col3:
+            st.metric("Smallest Grant", f"${amounts.min():,.0f}")
+        with col4:
+            st.metric("Largest Grant", f"${amounts.max():,.0f}")
+        
+        # Quartile breakdown
+        st.markdown("**Grant Size Quartiles:**")
+        q1, q2, q3 = amounts.quantile([0.25, 0.5, 0.75])
+        st.caption(f"• 25th percentile: ${q1:,.0f}")
+        st.caption(f"• 50th percentile (median): ${q2:,.0f}")
+        st.caption(f"• 75th percentile: ${q3:,.0f}")
+        
+        st.divider()
+        
+        # --- Foundation Profiles ---
+        st.markdown("#### 🏛️ Foundation Profiles")
+        st.markdown("*Summary statistics for each foundation*")
+        
+        foundation_stats = grants_df.groupby('funder_name').agg({
+            'grant_amount': ['sum', 'mean', 'median', 'count'],
+            'grantee_name': 'nunique',
+            'grantee_state': 'nunique'
+        }).reset_index()
+        
+        # Flatten column names
+        foundation_stats.columns = [
+            'Foundation', 'Total Grants ($)', 'Avg Grant ($)', 'Median Grant ($)', 
+            'Grant Count', 'Unique Grantees', 'States Reached'
+        ]
+        
+        # Add board member count
+        if not people_df.empty:
+            board_counts = people_df.groupby('foundation_name').size().reset_index()
+            board_counts.columns = ['Foundation', 'Board Members']
+            foundation_stats = foundation_stats.merge(board_counts, on='Foundation', how='left')
+            foundation_stats['Board Members'] = foundation_stats['Board Members'].fillna(0).astype(int)
+        
+        # Format currency columns
+        for col in ['Total Grants ($)', 'Avg Grant ($)', 'Median Grant ($)']:
+            foundation_stats[col] = foundation_stats[col].apply(lambda x: f"${x:,.0f}")
+        
+        st.dataframe(foundation_stats, use_container_width=True, hide_index=True)
+        
+        st.divider()
+    
+    elif is_analytics_mode and grants_df.empty:
+        st.info("📊 Analytics require grant data. Upload 990-PF files to see network insights.")
+        st.divider()
     
     # =============================================================================
     # Data Previews
