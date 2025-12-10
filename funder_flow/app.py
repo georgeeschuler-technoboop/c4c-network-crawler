@@ -27,6 +27,7 @@ from c4c_utils.network_export import build_nodes_df, build_edges_df
 # Constants
 # =============================================================================
 MAX_FILES = 5
+C4C_LOGO_URL = "https://static.wixstatic.com/media/275a3f_9e232fe9e6914305a7ea8746e2e77125~mv2.png"
 
 
 # =============================================================================
@@ -34,7 +35,7 @@ MAX_FILES = 5
 # =============================================================================
 st.set_page_config(
     page_title="C4C 990 Funder Flow",
-    page_icon="🔍",
+    page_icon=C4C_LOGO_URL,
     layout="wide"
 )
 
@@ -42,7 +43,12 @@ st.set_page_config(
 # =============================================================================
 # App Header
 # =============================================================================
-st.title("🔍 C4C 990 Funder Flow Prototype")
+# Logo + Title row
+col_logo, col_title = st.columns([0.08, 0.92])
+with col_logo:
+    st.image(C4C_LOGO_URL, width=60)
+with col_title:
+    st.title("C4C 990 Funder Flow Prototype")
 
 st.markdown("""
 Upload IRS **990-PF** filings (private foundations) and generate:
