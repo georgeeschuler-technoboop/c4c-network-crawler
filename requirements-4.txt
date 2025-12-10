@@ -1,0 +1,10 @@
+# C4C 990 Funder Flow Prototype Dependencies
+
+# Web UI
+streamlit>=1.28.0
+
+# Data processing
+pandas>=2.0.0
+
+# PDF parsing
+pdfplumber>=0.10.0
