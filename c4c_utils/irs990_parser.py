@@ -31,6 +31,7 @@ def parse_990_pdf(file_bytes: bytes, source_file: str, tax_year_override: str = 
             - foundation_meta: dict with foundation_name, foundation_ein, tax_year
             - grants_df: DataFrame with grant records
             - people_df: DataFrame with board/officer records
+            - diagnostics: dict with form_type, grants_reported_amount, is_990pf, etc.
     """
     # Initialize empty results
     foundation_meta = {
@@ -40,6 +41,16 @@ def parse_990_pdf(file_bytes: bytes, source_file: str, tax_year_override: str = 
     }
     grants_df = pd.DataFrame()
     people_df = pd.DataFrame()
+    
+    # Diagnostics for better error messages
+    diagnostics = {
+        "form_type": "unknown",
+        "is_990pf": False,
+        "grants_reported_amount": None,
+        "has_grants_schedule": False,
+        "org_name": "",
+        "parse_error": None,
+    }
     
     try:
         # Open PDF from bytes
@@ -51,24 +62,105 @@ def parse_990_pdf(file_bytes: bytes, source_file: str, tax_year_override: str = 
                 page_text = page.extract_text() or ""
                 all_text += page_text + "\n"
             
+            # 0. Detect form type and extract diagnostics
+            diagnostics = _detect_form_type(all_text)
+            
             # 1. Extract foundation metadata from first few pages
             foundation_meta = _extract_foundation_meta(all_text, tax_year_override)
+            diagnostics["org_name"] = foundation_meta.get("foundation_name", "")
             
-            # 2. Extract grants from Part XIV Section 3
-            grants_df = _extract_grants(pdf, all_text, foundation_meta, source_file)
+            # 2. Only extract grants if this is a 990-PF
+            if diagnostics["is_990pf"]:
+                grants_df = _extract_grants(pdf, all_text, foundation_meta, source_file)
+                diagnostics["has_grants_schedule"] = len(grants_df) > 0
             
-            # 3. Extract board/officers from Part VII
+            # 3. Extract board/officers from Part VII (works for both 990 and 990-PF)
             people_df = _extract_people(pdf, all_text, foundation_meta, source_file)
     
     except Exception as e:
         print(f"Error parsing {source_file}: {e}")
-        # Return empty results on error
+        diagnostics["parse_error"] = str(e)
     
     return {
         "foundation_meta": foundation_meta,
         "grants_df": grants_df,
         "people_df": people_df,
+        "diagnostics": diagnostics,
     }
+
+
+def _detect_form_type(text: str) -> dict:
+    """
+    Detect whether this is a 990, 990-PF, 990-EZ, etc. and extract key diagnostic info.
+    """
+    diagnostics = {
+        "form_type": "unknown",
+        "is_990pf": False,
+        "grants_reported_amount": None,
+        "has_grants_schedule": False,
+        "org_name": "",
+        "parse_error": None,
+    }
+    
+    # Check for form type indicators
+    text_upper = text.upper()
+    
+    # 990-PF indicators
+    if "FORM 990-PF" in text_upper or "990-PF" in text_upper:
+        if "RETURN OF PRIVATE FOUNDATION" in text_upper:
+            diagnostics["form_type"] = "990-PF"
+            diagnostics["is_990pf"] = True
+    
+    # Standard 990 indicators
+    elif "FORM 990" in text_upper or "FORM990" in text_upper:
+        if "RETURN OF ORGANIZATION EXEMPT FROM INCOME TAX" in text_upper:
+            diagnostics["form_type"] = "990"
+            diagnostics["is_990pf"] = False
+    
+    # 990-EZ indicators
+    elif "FORM 990-EZ" in text_upper or "990-EZ" in text_upper:
+        diagnostics["form_type"] = "990-EZ"
+        diagnostics["is_990pf"] = False
+    
+    # Try to extract grants/contributions amount from line 13 (990) or similar
+    # Form 990 Line 13: "Grants and similar amounts paid"
+    grants_patterns = [
+        # Form 990 line 13
+        r'Grants and similar amounts paid.*?(?:Part IX|column \(A\)).*?(?:lines? 1[–-]?3).*?\s+([\d,]+)',
+        r'13\s+Grants and similar amounts paid.*?([\d,]+)',
+        # Look for "0" near grants line
+        r'Grants and similar amounts paid.*?\s+0\s+0',
+        r'13\s+.*?\s+0\s+0',
+    ]
+    
+    for pattern in grants_patterns:
+        match = re.search(pattern, text, re.IGNORECASE | re.DOTALL)
+        if match:
+            if match.lastindex:
+                try:
+                    amount_str = match.group(1).replace(',', '')
+                    diagnostics["grants_reported_amount"] = int(amount_str)
+                except (ValueError, IndexError):
+                    pass
+            else:
+                # Matched the "0 0" pattern
+                diagnostics["grants_reported_amount"] = 0
+            break
+    
+    # Check if grants reported is explicitly 0
+    # Look for patterns like "13 ... 0" in the summary section
+    if diagnostics["grants_reported_amount"] is None:
+        # Check for zero grants in Part IX
+        zero_grants_patterns = [
+            r'Part IX.*?line 1.*?\$?\s*0\s',
+            r'grants or other assistance to any domestic organization.*?No',
+        ]
+        for pattern in zero_grants_patterns:
+            if re.search(pattern, text, re.IGNORECASE | re.DOTALL):
+                diagnostics["grants_reported_amount"] = 0
+                break
+    
+    return diagnostics
 
 
 def _extract_foundation_meta(text: str, tax_year_override: str = "") -> dict:
@@ -93,10 +185,12 @@ def _extract_foundation_meta(text: str, tax_year_override: str = "") -> dict:
             meta["foundation_ein"] = match.group(1)
             break
     
-    # Try to extract foundation name
+    # Try to extract organization name
     # Look for patterns like "Name of foundation\nTHE PORTER FAMILY FOUNDATION"
+    # or "Name of organization\nNIAGARA COMMUNITY CENTER"
     name_patterns = [
         r'Name of foundation[^\n]*\n([A-Z][A-Z\s&\.\,\-\']+(?:FOUNDATION|FUND|TRUST|CHARITABLE))',
+        r'Name of organization[^\n]*\n([A-Z][A-Z0-9\s&\.\,\-\']+(?:INC|LLC|FOUNDATION|FUND|TRUST|CENTER|CENTRE|ORGANIZATION|ASSOCIATION)?)',
         r'(?:THE\s+)?([A-Z][A-Z\s&\.\,\-\']+(?:FOUNDATION|FUND|TRUST))',
     ]
     
@@ -121,7 +215,9 @@ def _extract_foundation_meta(text: str, tax_year_override: str = "") -> dict:
         # Look for "For calendar year XXXX" or "tax year beginning XX-XX-XXXX"
         year_patterns = [
             r'Form\s*990-PF.*?(\d{4})',
+            r'Form\s*990.*?(\d{4})',
             r'For calendar year\s*(\d{4})',
+            r'For the (\d{4}) calendar year',
             r'tax year beginning\s*\d{2}-\d{2}-(\d{4})',
             r'Return of Private Foundation.*?(\d{4})',
         ]
@@ -208,40 +304,35 @@ def _extract_grants(pdf, all_text: str, foundation_meta: dict, source_file: str)
     
     # Clean lines - remove page headers/footers
     cleaned_lines = []
-    seen_lines = set()  # Track seen lines to remove duplicates from page breaks
+    seen_short_lines = set()  # Track short lines to avoid duplicates from page breaks
     
     for line in lines:
         line = line.strip()
         if not line:
             continue
-        # Skip page navigation
-        if 'propublica.org' in line.lower():
+        
+        # Skip page headers/footers
+        if re.match(r'^Page\s+\d+', line, re.I):
             continue
-        if 'Page' in line and 'of 17' in line:
-            continue
-        if 'Porter Family Foundation - Full Filing' in line:
-            continue
-        # Stop at Total line
-        if re.match(r'^Total\s*\.', line):
-            break
-        if 'Approved for future payment' in line:
-            break
         if 'Form 990-PF' in line:
             continue
-        
-        # Skip duplicate lines (often from page breaks)
-        # Only skip if it's a short line that we've seen before
-        line_key = line.upper().strip()
-        if len(line_key) < 20 and line_key in seen_lines:
+        if re.match(r'^\d{4}$', line):  # Just a year
             continue
-        seen_lines.add(line_key)
+        if 'Schedule A' in line or 'Schedule B' in line:
+            continue
+        if re.match(r'^https?://', line):
+            continue
+        
+        # Deduplicate short lines (often repeated at page breaks)
+        if len(line) < 20:
+            if line in seen_short_lines:
+                continue
+            seen_short_lines.add(line)
         
         cleaned_lines.append(line)
     
-    # Now parse using state machine
-    # The first purpose/status line contains info for the FIRST grantee
-    # So we need to capture that properly
-    
+    # Now parse the cleaned lines
+    grants = []
     current_grant = None
     pending_purpose = ""
     pending_amount = None
@@ -250,76 +341,52 @@ def _extract_grants(pdf, all_text: str, foundation_meta: dict, source_file: str)
     while i < len(cleaned_lines):
         line = cleaned_lines[i]
         
-        # Extract amount if present at end of line
+        # Check for amount at end of line (indicates purpose/status line)
         amount_match = re.search(r'([\d,]+)\s*$', line)
         line_amount = None
         if amount_match:
             try:
-                amt_str = amount_match.group(1).replace(',', '')
-                amt = int(amt_str)
-                if amt >= 100:  # Minimum grant amount
-                    line_amount = amt
+                line_amount = int(amount_match.group(1).replace(',', ''))
+                if line_amount < 10:  # Probably not a real amount
+                    line_amount = None
             except ValueError:
                 pass
         
-        # Check line type
+        # Determine line type
         is_purpose_status_line = (
             line_amount is not None and 
-            (
-                re.search(r'501\([cC]\)', line) or
-                re.search(r'\b(charitable|education|environmental|charity|promote|purposes)\b', line, re.I) or
-                re.match(r'^(NONE|None|none)\s', line)
-            )
+            (re.search(r'(?:NONE|501\([cC]\)|charitable|educational|general|support)', line, re.I) or
+             line_amount >= 100)
         )
-        
-        # Multi-line org name detection: look for ALL CAPS continuation that's
-        # NOT an address (no numbers at start) and NOT a known non-name pattern
-        # Also check for short single-word continuations
-        is_name_continuation = False
-        if current_grant is not None and not is_purpose_status_line:
-            # Short ALL CAPS word could be continuation (like "ACTION")
-            is_short_caps = (
-                line.isupper() and
-                len(line.split()) <= 2 and  # 1-2 words
-                not line_amount and
-                not re.match(r'^\d+\s', line) and
-                not re.match(r'^(SUITE|STE|PO BOX|P\.O\.)', line, re.I) and
-                len(line) > 2 and len(line) < 30
-            )
-            
-            # Longer ALL CAPS that looks like name continuation
-            is_longer_caps_continuation = (
-                line.isupper() and
-                not line_amount and
-                not re.match(r'^\d+\s', line) and
-                not re.match(r'^(SUITE|STE|PO BOX|P\.O\.)', line, re.I) and
-                len(line) > 2 and
-                # Check next line - if it's an address, this is likely a name continuation
-                (i + 1 < len(cleaned_lines) and 
-                 (re.match(r'^\d+\s', cleaned_lines[i+1]) or 
-                  re.match(r'^(SUITE|STE|PO BOX)', cleaned_lines[i+1], re.I)))
-            )
-            
-            is_name_continuation = is_short_caps or is_longer_caps_continuation
         
         is_org_name = (
             not is_purpose_status_line and
-            not is_name_continuation and
-            not line_amount and  # Org names don't end with amounts
+            not line_amount and
             len(line) > 3 and
-            not re.match(r'^\d+\s+\w', line) and  # Not address starting with number
-            not re.match(r'^(SUITE|STE|Suite|FLOOR|ROOM)\b', line, re.I) and
-            not re.match(r'^(PO BOX|P\.O\. BOX)', line, re.I) and
-            not re.match(r'^[A-Za-z]+,\s*[A-Z]{2}\s*\d{5}', line) and  # Not city/state
-            # Not an address line (contains street indicators)
-            not re.search(r'\b(AVE|AVENUE|STREET|ST|ROAD|RD|DRIVE|DR|BLVD|LANE|LN|WAY|PLACE|PL)\s', line, re.I)
+            line[0].isupper() and
+            not re.match(r'^\d', line) and
+            not re.match(r'^[a-z]', line) and
+            'Total' not in line
         )
         
+        # Check if this line looks like it's continuing the previous org name
+        # (next line is an address, not another purpose line)
+        is_name_continuation = False
+        if is_org_name and current_grant and i + 1 < len(cleaned_lines):
+            next_line = cleaned_lines[i + 1]
+            # If next line is an address or city/state, this is probably a name continuation
+            next_is_address = (
+                re.match(r'^\d+\s+', next_line) or
+                re.search(r'\b(AVE|AVENUE|STREET|ST|ROAD|RD|DRIVE|DR|BLVD|LANE|LN|WAY|PLACE|PL|SUITE|STE)\b', next_line, re.I)
+            )
+            next_is_city_state = re.match(r'^([A-Za-z\s\.]+)[,\s]+([A-Z]{2})\s*(\d{5})?', next_line)
+            if next_is_address or next_is_city_state:
+                is_name_continuation = True
+        
+        # Address detection - starts with number OR contains street indicator words
         is_address = (
-            re.match(r'^\d+\s+\w', line) or
-            re.match(r'^(PO BOX|P\.O\. BOX)', line, re.I) or
-            re.match(r'^(SUITE|STE|Suite)\s', line, re.I) or
-            # Catch addresses like "ONE SOUTH HARBOR AVE" 
+            re.match(r'^\d+\s+', line) or
+            re.match(r'^(ONE|TWO|THREE|FOUR|FIVE|SIX|SEVEN|EIGHT|NINE|TEN)\s+', line, re.I) or
             re.search(r'\b(AVE|AVENUE|STREET|ST|ROAD|RD|DRIVE|DR|BLVD|LANE|LN|WAY|PLACE|PL)\b', line, re.I)
         )
         
