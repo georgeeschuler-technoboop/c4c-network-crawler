@@ -8,6 +8,9 @@ Upload IRS 990/990-PF filings and generate Polinode-ready network data:
 
 Part of the C4C Network Intelligence Engine.
 """
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import streamlit as st
 import pandas as pd
