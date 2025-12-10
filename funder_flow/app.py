@@ -298,7 +298,7 @@ if parse_button and uploaded_files:
         st.markdown("*Which organizations are funded by multiple foundations in this network?*")
         
         # Count how many foundations fund each grantee
-        grantee_funder_counts = grants_df.groupby('grantee_name')['funder_name'].nunique().reset_index()
+        grantee_funder_counts = grants_df.groupby('grantee_name')['foundation_name'].nunique().reset_index()
         grantee_funder_counts.columns = ['Grantee', 'Number of Funders']
         
         # Get total funding per grantee
@@ -326,7 +326,7 @@ if parse_button and uploaded_files:
             st.markdown("**Funding details for top overlapping grantees:**")
             for _, row in multi_funder.head(5).iterrows():
                 grantee = row['Grantee']
-                funders = grants_df[grants_df['grantee_name'] == grantee].groupby('funder_name')['grant_amount'].sum()
+                funders = grants_df[grants_df['grantee_name'] == grantee].groupby('foundation_name')['grant_amount'].sum()
                 funder_list = ", ".join([f"{f} (${amt:,.0f})" for f, amt in funders.items()])
                 st.caption(f"• **{grantee}**: {funder_list}")
         else:
@@ -343,7 +343,7 @@ if parse_button and uploaded_files:
         # Re-merge to get numeric values for sorting
         top_grantees = grants_df.groupby('grantee_name').agg({
             'grant_amount': 'sum',
-            'funder_name': 'nunique'
+            'foundation_name': 'nunique'
         }).reset_index()
         top_grantees.columns = ['Grantee', 'Total Funding', 'Number of Funders']
         top_grantees = top_grantees.sort_values('Total Funding', ascending=False).head(15)
@@ -425,7 +425,7 @@ if parse_button and uploaded_files:
         st.markdown("#### 🏛️ Foundation Profiles")
         st.markdown("*Summary statistics for each foundation*")
         
-        foundation_stats = grants_df.groupby('funder_name').agg({
+        foundation_stats = grants_df.groupby('foundation_name').agg({
             'grant_amount': ['sum', 'mean', 'median', 'count'],
             'grantee_name': 'nunique',
             'grantee_state': 'nunique'
