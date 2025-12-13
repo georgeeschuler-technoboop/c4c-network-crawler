@@ -18,6 +18,7 @@ import zipfile
 import sys
 import os
 from pathlib import Path
+from datetime import datetime
 
 # Add the project root to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -52,14 +53,55 @@ st.set_page_config(
 
 
 # =============================================================================
+# Session State Initialization
+# =============================================================================
+
+def init_session_state():
+    """Initialize session state variables for persistent results."""
+    if "processed" not in st.session_state:
+        st.session_state.processed = False
+    if "nodes_df" not in st.session_state:
+        st.session_state.nodes_df = pd.DataFrame()
+    if "edges_df" not in st.session_state:
+        st.session_state.edges_df = pd.DataFrame()
+    if "grants_df" not in st.session_state:
+        st.session_state.grants_df = None
+    if "parse_results" not in st.session_state:
+        st.session_state.parse_results = []
+    if "merge_stats" not in st.session_state:
+        st.session_state.merge_stats = {}
+    if "processed_orgs" not in st.session_state:
+        st.session_state.processed_orgs = []
+
+
+def clear_session_state():
+    """Clear all processing results from session state."""
+    st.session_state.processed = False
+    st.session_state.nodes_df = pd.DataFrame()
+    st.session_state.edges_df = pd.DataFrame()
+    st.session_state.grants_df = None
+    st.session_state.parse_results = []
+    st.session_state.merge_stats = {}
+    st.session_state.processed_orgs = []
+
+
+def store_results(nodes_df, edges_df, grants_df, parse_results, merge_stats, processed_orgs):
+    """Store processing results in session state."""
+    st.session_state.processed = True
+    st.session_state.nodes_df = nodes_df
+    st.session_state.edges_df = edges_df
+    st.session_state.grants_df = grants_df
+    st.session_state.parse_results = parse_results
+    st.session_state.merge_stats = merge_stats
+    st.session_state.processed_orgs = processed_orgs
+
+
+# =============================================================================
 # Data Loading Functions
 # =============================================================================
 
 def load_glfn_data() -> tuple:
-    """
-    Load existing GLFN data from demo_data/glfn/.
-    Returns: (nodes_df, edges_df) - empty DataFrames if files don't exist
-    """
+    """Load existing GLFN data from demo_data/glfn/."""
     nodes_path = GLFN_DEMO_DIR / "nodes.csv"
     edges_path = GLFN_DEMO_DIR / "edges.csv"
     
@@ -87,10 +129,7 @@ def load_glfn_data() -> tuple:
 
 def merge_graph_data(existing_nodes: pd.DataFrame, existing_edges: pd.DataFrame,
                      new_nodes: pd.DataFrame, new_edges: pd.DataFrame) -> tuple:
-    """
-    Merge new graph data with existing, deduplicating by ID.
-    Returns: (merged_nodes, merged_edges, stats)
-    """
+    """Merge new graph data with existing, deduplicating by ID."""
     stats = {
         "existing_nodes": len(existing_nodes),
         "existing_edges": len(existing_edges),
@@ -138,10 +177,7 @@ def merge_graph_data(existing_nodes: pd.DataFrame, existing_edges: pd.DataFrame,
 
 
 def process_uploaded_files(uploaded_files, tax_year_override: str = "") -> tuple:
-    """
-    Process uploaded 990-PF files and return canonical outputs.
-    Returns: (nodes_df, edges_df, grants_df, foundations_meta, parse_results)
-    """
+    """Process uploaded 990-PF files and return canonical outputs."""
     all_grants = []
     all_people = []
     foundations_meta = []
@@ -156,6 +192,7 @@ def process_uploaded_files(uploaded_files, tax_year_override: str = "") -> tuple
             org_name = diagnostics.get('org_name', '') or result['foundation_meta'].get('foundation_name', 'Unknown')
             grants_count = len(result['grants_df'])
             people_count = len(result['people_df'])
+            total_amount = result['grants_df']['grant_amount'].sum() if grants_count > 0 else 0
             
             foundations_meta.append(result['foundation_meta'])
             
@@ -165,21 +202,41 @@ def process_uploaded_files(uploaded_files, tax_year_override: str = "") -> tuple
             if not result['people_df'].empty:
                 all_people.append(result['people_df'])
             
+            # Determine status
+            if grants_count > 0:
+                status = "success"
+                message = f"{grants_count} grants (${total_amount:,.0f}), {people_count} board members"
+            elif not diagnostics.get('is_990pf', True):
+                status = "wrong_form"
+                message = f"Form {diagnostics.get('form_type', 'unknown')} (public charity) - no itemized grants"
+            else:
+                status = "no_grants"
+                message = f"No grants found. {people_count} board members extracted."
+            
             parse_results.append({
                 "file": uploaded_file.name,
-                "success": True,
+                "status": status,
                 "org_name": org_name,
                 "grants": grants_count,
                 "people": people_count,
-                "total_amount": result['grants_df']['grant_amount'].sum() if grants_count > 0 else 0,
+                "total_amount": total_amount,
                 "is_990pf": diagnostics.get('is_990pf', False),
                 "form_type": diagnostics.get('form_type', 'unknown'),
+                "message": message,
+                "error": None,
             })
             
         except Exception as e:
             parse_results.append({
                 "file": uploaded_file.name,
-                "success": False,
+                "status": "error",
+                "org_name": "",
+                "grants": 0,
+                "people": 0,
+                "total_amount": 0,
+                "is_990pf": False,
+                "form_type": "unknown",
+                "message": "",
                 "error": str(e),
             })
     
@@ -192,34 +249,57 @@ def process_uploaded_files(uploaded_files, tax_year_override: str = "") -> tuple
     return nodes_df, edges_df, grants_df, foundations_meta, parse_results
 
 
+def create_processing_log(parse_results: list) -> pd.DataFrame:
+    """Create a DataFrame of processing results for download."""
+    rows = []
+    for r in parse_results:
+        rows.append({
+            "File": r.get("file", ""),
+            "Status": r.get("status", ""),
+            "Organization": r.get("org_name", ""),
+            "Form Type": r.get("form_type", ""),
+            "Is 990-PF": r.get("is_990pf", ""),
+            "Grants Found": r.get("grants", 0),
+            "Total Amount": r.get("total_amount", 0),
+            "Board Members": r.get("people", 0),
+            "Message": r.get("message", ""),
+            "Error": r.get("error", ""),
+        })
+    return pd.DataFrame(rows)
+
+
 # =============================================================================
 # UI Rendering Functions
 # =============================================================================
 
 def render_parse_status(parse_results: list) -> None:
     """Render parsing status for each file."""
-    st.markdown("### Parsing Status")
+    st.markdown("### 📋 Processing Log")
     
-    for result in parse_results:
-        if result.get("success"):
-            if result["grants"] > 0:
-                st.success(
-                    f"✅ **{result['file']}** – "
-                    f"{result['grants']} grants (${result['total_amount']:,.0f}), "
-                    f"{result['people']} board members ({result['org_name']})"
-                )
-            elif not result.get("is_990pf"):
-                st.warning(
-                    f"📋 **{result['file']}** is a **Form {result['form_type']}** (public charity) – "
-                    f"no itemized grants. Found {result['people']} board members."
-                )
-            else:
-                st.warning(
-                    f"⚠️ **{result['file']}** – No grants found. "
-                    f"Found {result['people']} board members."
-                )
-        else:
-            st.error(f"❌ **{result['file']}**: {result.get('error', 'Unknown error')}")
+    # Summary counts
+    success_count = sum(1 for r in parse_results if r["status"] == "success")
+    warning_count = sum(1 for r in parse_results if r["status"] in ["wrong_form", "no_grants"])
+    error_count = sum(1 for r in parse_results if r["status"] == "error")
+    
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("✅ Success", success_count)
+    with col2:
+        st.metric("⚠️ Warnings", warning_count)
+    with col3:
+        st.metric("❌ Errors", error_count)
+    
+    # Detailed log in expander
+    with st.expander("View detailed log", expanded=True):
+        for result in parse_results:
+            if result["status"] == "success":
+                st.success(f"✅ **{result['file']}** — {result['message']} ({result['org_name']})")
+            elif result["status"] == "wrong_form":
+                st.warning(f"📋 **{result['file']}** — {result['message']} ({result['org_name']})")
+            elif result["status"] == "no_grants":
+                st.warning(f"⚠️ **{result['file']}** — {result['message']} ({result['org_name']})")
+            elif result["status"] == "error":
+                st.error(f"❌ **{result['file']}** — Error: {result['error']}")
 
 
 def render_graph_summary(nodes_df: pd.DataFrame, edges_df: pd.DataFrame, grants_df: pd.DataFrame = None) -> None:
@@ -330,7 +410,8 @@ def render_data_preview(nodes_df: pd.DataFrame, edges_df: pd.DataFrame) -> None:
             st.info("No edges found.")
 
 
-def render_downloads(nodes_df: pd.DataFrame, edges_df: pd.DataFrame, grants_df: pd.DataFrame = None) -> None:
+def render_downloads(nodes_df: pd.DataFrame, edges_df: pd.DataFrame, 
+                     grants_df: pd.DataFrame = None, parse_results: list = None) -> None:
     """Render download buttons."""
     
     if nodes_df is None or nodes_df.empty:
@@ -341,6 +422,11 @@ def render_downloads(nodes_df: pd.DataFrame, edges_df: pd.DataFrame, grants_df: 
     
     st.info("⬇️ **Download these files and upload to `demo_data/glfn/` on GitHub** (replace existing files)")
     
+    # Create processing log if available
+    processing_log = None
+    if parse_results:
+        processing_log = create_processing_log(parse_results)
+    
     def create_zip_download():
         zip_buffer = BytesIO()
         with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
@@ -350,6 +436,8 @@ def render_downloads(nodes_df: pd.DataFrame, edges_df: pd.DataFrame, grants_df: 
                 zf.writestr("edges.csv", edges_df.to_csv(index=False))
             if grants_df is not None and not grants_df.empty:
                 zf.writestr("grants_raw.csv", grants_df.to_csv(index=False))
+            if processing_log is not None:
+                zf.writestr("processing_log.csv", processing_log.to_csv(index=False))
         zip_buffer.seek(0)
         return zip_buffer.getvalue()
     
@@ -364,7 +452,7 @@ def render_downloads(nodes_df: pd.DataFrame, edges_df: pd.DataFrame, grants_df: 
     
     st.markdown("**Or download individually:**")
     
-    col1, col2, col3 = st.columns(3)
+    col1, col2, col3, col4 = st.columns(4)
     
     with col1:
         if not nodes_df.empty:
@@ -392,6 +480,15 @@ def render_downloads(nodes_df: pd.DataFrame, edges_df: pd.DataFrame, grants_df: 
                 file_name="grants_raw.csv",
                 mime="text/csv"
             )
+    
+    with col4:
+        if processing_log is not None:
+            st.download_button(
+                label="📄 processing_log.csv",
+                data=processing_log.to_csv(index=False),
+                file_name="processing_log.csv",
+                mime="text/csv"
+            )
 
 
 # =============================================================================
@@ -399,6 +496,10 @@ def render_downloads(nodes_df: pd.DataFrame, edges_df: pd.DataFrame, grants_df: 
 # =============================================================================
 
 def main():
+    # Initialize session state
+    init_session_state()
+    
+    # Header
     col_logo, col_title = st.columns([0.08, 0.92])
     with col_logo:
         st.image(C4C_LOGO_URL, width=60)
@@ -421,10 +522,6 @@ def main():
     )
     
     st.divider()
-    
-    nodes_df = pd.DataFrame()
-    edges_df = pd.DataFrame()
-    grants_df = None
     
     if project_mode == "GLFN Demo (view existing)":
         # ---------------------------------------------------------------------
@@ -453,6 +550,7 @@ def main():
                     st.write(f"{flag} {label}")
         
         # Reconstruct grants_df for analytics
+        grants_df = None
         if not edges_df.empty and "edge_type" in edges_df.columns:
             grant_edges = edges_df[edges_df["edge_type"] == "GRANT"].copy()
             if not grant_edges.empty:
@@ -463,16 +561,26 @@ def main():
                     'grantee_state': grant_edges.get('region', ''),
                 })
         
+        # Render outputs
+        render_graph_summary(nodes_df, edges_df, grants_df)
+        
+        show_analytics = st.checkbox("📊 Show Network Analytics", value=False)
+        if show_analytics:
+            render_analytics(grants_df)
+        
+        render_data_preview(nodes_df, edges_df)
+        render_downloads(nodes_df, edges_df, grants_df)
+        
     else:
         # ---------------------------------------------------------------------
         # Add to GLFN Mode
         # ---------------------------------------------------------------------
         existing_nodes, existing_edges = load_glfn_data()
         
+        # Show existing data status
         if not existing_nodes.empty or not existing_edges.empty:
             st.success(f"📂 **Existing GLFN data:** {len(existing_nodes)} nodes, {len(existing_edges)} edges")
             
-            # Show existing foundations
             existing_foundations = get_existing_foundations(existing_nodes)
             if existing_foundations:
                 with st.expander(f"📋 Foundations already in GLFN ({len(existing_foundations)})", expanded=False):
@@ -485,98 +593,128 @@ def main():
             st.info("📂 **No existing GLFN data.** This will be the first upload.")
         
         st.divider()
-        st.subheader("📤 Upload 990-PF PDFs")
         
-        st.markdown(f"""
-        Upload up to **{MAX_FILES} private foundation 990-PF filings**.
-        
-        *Note: Works with **990-PF** (private foundations). Standard **990** filings 
-        from public charities don't include itemized grants.*
-        """)
-        
-        uploaded_files = st.file_uploader(
-            f"Upload 990-PF PDF(s) (max {MAX_FILES})",
-            type=["pdf"],
-            accept_multiple_files=True
-        )
-        
-        if uploaded_files and len(uploaded_files) > MAX_FILES:
-            st.warning(f"⚠️ Max {MAX_FILES} files. Processing first {MAX_FILES}.")
-            uploaded_files = uploaded_files[:MAX_FILES]
-        
-        tax_year_override = st.text_input(
-            "Tax Year (optional)",
-            help="Override auto-detection if needed"
-        )
-        
-        parse_button = st.button("🔍 Parse 990 Filings", type="primary", disabled=not uploaded_files)
-        
-        if not uploaded_files:
-            st.info("👆 Upload 990-PF PDF files")
-            st.stop()
-        
-        if not parse_button:
-            st.stop()
-        
-        # Process
-        with st.spinner("Parsing filings..."):
-            new_nodes, new_edges, grants_df, foundations_meta, parse_results = process_uploaded_files(
-                uploaded_files, tax_year_override
+        # Check if we have results in session state
+        if st.session_state.processed:
+            # Show Clear Results button
+            col1, col2 = st.columns([3, 1])
+            with col2:
+                if st.button("🗑️ Clear Results", type="secondary"):
+                    clear_session_state()
+                    st.rerun()
+            
+            # Show stored results
+            st.subheader("📤 Last Processing Results")
+            
+            if st.session_state.processed_orgs:
+                orgs_label = ", ".join(st.session_state.processed_orgs[:3])
+                if len(st.session_state.processed_orgs) > 3:
+                    orgs_label += f" + {len(st.session_state.processed_orgs) - 3} more"
+                st.info(f"**Processed:** {orgs_label}")
+            
+            # Render processing log
+            if st.session_state.parse_results:
+                render_parse_status(st.session_state.parse_results)
+            
+            st.divider()
+            
+            # Merge stats
+            if st.session_state.merge_stats:
+                stats = st.session_state.merge_stats
+                st.subheader("🔀 Merge Results")
+                
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.markdown("**Nodes:**")
+                    st.write(f"- Existing: {stats['existing_nodes']}")
+                    st.write(f"- From this upload: {stats['new_nodes_total']}")
+                    st.write(f"- ✅ **Added: {stats['nodes_added']}**")
+                    if stats['nodes_skipped'] > 0:
+                        st.write(f"- ⏭️ Skipped (duplicates): {stats['nodes_skipped']}")
+                
+                with col2:
+                    st.markdown("**Edges:**")
+                    st.write(f"- Existing: {stats['existing_edges']}")
+                    st.write(f"- From this upload: {stats['new_edges_total']}")
+                    st.write(f"- ✅ **Added: {stats['edges_added']}**")
+                    if stats['edges_skipped'] > 0:
+                        st.write(f"- ⏭️ Skipped (duplicates): {stats['edges_skipped']}")
+            
+            st.divider()
+            st.success(f"📊 **Combined GLFN dataset:** {len(st.session_state.nodes_df)} nodes, {len(st.session_state.edges_df)} edges")
+            
+            # Render outputs from session state
+            render_graph_summary(st.session_state.nodes_df, st.session_state.edges_df, st.session_state.grants_df)
+            
+            show_analytics = st.checkbox("📊 Show Network Analytics", value=False)
+            if show_analytics:
+                render_analytics(st.session_state.grants_df)
+            
+            render_data_preview(st.session_state.nodes_df, st.session_state.edges_df)
+            render_downloads(st.session_state.nodes_df, st.session_state.edges_df, 
+                           st.session_state.grants_df, st.session_state.parse_results)
+            
+        else:
+            # Show upload interface
+            st.subheader("📤 Upload 990-PF PDFs")
+            
+            st.markdown(f"""
+            Upload up to **{MAX_FILES} private foundation 990-PF filings**.
+            
+            *Note: Works with **990-PF** (private foundations). Standard **990** filings 
+            from public charities don't include itemized grants.*
+            """)
+            
+            uploaded_files = st.file_uploader(
+                f"Upload 990-PF PDF(s) (max {MAX_FILES})",
+                type=["pdf"],
+                accept_multiple_files=True
             )
-        
-        render_parse_status(parse_results)
-        
-        if new_nodes.empty:
-            st.warning("No data extracted from uploaded files.")
-            st.stop()
-        
-        st.divider()
-        
-        # Merge
-        nodes_df, edges_df, stats = merge_graph_data(
-            existing_nodes, existing_edges, new_nodes, new_edges
-        )
-        
-        # Get names of orgs just processed
-        processed_orgs = [r["org_name"] for r in parse_results if r.get("success") and r.get("org_name")]
-        orgs_label = ", ".join(processed_orgs[:3])
-        if len(processed_orgs) > 3:
-            orgs_label += f" + {len(processed_orgs) - 3} more"
-        
-        st.subheader(f"🔀 Merge Results — {orgs_label}")
-        
-        col1, col2 = st.columns(2)
-        with col1:
-            st.markdown("**Nodes:**")
-            st.write(f"- Existing: {stats['existing_nodes']}")
-            st.write(f"- From this upload: {stats['new_nodes_total']}")
-            st.write(f"- ✅ **Added: {stats['nodes_added']}**")
-            if stats['nodes_skipped'] > 0:
-                st.write(f"- ⏭️ Skipped (duplicates): {stats['nodes_skipped']}")
-        
-        with col2:
-            st.markdown("**Edges:**")
-            st.write(f"- Existing: {stats['existing_edges']}")
-            st.write(f"- From this upload: {stats['new_edges_total']}")
-            st.write(f"- ✅ **Added: {stats['edges_added']}**")
-            if stats['edges_skipped'] > 0:
-                st.write(f"- ⏭️ Skipped (duplicates): {stats['edges_skipped']}")
-        
-        st.divider()
-        st.success(f"📊 **Combined GLFN dataset:** {len(nodes_df)} nodes, {len(edges_df)} edges")
-    
-    # ---------------------------------------------------------------------
-    # Common Output
-    # ---------------------------------------------------------------------
-    render_graph_summary(nodes_df, edges_df, grants_df)
-    
-    # Analytics toggle
-    show_analytics = st.checkbox("📊 Show Network Analytics", value=False)
-    if show_analytics:
-        render_analytics(grants_df)
-    
-    render_data_preview(nodes_df, edges_df)
-    render_downloads(nodes_df, edges_df, grants_df)
+            
+            if uploaded_files and len(uploaded_files) > MAX_FILES:
+                st.warning(f"⚠️ Max {MAX_FILES} files. Processing first {MAX_FILES}.")
+                uploaded_files = uploaded_files[:MAX_FILES]
+            
+            tax_year_override = st.text_input(
+                "Tax Year (optional)",
+                help="Override auto-detection if needed"
+            )
+            
+            parse_button = st.button("🔍 Parse 990 Filings", type="primary", disabled=not uploaded_files)
+            
+            if not uploaded_files:
+                st.info("👆 Upload 990-PF PDF files")
+                st.stop()
+            
+            if parse_button:
+                # Process files
+                with st.spinner("Parsing filings..."):
+                    new_nodes, new_edges, grants_df, foundations_meta, parse_results = process_uploaded_files(
+                        uploaded_files, tax_year_override
+                    )
+                
+                if new_nodes.empty:
+                    st.warning("No data extracted from uploaded files.")
+                    # Still store results to show errors
+                    store_results(
+                        pd.DataFrame(), pd.DataFrame(), None,
+                        parse_results, {}, []
+                    )
+                    st.rerun()
+                
+                # Merge with existing
+                nodes_df, edges_df, merge_stats = merge_graph_data(
+                    existing_nodes, existing_edges, new_nodes, new_edges
+                )
+                
+                # Get processed org names
+                processed_orgs = [r["org_name"] for r in parse_results if r.get("status") == "success" and r.get("org_name")]
+                
+                # Store in session state
+                store_results(nodes_df, edges_df, grants_df, parse_results, merge_stats, processed_orgs)
+                
+                # Rerun to show results
+                st.rerun()
 
 
 if __name__ == "__main__":
