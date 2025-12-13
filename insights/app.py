@@ -11,23 +11,29 @@ from pathlib import Path
 from io import BytesIO
 import zipfile
 import sys
-import os
+import importlib.util
 
-# Add parent to path for imports
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# Get paths
+APP_DIR = Path(__file__).resolve().parent
+REPO_ROOT = APP_DIR.parent
 
-from insights.run import (
-    load_and_validate,
-    build_grant_graph,
-    build_board_graph,
-    build_interlock_graph,
-    compute_base_metrics,
-    compute_derived_signals,
-    compute_flow_stats,
-    compute_portfolio_overlap,
-    generate_insight_cards,
-    generate_project_summary,
-)
+# Direct import of run.py to avoid package import issues
+run_path = APP_DIR / "run.py"
+spec = importlib.util.spec_from_file_location("run", run_path)
+run_module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(run_module)
+
+# Get functions from the module
+load_and_validate = run_module.load_and_validate
+build_grant_graph = run_module.build_grant_graph
+build_board_graph = run_module.build_board_graph
+build_interlock_graph = run_module.build_interlock_graph
+compute_base_metrics = run_module.compute_base_metrics
+compute_derived_signals = run_module.compute_derived_signals
+compute_flow_stats = run_module.compute_flow_stats
+compute_portfolio_overlap = run_module.compute_portfolio_overlap
+generate_insight_cards = run_module.generate_insight_cards
+generate_project_summary = run_module.generate_project_summary
 
 # =============================================================================
 # Config
@@ -35,7 +41,6 @@ from insights.run import (
 
 C4C_LOGO_URL = "https://static.wixstatic.com/media/275a3f_9e232fe9e6914305a7ea8746e2e77125~mv2.png"
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
 GLFN_DATA_DIR = REPO_ROOT / "demo_data" / "glfn"
 
 st.set_page_config(
