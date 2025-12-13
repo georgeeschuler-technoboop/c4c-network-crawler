@@ -69,27 +69,79 @@ def init_session_state():
 # =============================================================================
 
 def render_card(card: dict):
-    """Render a single insight card."""
+    """Render a single insight card with narratives."""
     with st.container():
         st.markdown(f"### {card['title']}")
         st.caption(f"Use Case: {card['use_case']}")
-        st.markdown(f"**{card['summary']}**")
         
+        # Render summary (supports markdown)
+        st.markdown(card['summary'])
+        
+        # Health factors (special handling for network health card)
+        if "health_factors" in card and card["health_factors"]:
+            factors = card["health_factors"]
+            if factors.get("positive") or factors.get("risk"):
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.markdown("**✅ Positive Factors**")
+                    for f in factors.get("positive", []):
+                        st.markdown(f)
+                with col2:
+                    st.markdown("**⚠️ Risk Factors**")
+                    for f in factors.get("risk", []):
+                        st.markdown(f)
+        
+        # Ranked rows with narratives
         ranked_rows = card.get("ranked_rows", [])
         if ranked_rows:
-            # Convert to DataFrame for display
-            df = pd.DataFrame(ranked_rows)
+            # Check if rows have narratives
+            has_narratives = any(r.get("narrative") for r in ranked_rows)
             
-            # Format currency columns if present
-            for col in df.columns:
-                if "amount" in col.lower() or "received" in col.lower() or "outflow" in col.lower():
-                    if df[col].dtype in ['float64', 'int64']:
-                        df[col] = df[col].apply(lambda x: f"${x:,.0f}" if pd.notna(x) else "")
-            
-            # Drop ID columns for cleaner display
-            display_cols = [c for c in df.columns if not c.endswith("_id") and not c.endswith("_ids") and c != "rank"]
-            if display_cols:
-                st.dataframe(df[display_cols], use_container_width=True, hide_index=True)
+            if has_narratives:
+                # Render as expandable narrative sections
+                for row in ranked_rows:
+                    # Determine the entity name
+                    entity_name = (
+                        row.get("grantee") or 
+                        row.get("person") or 
+                        row.get("org") or 
+                        row.get("funder") or 
+                        row.get("node") or 
+                        row.get("pair") or
+                        f"#{row.get('rank', '')}"
+                    )
+                    
+                    with st.expander(f"**{row.get('rank', '')}. {entity_name}**"):
+                        if row.get("narrative"):
+                            st.markdown(row["narrative"])
+                        if row.get("recommendation"):
+                            st.markdown(row["recommendation"])
+                        
+                        # Show key metrics
+                        metrics_to_show = ["funders", "boards", "amount", "outflow", "shared", "jaccard", "betweenness"]
+                        metric_parts = []
+                        for m in metrics_to_show:
+                            if m in row:
+                                val = row[m]
+                                if isinstance(val, float):
+                                    val = f"{val:.3f}" if val < 1 else f"{val:,.0f}"
+                                metric_parts.append(f"**{m.title()}:** {val}")
+                        if metric_parts:
+                            st.caption(" • ".join(metric_parts))
+            else:
+                # Render as simple table for non-narrative rows
+                df = pd.DataFrame(ranked_rows)
+                
+                # Format currency columns
+                for col in df.columns:
+                    if "amount" in col.lower() or "received" in col.lower() or "outflow" in col.lower():
+                        if df[col].dtype in ['float64', 'int64']:
+                            df[col] = df[col].apply(lambda x: f"${x:,.0f}" if pd.notna(x) else "")
+                
+                # Drop ID columns
+                display_cols = [c for c in df.columns if not c.endswith("_id") and not c.endswith("_ids") and c != "rank"]
+                if display_cols:
+                    st.dataframe(df[display_cols], use_container_width=True, hide_index=True)
         
         # Evidence summary
         evidence = card.get("evidence", {})
@@ -195,6 +247,39 @@ def main():
     
     # Display results if available
     if st.session_state.insights_run:
+        st.divider()
+        
+        # Network Health Banner
+        insight_data = st.session_state.insight_cards
+        health = insight_data.get("health", {})
+        health_score = health.get("score", 0)
+        health_label = health.get("label", "Unknown")
+        
+        if health_score >= 70:
+            health_color = "🟢"
+        elif health_score >= 40:
+            health_color = "🟡"
+        else:
+            health_color = "🔴"
+        
+        st.markdown(f"## {health_color} Network Health: **{health_score}/100** — *{health_label}*")
+        st.caption("This score reflects funder coordination, governance ties, and funding concentration.")
+        
+        # Health factors in columns
+        col1, col2 = st.columns(2)
+        with col1:
+            st.markdown("**✅ Positive Factors**")
+            for f in health.get("positive", []):
+                st.markdown(f)
+            if not health.get("positive"):
+                st.caption("*No strong positive factors*")
+        with col2:
+            st.markdown("**⚠️ Risk Factors**")
+            for f in health.get("risk", []):
+                st.markdown(f)
+            if not health.get("risk"):
+                st.caption("*No significant risks*")
+        
         st.divider()
         
         # Project Summary
