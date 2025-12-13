@@ -39,7 +39,7 @@ Upload **charitydata.ca** exports for a Canadian foundation and generate:
 - **Board member nodes** and **membership edges**
 - **Grant edges** to donee organizations
 
-These outputs are compatible with the 990 Funder Flow tool and ready for network analysis.
+Grants are **automatically filtered** to the most recent reporting period for parity with US 990 data.
 """)
 
 st.divider()
@@ -139,7 +139,7 @@ def clean_nan(val) -> str:
 st.subheader("📁 Upload Files")
 
 st.markdown("""
-Upload the three CSV files exported from **charitydata.ca** for one organization:
+Upload the CSV files exported from **charitydata.ca** for one organization:
 """)
 
 col1, col2, col3 = st.columns(3)
@@ -160,9 +160,9 @@ with col2:
 
 with col3:
     grants_file = st.file_uploader(
-        "grants_recent.csv",
+        "grants.csv",
         type=["csv"],
-        help="Grants to qualified donees"
+        help="Grants to qualified donees (auto-filters to most recent year)"
     )
 
 # Org slug input
@@ -263,6 +263,19 @@ if assets_file or directors_file or grants_file:
             cra_bn = grants_cra_bn
         
         if not grants_df.empty:
+            # Filter to most recent reporting period only
+            total_rows = len(grants_df)
+            
+            if "Reporting Period" in grants_df.columns:
+                # Get unique periods and find the most recent one
+                periods = grants_df["Reporting Period"].dropna().unique()
+                if len(periods) > 0:
+                    # Sort periods (format is typically YYYY-MM-DD or similar)
+                    latest_period = sorted(periods, reverse=True)[0]
+                    grants_df = grants_df[grants_df["Reporting Period"] == latest_period]
+                    filtered_rows = len(grants_df)
+                    st.info(f"📅 Filtered to most recent period: **{latest_period}** ({filtered_rows} of {total_rows} grants)")
+            
             for _, r in grants_df.iterrows():
                 donee = clean_nan(r.get("Donee Name", ""))
                 if not donee:
@@ -299,7 +312,7 @@ if assets_file or directors_file or grants_file:
                     "prov": prov,
                 })
         
-        st.success(f"✅ **grants_recent.csv** — {len(grant_edges)} grants")
+        st.success(f"✅ **grants** — {len(grant_edges)} grants loaded")
     
     st.divider()
     
