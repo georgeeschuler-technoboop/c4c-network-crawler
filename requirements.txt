@@ -8,3 +8,4 @@ plotly>=5.18.0
 python-louvain>=0.16
 anthropic>=0.18.0
 pdfplumber>=0.10.0
+networkx
