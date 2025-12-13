@@ -34,17 +34,18 @@ compute_flow_stats = run_module.compute_flow_stats
 compute_portfolio_overlap = run_module.compute_portfolio_overlap
 generate_insight_cards = run_module.generate_insight_cards
 generate_project_summary = run_module.generate_project_summary
+generate_markdown_report = run_module.generate_markdown_report
 
 # =============================================================================
 # Config
 # =============================================================================
 
-C4C_LOGO_URL = "https://static.wixstatic.com/media/275a3f_9e232fe9e6914305a7ea8746e2e77125~mv2.png"
+C4C_LOGO_URL = "https://static.wixstatic.com/media/275a3f_c94bb96428e843ab828bed6ea6c43ead~mv2.png"
 
 GLFN_DATA_DIR = REPO_ROOT / "demo_data" / "glfn"
 
 st.set_page_config(
-    page_title="C4C Network Intelligence",
+    page_title="C4C Network Insight Engine",
     page_icon=C4C_LOGO_URL,
     layout="wide"
 )
@@ -62,6 +63,8 @@ def init_session_state():
         st.session_state.insight_cards = None
     if "project_summary" not in st.session_state:
         st.session_state.project_summary = None
+    if "markdown_report" not in st.session_state:
+        st.session_state.markdown_report = None
 
 
 # =============================================================================
@@ -165,12 +168,12 @@ def main():
     with col_logo:
         st.image(C4C_LOGO_URL, width=60)
     with col_title:
-        st.title("C4C Network Intelligence Engine")
+        st.title("C4C Network Insight Engine")
     
     st.markdown("""
-    Compute network metrics, brokerage roles, and generate insight cards from GLFN data.
+    Analyze funder networks, compute structural metrics, and generate actionable insight cards.
     
-    *Phase 3 — Interpreted Signals & Insight Cards*
+    *Phase 3 — Interpreted Signals & Strategic Recommendations*
     """)
     
     st.divider()
@@ -233,11 +236,15 @@ def main():
                 # Project summary
                 project_summary = generate_project_summary(nodes_df, edges_df, metrics_df, flow_stats)
                 
+                # Generate markdown report
+                markdown_report = generate_markdown_report(insight_cards, project_summary, project_id)
+                
                 # Store in session state
                 st.session_state.insights_run = True
                 st.session_state.metrics_df = metrics_df
                 st.session_state.insight_cards = insight_cards
                 st.session_state.project_summary = project_summary
+                st.session_state.markdown_report = markdown_report
                 
             except Exception as e:
                 st.error(f"Error running insights: {e}")
@@ -362,42 +369,61 @@ def main():
                 zf.writestr("node_metrics.csv", st.session_state.metrics_df.to_csv(index=False))
                 zf.writestr("insight_cards.json", json.dumps(st.session_state.insight_cards, indent=2))
                 zf.writestr("project_summary.json", json.dumps(st.session_state.project_summary, indent=2))
+                zf.writestr("insight_report.md", st.session_state.markdown_report)
             zip_buffer.seek(0)
             return zip_buffer.getvalue()
         
-        col1, col2, col3, col4 = st.columns(4)
+        # First row: Report download (prominent)
+        col_report, col_zip = st.columns([2, 1])
         
-        with col1:
+        with col_report:
+            st.download_button(
+                "📝 Download Insight Report (Markdown)",
+                data=st.session_state.markdown_report,
+                file_name="insight_report.md",
+                mime="text/markdown",
+                type="primary",
+                use_container_width=True
+            )
+        
+        with col_zip:
             st.download_button(
                 "📦 Download All (ZIP)",
                 data=create_zip(),
-                file_name="glfn_insights.zip",
+                file_name="network_insights.zip",
                 mime="application/zip",
-                type="primary"
+                use_container_width=True
             )
         
-        with col2:
+        # Second row: Individual files
+        st.caption("Individual data files:")
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
             st.download_button(
                 "📄 node_metrics.csv",
                 data=st.session_state.metrics_df.to_csv(index=False),
                 file_name="node_metrics.csv",
-                mime="text/csv"
+                mime="text/csv",
+                use_container_width=True
             )
         
-        with col3:
+        with col2:
             st.download_button(
                 "📄 insight_cards.json",
                 data=json.dumps(st.session_state.insight_cards, indent=2),
                 file_name="insight_cards.json",
-                mime="application/json"
+                mime="application/json",
+                use_container_width=True
             )
         
-        with col4:
+        with col3:
             st.download_button(
                 "📄 project_summary.json",
                 data=json.dumps(st.session_state.project_summary, indent=2),
                 file_name="project_summary.json",
-                mime="application/json"
+                mime="application/json",
+                use_container_width=True
             )
 
 
