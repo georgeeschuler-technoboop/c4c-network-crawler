@@ -193,6 +193,36 @@ def load_glfn_data() -> tuple:
     return nodes_df, edges_df
 
 
+def get_existing_foundations(nodes_df: pd.DataFrame) -> list:
+    """
+    Extract list of foundation names already in GLFN data.
+    Foundations are ORG nodes that have a tax_id (CRA BN).
+    Returns: list of (label, source_system) tuples
+    """
+    if nodes_df.empty or "node_type" not in nodes_df.columns:
+        return []
+    
+    # Filter to ORG nodes with tax_id (these are foundations, not donees)
+    orgs = nodes_df[nodes_df["node_type"] == "ORG"].copy()
+    
+    if "tax_id" not in orgs.columns:
+        return []
+    
+    # Foundations have tax_ids, donees don't
+    foundations = orgs[orgs["tax_id"].notna() & (orgs["tax_id"] != "")]
+    
+    if foundations.empty:
+        return []
+    
+    result = []
+    for _, row in foundations.iterrows():
+        label = row.get("label", "Unknown")
+        source = row.get("source_system", "")
+        result.append((label, source))
+    
+    return result
+
+
 def merge_graph_data(existing_nodes: pd.DataFrame, existing_edges: pd.DataFrame,
                      new_nodes: pd.DataFrame, new_edges: pd.DataFrame) -> tuple:
     """
@@ -375,6 +405,9 @@ def process_uploaded_files(assets_file, directors_file, grants_file) -> tuple:
                 grants_filtered = grants_filtered[grants_filtered["Reporting Period"] == latest_period]
                 fiscal_year = extract_fiscal_year(latest_period)
         
+        # Track edge base IDs to add sequence numbers for duplicates
+        edge_base_counts = {}
+        
         for _, r in grants_filtered.iterrows():
             donee = clean_nan(r.get("Donee Name", ""))
             if not donee:
@@ -421,12 +454,20 @@ def process_uploaded_files(assets_file, directors_file, grants_file) -> tuple:
                 })
                 seen_node_ids.add(donee_node_id)
             
+            # Build edge ID with sequence number to preserve multiple identical grants
             fy = extract_fiscal_year(period) or fiscal_year
             if amt_total > 0:
-                edge_id = f"gr:{foundation_node_id}->{donee_node_id}:{fy}:{int(amt_total)}"
+                edge_base = f"gr:{foundation_node_id}->{donee_node_id}:{fy}:{int(amt_total)}"
             else:
                 hash_input = f"{foundation_node_id}{donee_node_id}{fy}{period}"
-                edge_id = f"gr:{foundation_node_id}->{donee_node_id}:{fy}:h{generate_edge_hash(hash_input)}"
+                edge_base = f"gr:{foundation_node_id}->{donee_node_id}:{fy}:h{generate_edge_hash(hash_input)}"
+            
+            # Add sequence number
+            if edge_base not in edge_base_counts:
+                edge_base_counts[edge_base] = 0
+            edge_base_counts[edge_base] += 1
+            seq = edge_base_counts[edge_base]
+            edge_id = f"{edge_base}:{seq}"
             
             edges.append({
                 "edge_id": edge_id,
@@ -622,6 +663,14 @@ def main():
         
         st.success(f"✅ GLFN data: {len(nodes_df)} nodes, {len(edges_df)} edges")
         
+        # Show existing foundations
+        existing_foundations = get_existing_foundations(nodes_df)
+        if existing_foundations:
+            with st.expander(f"📋 Foundations in GLFN ({len(existing_foundations)})", expanded=True):
+                for label, source in existing_foundations:
+                    flag = "🇨🇦" if source == "CHARITYDATA_CA" else "🇺🇸" if source == "IRS_990" else "📄"
+                    st.write(f"{flag} {label}")
+        
     else:
         # ---------------------------------------------------------------------
         # Add to GLFN Mode
@@ -630,6 +679,15 @@ def main():
         
         if not existing_nodes.empty or not existing_edges.empty:
             st.success(f"📂 **Existing GLFN data:** {len(existing_nodes)} nodes, {len(existing_edges)} edges")
+            
+            # Show existing foundations
+            existing_foundations = get_existing_foundations(existing_nodes)
+            if existing_foundations:
+                with st.expander(f"📋 Foundations already in GLFN ({len(existing_foundations)})", expanded=False):
+                    for label, source in existing_foundations:
+                        flag = "🇨🇦" if source == "CHARITYDATA_CA" else "🇺🇸" if source == "IRS_990" else "📄"
+                        st.write(f"{flag} {label}")
+            
             st.caption("New data will be merged. Duplicates automatically skipped.")
         else:
             st.info("📂 **No existing GLFN data.** This will be the first organization.")
@@ -671,7 +729,7 @@ def main():
             existing_nodes, existing_edges, new_nodes, new_edges
         )
         
-        st.subheader("🔀 Merge Results")
+        st.subheader(f"🔀 Merge Results — {org_name}")
         
         col1, col2 = st.columns(2)
         with col1:
