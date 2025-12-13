@@ -3,7 +3,7 @@ C4C 990 Funder Flow — Network Intelligence Engine
 
 Dual-mode Streamlit app:
 - GLFN Demo: Load pre-built canonical graph from repo
-- New Project: Upload IRS 990-PF filings and generate canonical outputs
+- Add to GLFN: Upload IRS 990-PF filings, auto-merge with existing GLFN data
 
 Outputs conform to C4C Network Schema v1 (MVP):
 - nodes.csv: ORG and PERSON nodes
@@ -23,7 +23,7 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from c4c_utils.irs990_parser import parse_990_pdf
-from c4c_utils.network_export import build_nodes_df, build_edges_df
+from c4c_utils.network_export import build_nodes_df, build_edges_df, NODE_COLUMNS, EDGE_COLUMNS
 
 
 # =============================================================================
@@ -55,27 +55,86 @@ st.set_page_config(
 # Data Loading Functions
 # =============================================================================
 
-def load_glfn_demo() -> tuple:
+def load_glfn_data() -> tuple:
     """
-    Load pre-built canonical graph from demo_data/glfn/.
-    Returns: (nodes_df, edges_df, org_attributes)
+    Load existing GLFN data from demo_data/glfn/.
+    Returns: (nodes_df, edges_df) - empty DataFrames if files don't exist
     """
     nodes_path = GLFN_DEMO_DIR / "nodes.csv"
     edges_path = GLFN_DEMO_DIR / "edges.csv"
-    org_attr_path = GLFN_DEMO_DIR / "org_attributes.json"
     
-    if not nodes_path.exists() or not edges_path.exists():
-        return None, None, None
+    nodes_df = pd.DataFrame(columns=NODE_COLUMNS)
+    edges_df = pd.DataFrame(columns=EDGE_COLUMNS)
     
-    nodes_df = pd.read_csv(nodes_path)
-    edges_df = pd.read_csv(edges_path)
+    if nodes_path.exists():
+        try:
+            df = pd.read_csv(nodes_path)
+            if not df.empty and len(df) > 0:
+                nodes_df = df
+        except:
+            pass
     
-    org_attributes = {}
-    if org_attr_path.exists():
-        with open(org_attr_path, "r") as f:
-            org_attributes = json.load(f)
+    if edges_path.exists():
+        try:
+            df = pd.read_csv(edges_path)
+            if not df.empty and len(df) > 0:
+                edges_df = df
+        except:
+            pass
     
-    return nodes_df, edges_df, org_attributes
+    return nodes_df, edges_df
+
+
+def merge_graph_data(existing_nodes: pd.DataFrame, existing_edges: pd.DataFrame,
+                     new_nodes: pd.DataFrame, new_edges: pd.DataFrame) -> tuple:
+    """
+    Merge new graph data with existing, deduplicating by ID.
+    Returns: (merged_nodes, merged_edges, stats)
+    """
+    stats = {
+        "existing_nodes": len(existing_nodes),
+        "existing_edges": len(existing_edges),
+        "new_nodes_total": len(new_nodes),
+        "new_edges_total": len(new_edges),
+        "nodes_added": 0,
+        "edges_added": 0,
+        "nodes_skipped": 0,
+        "edges_skipped": 0,
+    }
+    
+    # Merge nodes
+    if existing_nodes.empty or "node_id" not in existing_nodes.columns:
+        merged_nodes = new_nodes.copy()
+        stats["nodes_added"] = len(new_nodes)
+    elif new_nodes.empty:
+        merged_nodes = existing_nodes.copy()
+    else:
+        existing_ids = set(existing_nodes["node_id"].dropna().astype(str))
+        new_mask = ~new_nodes["node_id"].astype(str).isin(existing_ids)
+        nodes_to_add = new_nodes[new_mask]
+        
+        stats["nodes_added"] = len(nodes_to_add)
+        stats["nodes_skipped"] = len(new_nodes) - len(nodes_to_add)
+        
+        merged_nodes = pd.concat([existing_nodes, nodes_to_add], ignore_index=True)
+    
+    # Merge edges
+    if existing_edges.empty or "edge_id" not in existing_edges.columns:
+        merged_edges = new_edges.copy()
+        stats["edges_added"] = len(new_edges)
+    elif new_edges.empty:
+        merged_edges = existing_edges.copy()
+    else:
+        existing_ids = set(existing_edges["edge_id"].dropna().astype(str))
+        new_mask = ~new_edges["edge_id"].astype(str).isin(existing_ids)
+        edges_to_add = new_edges[new_mask]
+        
+        stats["edges_added"] = len(edges_to_add)
+        stats["edges_skipped"] = len(new_edges) - len(edges_to_add)
+        
+        merged_edges = pd.concat([existing_edges, edges_to_add], ignore_index=True)
+    
+    return merged_nodes, merged_edges, stats
 
 
 def process_uploaded_files(uploaded_files, tax_year_override: str = "") -> tuple:
@@ -124,11 +183,9 @@ def process_uploaded_files(uploaded_files, tax_year_override: str = "") -> tuple
                 "error": str(e),
             })
     
-    # Combine DataFrames
     grants_df = pd.concat(all_grants, ignore_index=True) if all_grants else pd.DataFrame()
     people_df = pd.concat(all_people, ignore_index=True) if all_people else pd.DataFrame()
     
-    # Build canonical nodes and edges
     nodes_df = build_nodes_df(grants_df, people_df, foundations_meta)
     edges_df = build_edges_df(grants_df, people_df, foundations_meta)
     
@@ -172,9 +229,8 @@ def render_graph_summary(nodes_df: pd.DataFrame, edges_df: pd.DataFrame, grants_
         st.warning("No graph data loaded.")
         return
     
-    st.subheader("📊 Summary")
+    st.subheader("📊 Graph Summary")
     
-    # Node/Edge counts
     org_nodes = len(nodes_df[nodes_df["node_type"] == "ORG"]) if "node_type" in nodes_df.columns else 0
     person_nodes = len(nodes_df[nodes_df["node_type"] == "PERSON"]) if "node_type" in nodes_df.columns else 0
     grant_edges = len(edges_df[edges_df["edge_type"] == "GRANT"]) if not edges_df.empty and "edge_type" in edges_df.columns else 0
@@ -190,7 +246,6 @@ def render_graph_summary(nodes_df: pd.DataFrame, edges_df: pd.DataFrame, grants_
     with col4:
         st.metric("BOARD Edges", board_edges)
     
-    # Grant totals if available
     if grants_df is not None and not grants_df.empty:
         total_amount = grants_df['grant_amount'].sum()
         unique_grantees = grants_df['grantee_name'].nunique()
@@ -202,7 +257,7 @@ def render_graph_summary(nodes_df: pd.DataFrame, edges_df: pd.DataFrame, grants_
             st.metric("Unique Grantees", unique_grantees)
 
 
-def render_analytics(grants_df: pd.DataFrame, people_df: pd.DataFrame = None) -> None:
+def render_analytics(grants_df: pd.DataFrame) -> None:
     """Render network analytics section."""
     
     if grants_df is None or grants_df.empty:
@@ -211,8 +266,8 @@ def render_analytics(grants_df: pd.DataFrame, people_df: pd.DataFrame = None) ->
     
     st.subheader("📊 Network Analytics")
     
-    # --- Funder Overlap Analysis ---
-    st.markdown("#### 🔗 Funder Overlap: Grantees Receiving from Multiple Foundations")
+    # Funder Overlap
+    st.markdown("#### 🔗 Funder Overlap: Grantees with Multiple Funders")
     
     grantee_funder_counts = grants_df.groupby('grantee_name')['foundation_name'].nunique().reset_index()
     grantee_funder_counts.columns = ['Grantee', 'Number of Funders']
@@ -230,65 +285,47 @@ def render_analytics(grants_df: pd.DataFrame, people_df: pd.DataFrame = None) ->
         multi_funder['Total Funding'] = multi_funder['Total Funding'].apply(lambda x: f"${x:,.0f}")
         st.dataframe(multi_funder.head(20), use_container_width=True, hide_index=True)
     else:
-        st.info("No grantees receive funding from multiple foundations in this dataset.")
+        st.info("No grantees receive funding from multiple foundations yet.")
     
     st.divider()
     
-    # --- Geographic Distribution ---
-    st.markdown("#### 🌍 Geographic Distribution of Grantees")
-    
+    # Geographic Distribution
     if 'grantee_state' in grants_df.columns:
+        st.markdown("#### 🌍 Geographic Distribution")
+        
         state_funding = grants_df.groupby('grantee_state').agg({
             'grantee_name': 'nunique',
             'grant_amount': 'sum'
         }).reset_index()
-        state_funding.columns = ['State', 'Unique Grantees', 'Total Funding']
+        state_funding.columns = ['State', 'Grantees', 'Total Funding']
         state_funding = state_funding.sort_values('Total Funding', ascending=False)
-        
         state_funding['Total Funding'] = state_funding['Total Funding'].apply(lambda x: f"${x:,.0f}")
         st.dataframe(state_funding.head(15), use_container_width=True, hide_index=True)
-    
-    st.divider()
-    
-    # --- Grant Size Distribution ---
-    st.markdown("#### 💰 Grant Size Distribution")
-    
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        st.metric("Min Grant", f"${grants_df['grant_amount'].min():,.0f}")
-    with col2:
-        st.metric("Median Grant", f"${grants_df['grant_amount'].median():,.0f}")
-    with col3:
-        st.metric("Mean Grant", f"${grants_df['grant_amount'].mean():,.0f}")
-    with col4:
-        st.metric("Max Grant", f"${grants_df['grant_amount'].max():,.0f}")
 
 
 def render_data_preview(nodes_df: pd.DataFrame, edges_df: pd.DataFrame) -> None:
     """Render data preview tables."""
     
+    st.divider()
     st.subheader("📋 Data Preview")
-    st.caption("Preview of canonical graph data. Downloads include full schema.")
     
     tab1, tab2 = st.tabs(["Nodes", "Edges"])
     
     with tab1:
         if not nodes_df.empty:
-            display_cols = ["node_type", "label", "jurisdiction", "city", "region", "tax_id"]
+            display_cols = ["node_type", "label", "jurisdiction", "city", "region", "tax_id", "source_system"]
             display_cols = [c for c in display_cols if c in nodes_df.columns]
             st.dataframe(nodes_df[display_cols].head(50), use_container_width=True, hide_index=True)
-            if len(nodes_df) > 50:
-                st.caption(f"Showing 50 of {len(nodes_df)} nodes")
+            st.caption(f"{len(nodes_df)} total nodes")
         else:
             st.info("No nodes found.")
     
     with tab2:
         if not edges_df.empty:
-            display_cols = ["edge_type", "from_id", "to_id", "amount", "role", "fiscal_year"]
+            display_cols = ["edge_type", "from_id", "to_id", "amount", "role", "fiscal_year", "source_system"]
             display_cols = [c for c in display_cols if c in edges_df.columns]
             st.dataframe(edges_df[display_cols].head(50), use_container_width=True, hide_index=True)
-            if len(edges_df) > 50:
-                st.caption(f"Showing 50 of {len(edges_df)} edges")
+            st.caption(f"{len(edges_df)} total edges")
         else:
             st.info("No edges found.")
 
@@ -300,7 +337,9 @@ def render_downloads(nodes_df: pd.DataFrame, edges_df: pd.DataFrame, grants_df: 
         return
     
     st.divider()
-    st.subheader("📥 Download Outputs")
+    st.subheader("📥 Download & Upload to GitHub")
+    
+    st.info("⬇️ **Download these files and upload to `demo_data/glfn/` on GitHub** (replace existing files)")
     
     def create_zip_download():
         zip_buffer = BytesIO()
@@ -317,7 +356,7 @@ def render_downloads(nodes_df: pd.DataFrame, edges_df: pd.DataFrame, grants_df: 
     st.download_button(
         label="📦 Download All (ZIP)",
         data=create_zip_download(),
-        file_name="c4c_990_funder_flow.zip",
+        file_name="c4c_glfn_update.zip",
         mime="application/zip",
         type="primary",
         use_container_width=True
@@ -360,7 +399,6 @@ def render_downloads(nodes_df: pd.DataFrame, edges_df: pd.DataFrame, grants_df: 
 # =============================================================================
 
 def main():
-    # Header
     col_logo, col_title = st.columns([0.08, 0.92])
     with col_logo:
         st.image(C4C_LOGO_URL, width=60)
@@ -368,57 +406,48 @@ def main():
         st.title("C4C 990 Funder Flow")
     
     st.markdown("""
-    Parse IRS **990-PF** filings and generate canonical network graphs.
+    Parse IRS **990-PF** filings and build the GLFN network graph.
     
     *Outputs conform to C4C Network Schema v1.*
     """)
     
     st.divider()
     
-    # Project Mode Selector
     project_mode = st.selectbox(
-        "Project",
-        ["GLFN Demo (pre-loaded)", "New Project (upload 990-PFs)"],
+        "Mode",
+        ["GLFN Demo (view existing)", "Add to GLFN (upload + merge)"],
         index=0,
-        help="GLFN Demo loads pre-built data. New Project lets you upload files."
+        help="View existing GLFN data or add new 990-PF filings"
     )
     
     st.divider()
     
-    # Initialize outputs
     nodes_df = pd.DataFrame()
     edges_df = pd.DataFrame()
     grants_df = None
     
-    if project_mode == "GLFN Demo (pre-loaded)":
+    if project_mode == "GLFN Demo (view existing)":
         # ---------------------------------------------------------------------
-        # GLFN Demo Mode
+        # View Mode
         # ---------------------------------------------------------------------
-        st.caption("📂 Loading canonical graph from `demo_data/glfn/`...")
+        st.caption("📂 Loading from `demo_data/glfn/`...")
         
-        nodes_df, edges_df, org_attributes = load_glfn_demo()
+        nodes_df, edges_df = load_glfn_data()
         
-        if nodes_df is None:
-            st.error(f"""
-            **Demo data not found.**
+        if nodes_df.empty and edges_df.empty:
+            st.warning("""
+            **No GLFN data found yet.**
             
-            Expected files at:
-            ```
-            {GLFN_DEMO_DIR}/nodes.csv
-            {GLFN_DEMO_DIR}/edges.csv
-            ```
-            
-            Please ensure demo data is committed to the repo, or switch to **New Project** mode.
+            Switch to **"Add to GLFN"** mode to start building the dataset.
             """)
             st.stop()
         
-        st.success(f"✅ Loaded GLFN demo data: {len(nodes_df)} nodes, {len(edges_df)} edges")
+        st.success(f"✅ GLFN data: {len(nodes_df)} nodes, {len(edges_df)} edges")
         
-        # For demo mode, try to reconstruct grants_df from edges for analytics
+        # Reconstruct grants_df for analytics
         if not edges_df.empty and "edge_type" in edges_df.columns:
             grant_edges = edges_df[edges_df["edge_type"] == "GRANT"].copy()
             if not grant_edges.empty:
-                # Create minimal grants_df for analytics
                 grants_df = pd.DataFrame({
                     'foundation_name': grant_edges['from_id'],
                     'grantee_name': grant_edges['to_id'],
@@ -428,70 +457,100 @@ def main():
         
     else:
         # ---------------------------------------------------------------------
-        # New Project (Upload) Mode
+        # Add to GLFN Mode
         # ---------------------------------------------------------------------
+        existing_nodes, existing_edges = load_glfn_data()
+        
+        if not existing_nodes.empty or not existing_edges.empty:
+            st.success(f"📂 **Existing GLFN data:** {len(existing_nodes)} nodes, {len(existing_edges)} edges")
+            st.caption("New data will be merged. Duplicates automatically skipped.")
+        else:
+            st.info("📂 **No existing GLFN data.** This will be the first upload.")
+        
+        st.divider()
         st.subheader("📤 Upload 990-PF PDFs")
         
         st.markdown(f"""
-        Upload up to **{MAX_FILES} private foundation 990-PF filings** to extract grant data.
+        Upload up to **{MAX_FILES} private foundation 990-PF filings**.
         
-        *Note: This works with **990-PF** (private foundations). Standard **990** filings 
-        from public charities typically don't include itemized grants.*
+        *Note: Works with **990-PF** (private foundations). Standard **990** filings 
+        from public charities don't include itemized grants.*
         """)
         
         uploaded_files = st.file_uploader(
             f"Upload 990-PF PDF(s) (max {MAX_FILES})",
             type=["pdf"],
-            accept_multiple_files=True,
-            help=f"Upload 1–{MAX_FILES} IRS 990-PF PDF files"
+            accept_multiple_files=True
         )
         
         if uploaded_files and len(uploaded_files) > MAX_FILES:
-            st.warning(f"⚠️ Please upload at most {MAX_FILES} files.")
+            st.warning(f"⚠️ Max {MAX_FILES} files. Processing first {MAX_FILES}.")
             uploaded_files = uploaded_files[:MAX_FILES]
         
         tax_year_override = st.text_input(
             "Tax Year (optional)",
-            help="Override auto-detection of tax year if needed."
+            help="Override auto-detection if needed"
         )
         
         parse_button = st.button("🔍 Parse 990 Filings", type="primary", disabled=not uploaded_files)
         
         if not uploaded_files:
-            st.info("👆 Upload 990-PF PDF files to generate the graph.")
+            st.info("👆 Upload 990-PF PDF files")
             st.stop()
         
         if not parse_button:
             st.stop()
         
-        # Process uploads
+        # Process
         with st.spinner("Parsing filings..."):
-            nodes_df, edges_df, grants_df, foundations_meta, parse_results = process_uploaded_files(
+            new_nodes, new_edges, grants_df, foundations_meta, parse_results = process_uploaded_files(
                 uploaded_files, tax_year_override
             )
         
         render_parse_status(parse_results)
         
-        if nodes_df.empty:
+        if new_nodes.empty:
             st.warning("No data extracted from uploaded files.")
             st.stop()
         
         st.divider()
+        
+        # Merge
+        nodes_df, edges_df, stats = merge_graph_data(
+            existing_nodes, existing_edges, new_nodes, new_edges
+        )
+        
+        st.subheader("🔀 Merge Results")
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            st.markdown("**Nodes:**")
+            st.write(f"- Existing: {stats['existing_nodes']}")
+            st.write(f"- From this upload: {stats['new_nodes_total']}")
+            st.write(f"- ✅ **Added: {stats['nodes_added']}**")
+            if stats['nodes_skipped'] > 0:
+                st.write(f"- ⏭️ Skipped (duplicates): {stats['nodes_skipped']}")
+        
+        with col2:
+            st.markdown("**Edges:**")
+            st.write(f"- Existing: {stats['existing_edges']}")
+            st.write(f"- From this upload: {stats['new_edges_total']}")
+            st.write(f"- ✅ **Added: {stats['edges_added']}**")
+            if stats['edges_skipped'] > 0:
+                st.write(f"- ⏭️ Skipped (duplicates): {stats['edges_skipped']}")
+        
+        st.divider()
+        st.success(f"📊 **Combined GLFN dataset:** {len(nodes_df)} nodes, {len(edges_df)} edges")
     
     # ---------------------------------------------------------------------
-    # Common Output (both modes)
+    # Common Output
     # ---------------------------------------------------------------------
     render_graph_summary(nodes_df, edges_df, grants_df)
     
-    st.divider()
-    
     # Analytics toggle
     show_analytics = st.checkbox("📊 Show Network Analytics", value=False)
-    
     if show_analytics:
         render_analytics(grants_df)
-    
-    st.divider()
     
     render_data_preview(nodes_df, edges_df)
     render_downloads(nodes_df, edges_df, grants_df)
