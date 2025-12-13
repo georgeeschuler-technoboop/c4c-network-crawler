@@ -1,5 +1,5 @@
 """
-C4C Network Intelligence — CA Charity Ingestion
+OrgGraph (CA) — Canadian Nonprofit Registry Ingestion
 
 Dual-mode Streamlit app:
 - GLFN Demo: Load pre-built canonical graph from repo
@@ -23,7 +23,8 @@ from io import BytesIO, StringIO
 # Config
 # =============================================================================
 
-C4C_LOGO_URL = "https://static.wixstatic.com/media/275a3f_9e232fe9e6914305a7ea8746e2e77125~mv2.png"
+APP_VERSION = "0.3.0"  # Track app version
+C4C_LOGO_URL = "https://static.wixstatic.com/media/275a3f_71fc58eb3cdf401cb972889063c2c132~mv2.png"
 SOURCE_SYSTEM = "CHARITYDATA_CA"
 JURISDICTION = "CA"
 CURRENCY = "CAD"
@@ -33,7 +34,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 GLFN_DEMO_DIR = REPO_ROOT / "demo_data" / "glfn"
 
 st.set_page_config(
-    page_title="C4C CA Charity Ingestion",
+    page_title="OrgGraph (CA)",
     page_icon=C4C_LOGO_URL,
     layout="wide"
 )
@@ -623,13 +624,12 @@ def main():
     with col_logo:
         st.image(C4C_LOGO_URL, width=60)
     with col_title:
-        st.title("C4C CA Charity Ingestion")
+        st.title("OrgGraph (CA)")
     
     st.markdown("""
-    Parse **charitydata.ca** exports and build the GLFN network graph.
-    
-    *Outputs conform to C4C Network Schema v1.*
+    OrgGraph currently supports US and Canadian nonprofit registries; additional sources will be added in the future.
     """)
+    st.caption(f"v{APP_VERSION}")
     
     st.divider()
     
