@@ -1,15 +1,13 @@
 """
-C4C Canadian Charity Ingestion — Streamlit App
+C4C Network Intelligence — CA Charity Ingestion
 
-Upload charitydata.ca exports and generate network-ready CSVs.
+Dual-mode Streamlit app:
+- GLFN Demo: Load pre-built canonical graph from repo
+- New Project: Upload charitydata.ca exports and generate canonical outputs
 
 Outputs conform to C4C Network Schema v1 (MVP):
 - nodes.csv: ORG and PERSON nodes
 - edges.csv: GRANT and BOARD_MEMBERSHIP edges
-
-Supports two modes:
-- Existing Project: Load pre-curated data from repo (e.g., GLFN demo)
-- New Project: Upload files for ad-hoc analysis
 """
 
 import streamlit as st
@@ -18,7 +16,6 @@ import json
 import re
 import hashlib
 import zipfile
-import os
 from pathlib import Path
 from io import BytesIO, StringIO
 
@@ -31,8 +28,9 @@ SOURCE_SYSTEM = "CHARITYDATA_CA"
 JURISDICTION = "CA"
 CURRENCY = "CAD"
 
-# Demo data location (relative to app.py)
-DEMO_DATA_ROOT = Path(__file__).parent.parent / "demo_data" / "ca"
+# Demo data paths (relative to app location)
+REPO_ROOT = Path(__file__).resolve().parent.parent
+GLFN_DEMO_DIR = REPO_ROOT / "demo_data" / "glfn"
 
 st.set_page_config(
     page_title="C4C CA Charity Ingestion",
@@ -41,41 +39,23 @@ st.set_page_config(
 )
 
 # =============================================================================
-# Header
+# Canonical Schema Columns
 # =============================================================================
 
-col_logo, col_title = st.columns([0.08, 0.92])
-with col_logo:
-    st.image(C4C_LOGO_URL, width=60)
-with col_title:
-    st.title("C4C Canadian Charity Ingestion")
+NODE_COLUMNS = [
+    "node_id", "node_type", "label", "org_slug", "jurisdiction", "tax_id",
+    "city", "region", "source_system", "source_ref", "assets_latest", "assets_year",
+    "first_name", "last_name"
+]
 
-st.markdown("""
-Parse **charitydata.ca** exports for Canadian foundations and generate:
-- **Unified nodes.csv** (organizations + people)
-- **Unified edges.csv** (grants + board memberships)
-
-*Outputs conform to C4C Network Schema v1.*
-""")
-
-st.divider()
-
-# =============================================================================
-# Project Mode Selector
-# =============================================================================
-
-st.subheader("📂 Select Project Mode")
-
-project_mode = st.radio(
-    "How would you like to load data?",
-    ["🗂️ Existing Project (GLFN Demo)", "📤 New Project (Upload Files)"],
-    horizontal=True,
-    help="Existing Project loads pre-curated data. New Project lets you upload your own files."
-)
-
-is_existing_project = "Existing" in project_mode
-
-st.divider()
+EDGE_COLUMNS = [
+    "edge_id", "from_id", "to_id", "edge_type",
+    "amount", "amount_cash", "amount_in_kind", "currency",
+    "fiscal_year", "reporting_period", "purpose",
+    "role", "start_date", "end_date", "at_arms_length",
+    "city", "region",
+    "source_system", "source_ref"
+]
 
 # =============================================================================
 # Parsing Functions
@@ -84,34 +64,9 @@ st.divider()
 HEADER_RE = re.compile(r"^(.*)\s+\((\d{9}RR\d{4})\)\s*$")
 
 
-def read_charitydata_csv_from_upload(uploaded_file) -> tuple:
-    """
-    Read a charitydata.ca CSV file from Streamlit upload.
-    
-    Returns: (DataFrame, org_name, cra_bn)
-    """
-    content = uploaded_file.getvalue().decode("utf-8")
-    return _parse_charitydata_content(content)
-
-
-def read_charitydata_csv_from_path(file_path: Path) -> tuple:
-    """
-    Read a charitydata.ca CSV file from disk.
-    
-    Returns: (DataFrame, org_name, cra_bn)
-    """
-    if not file_path.exists():
-        return pd.DataFrame(), "", ""
-    
-    with open(file_path, "r", encoding="utf-8") as f:
-        content = f.read()
-    return _parse_charitydata_content(content)
-
-
 def _parse_charitydata_content(content: str) -> tuple:
     """
     Parse charitydata.ca CSV content.
-    
     Returns: (DataFrame, org_name, cra_bn)
     """
     lines = content.split("\n")
@@ -140,28 +95,10 @@ def _parse_charitydata_content(content: str) -> tuple:
     return df, org_name, cra_bn
 
 
-def scan_demo_orgs(demo_root: Path) -> list:
-    """
-    Scan demo data folder for available org_slug directories.
-    
-    Returns: list of (org_slug, display_name) tuples
-    """
-    if not demo_root.exists():
-        return []
-    
-    orgs = []
-    for org_dir in sorted(demo_root.iterdir()):
-        if org_dir.is_dir() and not org_dir.name.startswith('.'):
-            # Try to get display name from assets.csv header
-            display_name = org_dir.name.replace("-", " ").title()
-            assets_path = org_dir / "assets.csv"
-            if assets_path.exists():
-                _, org_name, _ = read_charitydata_csv_from_path(assets_path)
-                if org_name:
-                    display_name = org_name
-            orgs.append((org_dir.name, display_name))
-    
-    return orgs
+def read_charitydata_csv_from_upload(uploaded_file) -> tuple:
+    """Read a charitydata.ca CSV from Streamlit upload."""
+    content = uploaded_file.getvalue().decode("utf-8")
+    return _parse_charitydata_content(content)
 
 
 def latest_year_column(df: pd.DataFrame) -> str:
@@ -217,7 +154,6 @@ def extract_fiscal_year(reporting_period: str) -> int:
     if not reporting_period:
         return None
     rp = str(reporting_period).strip()
-    # Try to extract 4-digit year
     match = re.search(r'(\d{4})', rp)
     if match:
         return int(match.group(1))
@@ -230,125 +166,43 @@ def generate_edge_hash(s: str) -> str:
 
 
 # =============================================================================
-# Data Input (Mode-Dependent)
+# Data Loading Functions
 # =============================================================================
 
-# Initialize file/data holders
-assets_df = pd.DataFrame()
-directors_df = pd.DataFrame()
-grants_df = pd.DataFrame()
-org_name = ""
-cra_bn = ""
-data_loaded = False
+def load_glfn_demo() -> tuple:
+    """
+    Load pre-built canonical graph from demo_data/glfn/.
+    Returns: (nodes_df, edges_df, org_attributes)
+    """
+    nodes_path = GLFN_DEMO_DIR / "nodes.csv"
+    edges_path = GLFN_DEMO_DIR / "edges.csv"
+    org_attr_path = GLFN_DEMO_DIR / "org_attributes.json"
+    
+    if not nodes_path.exists() or not edges_path.exists():
+        return None, None, None
+    
+    nodes_df = pd.read_csv(nodes_path)
+    edges_df = pd.read_csv(edges_path)
+    
+    org_attributes = {}
+    if org_attr_path.exists():
+        with open(org_attr_path, "r") as f:
+            org_attributes = json.load(f)
+    
+    return nodes_df, edges_df, org_attributes
 
-if is_existing_project:
-    # -------------------------------------------------------------------------
-    # Existing Project Mode: Load from demo_data folder
-    # -------------------------------------------------------------------------
-    st.subheader("🗂️ Select Organization")
-    
-    available_orgs = scan_demo_orgs(DEMO_DATA_ROOT)
-    
-    if not available_orgs:
-        st.warning(f"""
-        **No demo data found.**
-        
-        To use Existing Project mode, add organization folders to:
-        ```
-        demo_data/ca/<org_slug>/
-          ├── assets.csv
-          ├── directors-trustees.csv
-          └── grants.csv
-        ```
-        
-        Or switch to **New Project** mode to upload files.
-        """)
-    else:
-        # Build selection options
-        org_options = {f"{display} ({slug})": slug for slug, display in available_orgs}
-        
-        selected_display = st.selectbox(
-            "Choose an organization to analyze:",
-            options=list(org_options.keys()),
-            help=f"Found {len(available_orgs)} organizations in demo data"
-        )
-        
-        if selected_display:
-            selected_slug = org_options[selected_display]
-            org_dir = DEMO_DATA_ROOT / selected_slug
-            
-            # Show what files are available
-            assets_path = org_dir / "assets.csv"
-            directors_path = org_dir / "directors-trustees.csv"
-            grants_path = org_dir / "grants.csv"
-            
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                if assets_path.exists():
-                    st.success("✅ assets.csv")
-                else:
-                    st.warning("⚠️ assets.csv not found")
-            with col2:
-                if directors_path.exists():
-                    st.success("✅ directors-trustees.csv")
-                else:
-                    st.warning("⚠️ directors-trustees.csv not found")
-            with col3:
-                if grants_path.exists():
-                    st.success("✅ grants.csv")
-                else:
-                    st.warning("⚠️ grants.csv not found")
-            
-            # Load the data
-            if assets_path.exists():
-                assets_df, org_name, cra_bn = read_charitydata_csv_from_path(assets_path)
-            if directors_path.exists():
-                directors_df, dir_org, dir_bn = read_charitydata_csv_from_path(directors_path)
-                if not org_name:
-                    org_name = dir_org
-                if not cra_bn:
-                    cra_bn = dir_bn
-            if grants_path.exists():
-                grants_df, gr_org, gr_bn = read_charitydata_csv_from_path(grants_path)
-                if not org_name:
-                    org_name = gr_org
-                if not cra_bn:
-                    cra_bn = gr_bn
-            
-            data_loaded = not assets_df.empty or not directors_df.empty or not grants_df.empty
 
-else:
-    # -------------------------------------------------------------------------
-    # New Project Mode: Upload files
-    # -------------------------------------------------------------------------
-    st.subheader("📤 Upload Files")
-    
-    st.markdown("""
-    Upload the CSV files exported from **charitydata.ca** for one organization:
-    """)
-    
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        assets_file = st.file_uploader(
-            "assets.csv",
-            type=["csv"],
-            help="Financial data with total assets by year"
-        )
-    
-    with col2:
-        directors_file = st.file_uploader(
-            "directors-trustees.csv",
-            type=["csv"],
-            help="Board members and trustees"
-        )
-    
-    with col3:
-        grants_file = st.file_uploader(
-            "grants.csv",
-            type=["csv"],
-            help="Grants to qualified donees (auto-filters to most recent year)"
-        )
+def process_uploaded_files(assets_file, directors_file, grants_file) -> tuple:
+    """
+    Process uploaded charitydata.ca files and return canonical outputs.
+    Returns: (nodes_df, edges_df, org_attributes)
+    """
+    # Initialize
+    assets_df = pd.DataFrame()
+    directors_df = pd.DataFrame()
+    grants_df = pd.DataFrame()
+    org_name = ""
+    cra_bn = ""
     
     # Load uploaded files
     if assets_file:
@@ -366,65 +220,41 @@ else:
         if not cra_bn:
             cra_bn = gr_bn
     
-    data_loaded = assets_file or directors_file or grants_file
-
-st.divider()
-
-# =============================================================================
-# Process Data
-# =============================================================================
-
-if data_loaded:
+    if not org_name:
+        return pd.DataFrame(), pd.DataFrame(), {}
     
-    # Initialize processing variables
-    org_slug = slugify_loose(org_name) if org_name else ""
-    latest_year = None
-    total_assets = None
+    # Processing variables
+    org_slug = slugify_loose(org_name)
+    latest_year, total_assets = extract_total_assets(assets_df) if not assets_df.empty else (None, None)
     fiscal_year = None
-    foundation_node_id = ""
+    foundation_node_id = f"org:{org_slug}"
     
-    # Canonical schema collections
-    nodes = []  # All nodes (ORG + PERSON)
-    edges = []  # All edges (GRANT + BOARD_MEMBERSHIP)
+    # Collections
+    nodes = []
+    edges = []
+    seen_node_ids = set()
     
-    seen_node_ids = set()  # Deduplication
-    
-    # -------------------------------------------------------------------------
-    # Extract assets info
-    # -------------------------------------------------------------------------
-    if not assets_df.empty:
-        latest_year, total_assets = extract_total_assets(assets_df)
-        st.success(f"✅ **assets.csv** — Loaded")
-    
-    # -------------------------------------------------------------------------
     # Create foundation ORG node
-    # -------------------------------------------------------------------------
-    if org_slug:
-        foundation_node_id = f"org:{org_slug}"
-        if foundation_node_id not in seen_node_ids:
-            nodes.append({
-                "node_id": foundation_node_id,
-                "node_type": "ORG",
-                "label": org_name,
-                "org_slug": org_slug,
-                "jurisdiction": JURISDICTION,
-                "tax_id": cra_bn,
-                "city": "",
-                "region": "",
-                "source_system": SOURCE_SYSTEM,
-                "source_ref": cra_bn,
-                "assets_latest": total_assets,
-                "assets_year": latest_year,
-                "first_name": "",
-                "last_name": "",
-            })
-            seen_node_ids.add(foundation_node_id)
+    nodes.append({
+        "node_id": foundation_node_id,
+        "node_type": "ORG",
+        "label": org_name,
+        "org_slug": org_slug,
+        "jurisdiction": JURISDICTION,
+        "tax_id": cra_bn,
+        "city": "",
+        "region": "",
+        "source_system": SOURCE_SYSTEM,
+        "source_ref": cra_bn,
+        "assets_latest": total_assets,
+        "assets_year": latest_year,
+        "first_name": "",
+        "last_name": "",
+    })
+    seen_node_ids.add(foundation_node_id)
     
-    # -------------------------------------------------------------------------
-    # Process directors-trustees
-    # -------------------------------------------------------------------------
-    board_count = 0
-    if not directors_df.empty and foundation_node_id:
+    # Process directors
+    if not directors_df.empty:
         for _, r in directors_df.iterrows():
             last = clean_nan(r.get("Last Name", ""))
             first = clean_nan(r.get("First Name", ""))
@@ -436,11 +266,9 @@ if data_loaded:
             if not last and not first:
                 continue
             
-            # Person node ID (contextual identity)
             person_key = f"{org_slug}:{last}|{first}|{appointed}"
             person_node_id = f"person:{person_key}"
             
-            # Add PERSON node
             if person_node_id not in seen_node_ids:
                 nodes.append({
                     "node_id": person_node_id,
@@ -460,9 +288,7 @@ if data_loaded:
                 })
                 seen_node_ids.add(person_node_id)
             
-            # Add BOARD_MEMBERSHIP edge
             edge_id = f"bm:{person_node_id}->{foundation_node_id}:{appointed or 'unknown'}"
-            
             edges.append({
                 "edge_id": edge_id,
                 "from_id": person_node_id,
@@ -484,40 +310,27 @@ if data_loaded:
                 "source_system": SOURCE_SYSTEM,
                 "source_ref": f"{org_slug}/directors-trustees.csv",
             })
-            
-            board_count += 1
-        
-        st.success(f"✅ **directors-trustees.csv** — {board_count} board members")
     
-    # -------------------------------------------------------------------------
     # Process grants
-    # -------------------------------------------------------------------------
-    grant_count = 0
-    if not grants_df.empty and foundation_node_id:
+    if not grants_df.empty:
         # MVP DESIGN CHOICE (Canada parity):
         # charitydata.ca exports grants across many years. For sprint parity with US IRS 990 analysis
         # (which is typically based on the most recent filing), we filter grant rows to the most
         # recent fiscal year present in the dataset. We preserve the ability to analyze multi-year
         # trends later, but for now we standardize on "latest-year grants" for comparability.
         
-        # Filter to most recent reporting period only
-        total_rows = len(grants_df)
         grants_filtered = grants_df.copy()
         
         if "Reporting Period" in grants_filtered.columns:
-            # Get unique periods and find the most recent one
             periods = grants_filtered["Reporting Period"].dropna().unique()
             if len(periods) > 0:
-                # Handle edge case: some periods might be malformed
                 try:
                     latest_period = sorted(periods, reverse=True)[0]
                 except Exception:
-                    latest_period = periods[0]  # Fallback to first available
+                    latest_period = periods[0]
                 
                 grants_filtered = grants_filtered[grants_filtered["Reporting Period"] == latest_period]
-                filtered_rows = len(grants_filtered)
                 fiscal_year = extract_fiscal_year(latest_period)
-                st.info(f"📅 Filtered to most recent period: **{latest_period}** ({filtered_rows} of {total_rows} grants)")
         
         for _, r in grants_filtered.iterrows():
             donee = clean_nan(r.get("Donee Name", ""))
@@ -530,7 +343,6 @@ if data_loaded:
             amt = r.get("Reported Amount ($)", 0)
             gik = r.get("Gifts In Kind ($)", 0)
             
-            # Parse amounts
             try:
                 amt_cash = float(amt) if pd.notna(amt) else 0
             except:
@@ -541,14 +353,12 @@ if data_loaded:
                 amt_in_kind = 0
             amt_total = amt_cash + amt_in_kind
             
-            # Donee org_slug
             donee_slug = f"donee-{slugify_loose(donee)}"
             if prov:
                 donee_slug = f"{donee_slug}-{prov.lower()}"
             
             donee_node_id = f"org:{donee_slug}"
             
-            # Add donee ORG node
             if donee_node_id not in seen_node_ids:
                 nodes.append({
                     "node_id": donee_node_id,
@@ -568,7 +378,6 @@ if data_loaded:
                 })
                 seen_node_ids.add(donee_node_id)
             
-            # Add GRANT edge
             fy = extract_fiscal_year(period) or fiscal_year
             if amt_total > 0:
                 edge_id = f"gr:{foundation_node_id}->{donee_node_id}:{fy}:{int(amt_total)}"
@@ -597,109 +406,12 @@ if data_loaded:
                 "source_system": SOURCE_SYSTEM,
                 "source_ref": f"{org_slug}/grants.csv",
             })
-            
-            grant_count += 1
-        
-        st.success(f"✅ **grants** — {grant_count} grants loaded")
     
-    st.divider()
+    # Build DataFrames
+    nodes_df = pd.DataFrame(nodes).reindex(columns=NODE_COLUMNS) if nodes else pd.DataFrame()
+    edges_df = pd.DataFrame(edges).reindex(columns=EDGE_COLUMNS) if edges else pd.DataFrame()
     
-    # -------------------------------------------------------------------------
-    # Summary
-    # -------------------------------------------------------------------------
-    st.subheader("📊 Summary")
-    
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        st.metric("Organization", org_name or "Unknown")
-    with col2:
-        st.metric("CRA BN", cra_bn or "—")
-    with col3:
-        if total_assets:
-            st.metric(f"Total Assets ({latest_year})", f"${total_assets:,.0f}")
-        else:
-            st.metric("Total Assets", "—")
-    
-    # Count by type
-    nodes_df = pd.DataFrame(nodes) if nodes else pd.DataFrame()
-    edges_df = pd.DataFrame(edges) if edges else pd.DataFrame()
-    
-    org_nodes = len(nodes_df[nodes_df["node_type"] == "ORG"]) if not nodes_df.empty else 0
-    person_nodes = len(nodes_df[nodes_df["node_type"] == "PERSON"]) if not nodes_df.empty else 0
-    grant_edges_count = len(edges_df[edges_df["edge_type"] == "GRANT"]) if not edges_df.empty else 0
-    board_edges = len(edges_df[edges_df["edge_type"] == "BOARD_MEMBERSHIP"]) if not edges_df.empty else 0
-    
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        st.metric("ORG Nodes", org_nodes)
-    with col2:
-        st.metric("PERSON Nodes", person_nodes)
-    with col3:
-        st.metric("GRANT Edges", grant_edges_count)
-    with col4:
-        st.metric("BOARD Edges", board_edges)
-    
-    st.divider()
-    
-    # -------------------------------------------------------------------------
-    # Data Previews
-    # -------------------------------------------------------------------------
-    st.subheader("📋 Data Preview")
-    st.caption("Preview of extracted data. Downloads include full schema with all IDs.")
-    
-    tab1, tab2 = st.tabs(["Nodes", "Edges"])
-    
-    with tab1:
-        if not nodes_df.empty:
-            # Show user-friendly columns
-            display_cols = ["node_type", "label", "jurisdiction", "city", "region", "tax_id"]
-            display_cols = [c for c in display_cols if c in nodes_df.columns]
-            st.dataframe(nodes_df[display_cols], use_container_width=True, hide_index=True)
-            st.caption(f"{len(nodes_df)} total nodes")
-        else:
-            st.info("No nodes found.")
-    
-    with tab2:
-        if not edges_df.empty:
-            # Show user-friendly columns
-            display_cols = ["edge_type", "from_id", "to_id", "amount", "role", "fiscal_year"]
-            display_cols = [c for c in display_cols if c in edges_df.columns]
-            st.dataframe(edges_df[display_cols], use_container_width=True, hide_index=True)
-            st.caption(f"{len(edges_df)} total edges")
-        else:
-            st.info("No edges found.")
-    
-    st.divider()
-    
-    # -------------------------------------------------------------------------
-    # Downloads
-    # -------------------------------------------------------------------------
-    st.subheader("📥 Download Outputs")
-    
-    # Define canonical column order
-    NODE_COLUMNS = [
-        "node_id", "node_type", "label", "org_slug", "jurisdiction", "tax_id",
-        "city", "region", "source_system", "source_ref", "assets_latest", "assets_year",
-        "first_name", "last_name"
-    ]
-    
-    EDGE_COLUMNS = [
-        "edge_id", "from_id", "to_id", "edge_type",
-        "amount", "amount_cash", "amount_in_kind", "currency",
-        "fiscal_year", "reporting_period", "purpose",
-        "role", "start_date", "end_date", "at_arms_length",
-        "city", "region",
-        "source_system", "source_ref"
-    ]
-    
-    # Reorder columns to canonical order
-    if not nodes_df.empty:
-        nodes_df = nodes_df.reindex(columns=NODE_COLUMNS)
-    if not edges_df.empty:
-        edges_df = edges_df.reindex(columns=EDGE_COLUMNS)
-    
-    # Build org_attributes.json
+    # Build org_attributes
     org_attributes = {
         "schema_version": "1.0-mvp",
         "org_slug": org_slug,
@@ -714,32 +426,112 @@ if data_loaded:
         "notes": ""
     }
     
+    return nodes_df, edges_df, org_attributes
+
+
+# =============================================================================
+# UI Rendering Functions
+# =============================================================================
+
+def render_graph_summary(nodes_df: pd.DataFrame, edges_df: pd.DataFrame, org_attributes: dict) -> None:
+    """Render summary metrics and data preview for the loaded graph."""
+    
+    if nodes_df is None or nodes_df.empty:
+        st.warning("No graph data loaded.")
+        return
+    
+    # Org info header
+    if org_attributes:
+        st.subheader(f"📊 {org_attributes.get('org_display_name', 'Graph Summary')}")
+        
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("Organization", org_attributes.get("org_legal_name", "—"))
+        with col2:
+            st.metric("Tax ID", org_attributes.get("tax_id", "—"))
+        with col3:
+            assets = org_attributes.get("assets_latest")
+            year = org_attributes.get("assets_year")
+            if assets and assets != "":
+                st.metric(f"Total Assets ({year})", f"${float(assets):,.0f}")
+            else:
+                st.metric("Total Assets", "—")
+    else:
+        st.subheader("📊 Graph Summary")
+    
+    st.divider()
+    
+    # Node/Edge counts
+    org_nodes = len(nodes_df[nodes_df["node_type"] == "ORG"]) if "node_type" in nodes_df.columns else 0
+    person_nodes = len(nodes_df[nodes_df["node_type"] == "PERSON"]) if "node_type" in nodes_df.columns else 0
+    grant_edges = len(edges_df[edges_df["edge_type"] == "GRANT"]) if not edges_df.empty and "edge_type" in edges_df.columns else 0
+    board_edges = len(edges_df[edges_df["edge_type"] == "BOARD_MEMBERSHIP"]) if not edges_df.empty and "edge_type" in edges_df.columns else 0
+    
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("ORG Nodes", org_nodes)
+    with col2:
+        st.metric("PERSON Nodes", person_nodes)
+    with col3:
+        st.metric("GRANT Edges", grant_edges)
+    with col4:
+        st.metric("BOARD Edges", board_edges)
+    
+    st.divider()
+    
+    # Data preview
+    st.subheader("📋 Data Preview")
+    
+    tab1, tab2 = st.tabs(["Nodes", "Edges"])
+    
+    with tab1:
+        display_cols = ["node_type", "label", "jurisdiction", "city", "region", "tax_id"]
+        display_cols = [c for c in display_cols if c in nodes_df.columns]
+        st.dataframe(nodes_df[display_cols], use_container_width=True, hide_index=True)
+        st.caption(f"{len(nodes_df)} total nodes")
+    
+    with tab2:
+        if not edges_df.empty:
+            display_cols = ["edge_type", "from_id", "to_id", "amount", "role", "fiscal_year"]
+            display_cols = [c for c in display_cols if c in edges_df.columns]
+            st.dataframe(edges_df[display_cols], use_container_width=True, hide_index=True)
+            st.caption(f"{len(edges_df)} total edges")
+        else:
+            st.info("No edges found.")
+
+
+def render_downloads(nodes_df: pd.DataFrame, edges_df: pd.DataFrame, org_attributes: dict) -> None:
+    """Render download buttons for canonical outputs."""
+    
+    if nodes_df is None or nodes_df.empty:
+        return
+    
+    st.divider()
+    st.subheader("📥 Download Outputs")
+    
+    org_slug = org_attributes.get("org_slug", "export") if org_attributes else "export"
+    
     def create_zip_download():
-        """Create a zip file with canonical outputs."""
         zip_buffer = BytesIO()
         with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
-            # Canonical outputs
             if not nodes_df.empty:
                 zf.writestr("nodes.csv", nodes_df.to_csv(index=False))
             if not edges_df.empty:
                 zf.writestr("edges.csv", edges_df.to_csv(index=False))
-            # Org metadata
-            zf.writestr("org_attributes.json", json.dumps(org_attributes, indent=2))
-        
+            if org_attributes:
+                zf.writestr("org_attributes.json", json.dumps(org_attributes, indent=2))
         zip_buffer.seek(0)
         return zip_buffer.getvalue()
     
-    # Download All button
     st.download_button(
         label="📦 Download All (ZIP)",
         data=create_zip_download(),
-        file_name=f"c4c_ca_{org_slug or 'export'}.zip",
+        file_name=f"c4c_{org_slug}.zip",
         mime="application/zip",
         type="primary",
         use_container_width=True
     )
     
-    # Individual downloads
     st.markdown("**Or download individually:**")
     
     col1, col2, col3 = st.columns(3)
@@ -763,15 +555,130 @@ if data_loaded:
             )
     
     with col3:
-        st.download_button(
-            label="📄 org_attributes.json",
-            data=json.dumps(org_attributes, indent=2),
-            file_name="org_attributes.json",
-            mime="application/json"
-        )
+        if org_attributes:
+            st.download_button(
+                label="📄 org_attributes.json",
+                data=json.dumps(org_attributes, indent=2),
+                file_name="org_attributes.json",
+                mime="application/json"
+            )
 
-else:
-    if is_existing_project:
-        st.info("👆 Select an organization from the demo data to analyze.")
+
+# =============================================================================
+# Main App
+# =============================================================================
+
+def main():
+    # Header
+    col_logo, col_title = st.columns([0.08, 0.92])
+    with col_logo:
+        st.image(C4C_LOGO_URL, width=60)
+    with col_title:
+        st.title("C4C Network Intelligence")
+    
+    st.markdown("""
+    Parse nonprofit data and generate canonical network graphs for analysis.
+    
+    *Outputs conform to C4C Network Schema v1.*
+    """)
+    
+    st.divider()
+    
+    # Project Mode Selector
+    project_mode = st.selectbox(
+        "Project",
+        ["GLFN Demo (pre-loaded)", "New Project (upload)"],
+        index=0,
+        help="GLFN Demo loads pre-built data. New Project lets you upload files."
+    )
+    
+    st.divider()
+    
+    # Initialize outputs
+    nodes_df = pd.DataFrame()
+    edges_df = pd.DataFrame()
+    org_attributes = {}
+    
+    if project_mode == "GLFN Demo (pre-loaded)":
+        # ---------------------------------------------------------------------
+        # GLFN Demo Mode
+        # ---------------------------------------------------------------------
+        st.caption("📂 Loading canonical graph from `demo_data/glfn/`...")
+        
+        nodes_df, edges_df, org_attributes = load_glfn_demo()
+        
+        if nodes_df is None:
+            st.error(f"""
+            **Demo data not found.**
+            
+            Expected files at:
+            ```
+            {GLFN_DEMO_DIR}/nodes.csv
+            {GLFN_DEMO_DIR}/edges.csv
+            ```
+            
+            Please ensure demo data is committed to the repo, or switch to **New Project** mode.
+            """)
+            st.stop()
+        
+        st.success(f"✅ Loaded GLFN demo data: {len(nodes_df)} nodes, {len(edges_df)} edges")
+        
     else:
-        st.info("👆 Upload at least one CSV file to get started.")
+        # ---------------------------------------------------------------------
+        # New Project (Upload) Mode
+        # ---------------------------------------------------------------------
+        st.subheader("📤 Upload charitydata.ca Files")
+        
+        st.markdown("""
+        Upload CSV files exported from **charitydata.ca** for one organization.
+        Grants are automatically filtered to the most recent reporting period.
+        """)
+        
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            assets_file = st.file_uploader(
+                "assets.csv",
+                type=["csv"],
+                help="Financial data with total assets by year"
+            )
+        
+        with col2:
+            directors_file = st.file_uploader(
+                "directors-trustees.csv",
+                type=["csv"],
+                help="Board members and trustees"
+            )
+        
+        with col3:
+            grants_file = st.file_uploader(
+                "grants.csv",
+                type=["csv"],
+                help="Grants to qualified donees"
+            )
+        
+        if not (assets_file or directors_file or grants_file):
+            st.info("👆 Upload at least one CSV file to generate the graph.")
+            st.stop()
+        
+        # Process uploads
+        with st.spinner("Processing uploads..."):
+            nodes_df, edges_df, org_attributes = process_uploaded_files(
+                assets_file, directors_file, grants_file
+            )
+        
+        if nodes_df.empty:
+            st.warning("Could not extract any data from uploaded files.")
+            st.stop()
+        
+        st.success(f"✅ Processed: {len(nodes_df)} nodes, {len(edges_df)} edges")
+    
+    # ---------------------------------------------------------------------
+    # Common Output (both modes)
+    # ---------------------------------------------------------------------
+    render_graph_summary(nodes_df, edges_df, org_attributes)
+    render_downloads(nodes_df, edges_df, org_attributes)
+
+
+if __name__ == "__main__":
+    main()
