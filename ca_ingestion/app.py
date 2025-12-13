@@ -165,14 +165,6 @@ with col3:
         help="Grants to qualified donees (auto-filters to most recent year)"
     )
 
-# Org slug input
-st.text_input(
-    "Organization slug (optional)",
-    key="org_slug_input",
-    placeholder="e.g., toronto-foundation",
-    help="Used for node IDs. If blank, will be derived from org name."
-)
-
 st.divider()
 
 # =============================================================================
@@ -184,7 +176,7 @@ if assets_file or directors_file or grants_file:
     # Initialize results
     org_name = ""
     cra_bn = ""
-    org_slug = st.session_state.get("org_slug_input", "")
+    org_slug = ""  # Derived automatically from org name
     latest_year = None
     total_assets = None
     
@@ -242,6 +234,7 @@ if assets_file or directors_file or grants_file:
                     "edge_type": "BOARD_MEMBERSHIP",
                     "source_id": person_id,
                     "target_id": f"org:{org_slug}",
+                    "name": f"{first} {last}".strip(),
                     "position": position,
                     "appointed": appointed,
                     "ceased": ceased,
@@ -305,6 +298,7 @@ if assets_file or directors_file or grants_file:
                     "edge_type": "GRANT",
                     "source_id": f"org:{org_slug}",
                     "target_id": donee_id,
+                    "donee_name": donee,
                     "reporting_period": period,
                     "reported_amount": amt,
                     "gifts_in_kind": gik,
@@ -321,11 +315,11 @@ if assets_file or directors_file or grants_file:
     # -------------------------------------------------------------------------
     st.subheader("📊 Summary")
     
-    # Derive org_slug if still empty
+    # Derive org_slug if still empty (used internally for IDs)
     if not org_slug and org_name:
         org_slug = slugify_loose(org_name)
     
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2, col3 = st.columns(3)
     
     with col1:
         st.metric("Organization", org_name or "Unknown")
@@ -336,8 +330,6 @@ if assets_file or directors_file or grants_file:
             st.metric(f"Total Assets ({latest_year})", f"${total_assets:,.0f}")
         else:
             st.metric("Total Assets", "—")
-    with col4:
-        st.metric("Org Slug", org_slug or "—")
     
     col1, col2, col3 = st.columns(3)
     with col1:
@@ -375,30 +367,39 @@ if assets_file or directors_file or grants_file:
     # Data Previews
     # -------------------------------------------------------------------------
     st.subheader("📋 Data Preview")
+    st.caption("Preview of extracted data. Downloads include full data with network IDs.")
     
     tab1, tab2, tab3, tab4 = st.tabs(["Board Members", "Donees", "Board Edges", "Grant Edges"])
     
     with tab1:
         if not nodes_people_df.empty:
-            st.dataframe(nodes_people_df, use_container_width=True, hide_index=True)
+            # Hide technical ID columns for display
+            display_cols = [c for c in nodes_people_df.columns if c not in ['person_id', 'org_slug_context']]
+            st.dataframe(nodes_people_df[display_cols], use_container_width=True, hide_index=True)
         else:
             st.info("No board members found.")
     
     with tab2:
         if not nodes_donees_df.empty:
-            st.dataframe(nodes_donees_df, use_container_width=True, hide_index=True)
+            # Hide donee_id for display
+            display_cols = [c for c in nodes_donees_df.columns if c != 'donee_id']
+            st.dataframe(nodes_donees_df[display_cols], use_container_width=True, hide_index=True)
         else:
             st.info("No donees found.")
     
     with tab3:
         if not edges_board_df.empty:
-            st.dataframe(edges_board_df, use_container_width=True, hide_index=True)
+            # Hide technical ID columns for display
+            display_cols = [c for c in edges_board_df.columns if c not in ['source_id', 'target_id', 'edge_type']]
+            st.dataframe(edges_board_df[display_cols], use_container_width=True, hide_index=True)
         else:
             st.info("No board membership edges.")
     
     with tab4:
         if not edges_grants_df.empty:
-            st.dataframe(edges_grants_df, use_container_width=True, hide_index=True)
+            # Hide technical ID columns for display
+            display_cols = [c for c in edges_grants_df.columns if c not in ['source_id', 'target_id', 'edge_type']]
+            st.dataframe(edges_grants_df[display_cols], use_container_width=True, hide_index=True)
         else:
             st.info("No grant edges.")
     
