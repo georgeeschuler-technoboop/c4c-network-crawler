@@ -97,10 +97,25 @@ def render_card(card: dict):
         # Ranked rows with narratives
         ranked_rows = card.get("ranked_rows", [])
         if ranked_rows:
-            # Check if rows have narratives
+            # Check what type of rows we have
             has_narratives = any(r.get("narrative") for r in ranked_rows)
+            has_interpretations = any(r.get("interpretation") for r in ranked_rows)
             
-            if has_narratives:
+            if has_interpretations and not has_narratives:
+                # Health-style indicators: render as vertical metric blocks
+                st.markdown("---")
+                for row in ranked_rows:
+                    indicator = row.get("indicator", "")
+                    value = row.get("value", "")
+                    interpretation = row.get("interpretation", "")
+                    
+                    # Metric with value prominent
+                    st.markdown(f"**{indicator}:** {value}")
+                    if interpretation:
+                        st.caption(f"↳ {interpretation}")
+                    st.markdown("")  # spacing
+                    
+            elif has_narratives:
                 # Render as expandable narrative sections
                 for row in ranked_rows:
                     # Determine the entity name
