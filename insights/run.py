@@ -1169,6 +1169,22 @@ def generate_markdown_report(insight_cards: dict, project_summary: dict, project
     lines.append(f"## {health_emoji} Network Health: {health_score}/100 ({health_label})")
     lines.append("")
     
+    # Health indicators from the network_health card
+    cards = insight_cards.get("cards", [])
+    health_card = next((c for c in cards if c.get("card_id") == "network_health"), None)
+    if health_card:
+        indicators = health_card.get("ranked_rows", [])
+        for row in indicators:
+            indicator = row.get("indicator", "")
+            value = row.get("value", "")
+            interpretation = row.get("interpretation", "")
+            
+            if indicator != "Health Score":  # Skip health score since it's in the header
+                lines.append(f"**{indicator}:** {value}")
+                if interpretation:
+                    lines.append(f"> {interpretation}")
+                lines.append("")
+    
     # Health factors
     positive = health.get("positive", [])
     risk = health.get("risk", [])
@@ -1240,6 +1256,17 @@ def generate_markdown_report(insight_cards: dict, project_summary: dict, project
                     if row.get("recommendation"):
                         lines.append(row["recommendation"])
                         lines.append("")
+            elif any(r.get("interpretation") for r in ranked_rows):
+                # Health-style indicators: render as vertical list
+                for row in ranked_rows:
+                    indicator = row.get("indicator", "")
+                    value = row.get("value", "")
+                    interpretation = row.get("interpretation", "")
+                    
+                    lines.append(f"**{indicator}:** {value}")
+                    if interpretation:
+                        lines.append(f"> {interpretation}")
+                    lines.append("")
             else:
                 # Simple table
                 if ranked_rows:
