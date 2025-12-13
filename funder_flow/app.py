@@ -1,5 +1,5 @@
 """
-C4C 990 Funder Flow — Network Intelligence Engine
+OrgGraph (US) — US Nonprofit Registry Ingestion
 
 Dual-mode Streamlit app:
 - GLFN Demo: Load pre-built canonical graph from repo
@@ -31,8 +31,9 @@ from c4c_utils.network_export import build_nodes_df, build_edges_df, NODE_COLUMN
 # Constants
 # =============================================================================
 
+APP_VERSION = "0.3.0"
 MAX_FILES = 50
-C4C_LOGO_URL = "https://static.wixstatic.com/media/275a3f_9e232fe9e6914305a7ea8746e2e77125~mv2.png"
+C4C_LOGO_URL = "https://static.wixstatic.com/media/275a3f_71fc58eb3cdf401cb972889063c2c132~mv2.png"
 SOURCE_SYSTEM = "IRS_990"
 JURISDICTION = "US"
 
@@ -46,7 +47,7 @@ GLFN_DEMO_DIR = REPO_ROOT / "demo_data" / "glfn"
 # =============================================================================
 
 st.set_page_config(
-    page_title="C4C 990 Funder Flow",
+    page_title="OrgGraph (US)",
     page_icon=C4C_LOGO_URL,
     layout="wide"
 )
@@ -504,13 +505,12 @@ def main():
     with col_logo:
         st.image(C4C_LOGO_URL, width=60)
     with col_title:
-        st.title("C4C 990 Funder Flow")
+        st.title("OrgGraph (US)")
     
     st.markdown("""
-    Parse IRS **990-PF** filings and build the GLFN network graph.
-    
-    *Outputs conform to C4C Network Schema v1.*
+    OrgGraph currently supports US and Canadian nonprofit registries; additional sources will be added in the future.
     """)
+    st.caption(f"v{APP_VERSION}")
     
     st.divider()
     
