@@ -26,7 +26,17 @@ from c4c_utils.network_export import build_nodes_df, build_edges_df
 # =============================================================================
 # Constants
 # =============================================================================
-MAX_FILES = 5
+# TEMPORARY: Increased upload limit for GLFN sprint (Phase 1.5–3)
+# Purpose:
+# - Allow ingestion of a bounded, finite set of GLFN organizations (~50)
+# - Avoid manual merging of multiple small batches
+# - Empirically determine where network insights reach "enough heft"
+#
+# This is NOT a general product decision.
+# This limit should be revisited after the GLFN example is complete.
+#
+# See: Sprint Roadmap — PHASE 1.5 (Data Acquisition) and PHASE 3 (Heft Evaluation)
+MAX_FILES = 50
 C4C_LOGO_URL = "https://static.wixstatic.com/media/275a3f_9e232fe9e6914305a7ea8746e2e77125~mv2.png"
 
 
