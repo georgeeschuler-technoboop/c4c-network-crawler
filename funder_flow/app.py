@@ -23,7 +23,7 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from c4c_utils.irs990_parser import parse_990_pdf
-from c4c_utils.network_export import build_nodes_df, build_edges_df, NODE_COLUMNS, EDGE_COLUMNS
+from c4c_utils.network_export import build_nodes_df, build_edges_df, NODE_COLUMNS, EDGE_COLUMNS, get_existing_foundations
 
 
 # =============================================================================
@@ -444,6 +444,14 @@ def main():
         
         st.success(f"✅ GLFN data: {len(nodes_df)} nodes, {len(edges_df)} edges")
         
+        # Show existing foundations
+        existing_foundations = get_existing_foundations(nodes_df)
+        if existing_foundations:
+            with st.expander(f"📋 Foundations in GLFN ({len(existing_foundations)})", expanded=True):
+                for label, source in existing_foundations:
+                    flag = "🇨🇦" if source == "CHARITYDATA_CA" else "🇺🇸" if source == "IRS_990" else "📄"
+                    st.write(f"{flag} {label}")
+        
         # Reconstruct grants_df for analytics
         if not edges_df.empty and "edge_type" in edges_df.columns:
             grant_edges = edges_df[edges_df["edge_type"] == "GRANT"].copy()
@@ -463,6 +471,15 @@ def main():
         
         if not existing_nodes.empty or not existing_edges.empty:
             st.success(f"📂 **Existing GLFN data:** {len(existing_nodes)} nodes, {len(existing_edges)} edges")
+            
+            # Show existing foundations
+            existing_foundations = get_existing_foundations(existing_nodes)
+            if existing_foundations:
+                with st.expander(f"📋 Foundations already in GLFN ({len(existing_foundations)})", expanded=False):
+                    for label, source in existing_foundations:
+                        flag = "🇨🇦" if source == "CHARITYDATA_CA" else "🇺🇸" if source == "IRS_990" else "📄"
+                        st.write(f"{flag} {label}")
+            
             st.caption("New data will be merged. Duplicates automatically skipped.")
         else:
             st.info("📂 **No existing GLFN data.** This will be the first upload.")
@@ -520,7 +537,13 @@ def main():
             existing_nodes, existing_edges, new_nodes, new_edges
         )
         
-        st.subheader("🔀 Merge Results")
+        # Get names of orgs just processed
+        processed_orgs = [r["org_name"] for r in parse_results if r.get("success") and r.get("org_name")]
+        orgs_label = ", ".join(processed_orgs[:3])
+        if len(processed_orgs) > 3:
+            orgs_label += f" + {len(processed_orgs) - 3} more"
+        
+        st.subheader(f"🔀 Merge Results — {orgs_label}")
         
         col1, col2 = st.columns(2)
         with col1:
