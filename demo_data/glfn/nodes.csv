@@ -142,3 +142,61 @@ org:donee-gateway-resident-and-community-support-services-of-niagara,ORG,GATEWAY
 org:donee-pelham-cares-inc,ORG,PELHAM CARES INC.,donee-pelham-cares-inc,CA,,,,CHARITYDATA_CA,niagara-community-foundation-fondation-communautaire-de-niagara/grants.csv,,,,
 org:donee-reach-niagara,ORG,REACH NIAGARA,donee-reach-niagara,CA,,,,CHARITYDATA_CA,niagara-community-foundation-fondation-communautaire-de-niagara/grants.csv,,,,
 org:donee-grimsby-life-centre-ministries,ORG,GRIMSBY LIFE CENTRE MINISTRIES,donee-grimsby-life-centre-ministries,CA,,,,CHARITYDATA_CA,niagara-community-foundation-fondation-communautaire-de-niagara/grants.csv,,,,
+org:toronto-foundation,ORG,TORONTO FOUNDATION,toronto-foundation,CA,136491875RR0001,,,CHARITYDATA_CA,136491875RR0001,844922626.0,2024.0,,
+person:toronto-foundation:BARTON|NEALA|2016-02-09,PERSON,NEALA BARTON,,,,,,CHARITYDATA_CA,toronto-foundation/directors-trustees.csv,,,NEALA,BARTON
+person:toronto-foundation:COCKBURN|JAREL|2019-09-17,PERSON,JAREL COCKBURN,,,,,,CHARITYDATA_CA,toronto-foundation/directors-trustees.csv,,,JAREL,COCKBURN
+person:toronto-foundation:DUODU-ADDY|EUGENIA|2021-05-26,PERSON,EUGENIA DUODU-ADDY,,,,,,CHARITYDATA_CA,toronto-foundation/directors-trustees.csv,,,EUGENIA,DUODU-ADDY
+person:toronto-foundation:GOLBERG|DAN|2022-11-30,PERSON,DAN GOLBERG,,,,,,CHARITYDATA_CA,toronto-foundation/directors-trustees.csv,,,DAN,GOLBERG
+person:toronto-foundation:GREENSPON|EDWARD|2015-06-17,PERSON,EDWARD GREENSPON,,,,,,CHARITYDATA_CA,toronto-foundation/directors-trustees.csv,,,EDWARD,GREENSPON
+person:toronto-foundation:KUWAHARA|STEVE|2024-12-11,PERSON,STEVE KUWAHARA,,,,,,CHARITYDATA_CA,toronto-foundation/directors-trustees.csv,,,STEVE,KUWAHARA
+person:toronto-foundation:LEE-KENNEDY|BRENDA|2017-06-13,PERSON,BRENDA LEE-KENNEDY,,,,,,CHARITYDATA_CA,toronto-foundation/directors-trustees.csv,,,BRENDA,LEE-KENNEDY
+person:toronto-foundation:MATHESON|SABINE|2024-03-27,PERSON,SABINE MATHESON,,,,,,CHARITYDATA_CA,toronto-foundation/directors-trustees.csv,,,SABINE,MATHESON
+person:toronto-foundation:MCCAIN|NANCY|2016-02-09,PERSON,NANCY MCCAIN,,,,,,CHARITYDATA_CA,toronto-foundation/directors-trustees.csv,,,NANCY,MCCAIN
+person:toronto-foundation:MIAO|AMELIA|2024-03-27,PERSON,AMELIA MIAO,,,,,,CHARITYDATA_CA,toronto-foundation/directors-trustees.csv,,,AMELIA,MIAO
+person:toronto-foundation:MITCHELL|DENNIS|2017-06-13,PERSON,DENNIS MITCHELL,,,,,,CHARITYDATA_CA,toronto-foundation/directors-trustees.csv,,,DENNIS,MITCHELL
+person:toronto-foundation:RAKHALAWANSINGH|CETA|2012-06-20,PERSON,CETA RAKHALAWANSINGH,,,,,,CHARITYDATA_CA,toronto-foundation/directors-trustees.csv,,,CETA,RAKHALAWANSINGH
+person:toronto-foundation:RAWJI|SALIMA|2019-09-17,PERSON,SALIMA RAWJI,,,,,,CHARITYDATA_CA,toronto-foundation/directors-trustees.csv,,,SALIMA,RAWJI
+person:toronto-foundation:RICHARD|KENNETH|2024-03-27,PERSON,KENNETH RICHARD,,,,,,CHARITYDATA_CA,toronto-foundation/directors-trustees.csv,,,KENNETH,RICHARD
+person:toronto-foundation:SEFA|AVA-DAYNA|2021-05-26,PERSON,AVA-DAYNA SEFA,,,,,,CHARITYDATA_CA,toronto-foundation/directors-trustees.csv,,,AVA-DAYNA,SEFA
+person:toronto-foundation:SHANDAL|VINAY|2023-03-29,PERSON,VINAY SHANDAL,,,,,,CHARITYDATA_CA,toronto-foundation/directors-trustees.csv,,,VINAY,SHANDAL
+person:toronto-foundation:SPENCE|ANDREW|2018-06-13,PERSON,ANDREW SPENCE,,,,,,CHARITYDATA_CA,toronto-foundation/directors-trustees.csv,,,ANDREW,SPENCE
+person:toronto-foundation:TORRES|ANDREW|2022-03-30,PERSON,ANDREW TORRES,,,,,,CHARITYDATA_CA,toronto-foundation/directors-trustees.csv,,,ANDREW,TORRES
+person:toronto-foundation:ULLRICH|DANNIELLE|2024-03-27,PERSON,DANNIELLE ULLRICH,,,,,,CHARITYDATA_CA,toronto-foundation/directors-trustees.csv,,,DANNIELLE,ULLRICH
+org:donee-uhn-foundation-on,ORG,UHN FOUNDATION,donee-uhn-foundation-on,CA,,TORONTO,ON,CHARITYDATA_CA,toronto-foundation/grants.csv,,,,
+org:donee-st-michael-s-hospital-foundation-on,ORG,ST. MICHAEL'S HOSPITAL FOUNDATION,donee-st-michael-s-hospital-foundation-on,CA,,TORONTO,ON,CHARITYDATA_CA,toronto-foundation/grants.csv,,,,
+org:donee-georgian-bay-general-hospital-foundation-on,ORG,GEORGIAN BAY GENERAL HOSPITAL FOUNDATION,donee-georgian-bay-general-hospital-foundation-on,CA,,MIDLAND,ON,CHARITYDATA_CA,toronto-foundation/grants.csv,,,,
+org:donee-the-governing-council-of-the-university-of-toronto-on,ORG,THE GOVERNING COUNCIL OF THE UNIVERSITY OF TORONTO,donee-the-governing-council-of-the-university-of-toronto-on,CA,,TORONTO,ON,CHARITYDATA_CA,toronto-foundation/grants.csv,,,,
+org:donee-community-food-centres-canada-on,ORG,COMMUNITY FOOD CENTRES CANADA,donee-community-food-centres-canada-on,CA,,TORONTO,ON,CHARITYDATA_CA,toronto-foundation/grants.csv,,,,
+org:donee-dress-for-success-canada-foundation-on,ORG,DRESS FOR SUCCESS CANADA FOUNDATION,donee-dress-for-success-canada-foundation-on,CA,,CASSELMAN,ON,CHARITYDATA_CA,toronto-foundation/grants.csv,,,,
+org:donee-nishnawbe-homes-incorporated-on,ORG,NISHNAWBE HOMES INCORPORATED,donee-nishnawbe-homes-incorporated-on,CA,,TORONTO,ON,CHARITYDATA_CA,toronto-foundation/grants.csv,,,,
+org:donee-ontario-college-of-art-and-design-on,ORG,ONTARIO COLLEGE OF ART & DESIGN,donee-ontario-college-of-art-and-design-on,CA,,TORONTO,ON,CHARITYDATA_CA,toronto-foundation/grants.csv,,,,
+org:donee-the-woodgreen-foundation-on,ORG,THE WOODGREEN FOUNDATION,donee-the-woodgreen-foundation-on,CA,,TORONTO,ON,CHARITYDATA_CA,toronto-foundation/grants.csv,,,,
+org:donee-the-princess-margaret-cancer-foundation-on,ORG,THE PRINCESS MARGARET CANCER FOUNDATION,donee-the-princess-margaret-cancer-foundation-on,CA,,TORONTO,ON,CHARITYDATA_CA,toronto-foundation/grants.csv,,,,
+org:donee-the-royal-ontario-museum-foundation-on,ORG,THE ROYAL ONTARIO MUSEUM FOUNDATION,donee-the-royal-ontario-museum-foundation-on,CA,,TORONTO,ON,CHARITYDATA_CA,toronto-foundation/grants.csv,,,,
+org:donee-daily-bread-food-bank-on,ORG,DAILY BREAD FOOD BANK,donee-daily-bread-food-bank-on,CA,,TORONTO,ON,CHARITYDATA_CA,toronto-foundation/grants.csv,,,,
+org:donee-sunnybrook-health-sciences-centre-foundation-on,ORG,SUNNYBROOK HEALTH SCIENCES CENTRE FOUNDATION,donee-sunnybrook-health-sciences-centre-foundation-on,CA,,TORONTO,ON,CHARITYDATA_CA,toronto-foundation/grants.csv,,,,
+org:donee-united-way-of-greater-toronto-on,ORG,UNITED WAY OF GREATER TORONTO,donee-united-way-of-greater-toronto-on,CA,,TORONTO,ON,CHARITYDATA_CA,toronto-foundation/grants.csv,,,,
+org:donee-branksome-hall-on,ORG,BRANKSOME HALL,donee-branksome-hall-on,CA,,TORONTO,ON,CHARITYDATA_CA,toronto-foundation/grants.csv,,,,
+org:donee-ms-canada-sp-canada-on,ORG,MS CANADA SP CANADA,donee-ms-canada-sp-canada-on,CA,,TORONTO,ON,CHARITYDATA_CA,toronto-foundation/grants.csv,,,,
+org:donee-100-strong-foundation-on,ORG,100 STRONG FOUNDATION,donee-100-strong-foundation-on,CA,,YORK,ON,CHARITYDATA_CA,toronto-foundation/grants.csv,,,,
+org:donee-the-black-business-and-professional-association-on,ORG,THE BLACK BUSINESS AND PROFESSIONAL ASSOCIATION,donee-the-black-business-and-professional-association-on,CA,,TORONTO,ON,CHARITYDATA_CA,toronto-foundation/grants.csv,,,,
+org:donee-algoma-traditional-music-and-dance-group-on,ORG,ALGOMA TRADITIONAL MUSIC AND DANCE GROUP,donee-algoma-traditional-music-and-dance-group-on,CA,,DESBARATS,ON,CHARITYDATA_CA,toronto-foundation/grants.csv,,,,
+org:donee-kawartha-land-trust-on,ORG,KAWARTHA LAND TRUST,donee-kawartha-land-trust-on,CA,,PETERBOROUGH,ON,CHARITYDATA_CA,toronto-foundation/grants.csv,,,,
+org:donee-the-wellspring-foundation-for-education-bc,ORG,THE WELLSPRING FOUNDATION FOR EDUCATION,donee-the-wellspring-foundation-for-education-bc,CA,,LANGLEY,BC,CHARITYDATA_CA,toronto-foundation/grants.csv,,,,
+org:donee-national-arts-centre-foundation-fondation-centre-national-de-on,ORG,NATIONAL ARTS CENTRE FOUNDATION/FONDATION CENTRE NATIONAL DE,donee-national-arts-centre-foundation-fondation-centre-national-de-on,CA,,OTTAWA,ON,CHARITYDATA_CA,toronto-foundation/grants.csv,,,,
+org:donee-psc-partners-seeking-a-cure-canada-on,ORG,PSC PARTNERS SEEKING A CURE CANADA,donee-psc-partners-seeking-a-cure-canada-on,CA,,TORONTO,ON,CHARITYDATA_CA,toronto-foundation/grants.csv,,,,
+org:donee-canadian-institute-for-advanced-research-institut-canadien-d-on,ORG,CANADIAN INSTITUTE FOR ADVANCED RESEARCH-INSTITUT CANADIEN D,donee-canadian-institute-for-advanced-research-institut-canadien-d-on,CA,,TORONTO,ON,CHARITYDATA_CA,toronto-foundation/grants.csv,,,,
+org:donee-benefaction-foundation-on,ORG,BENEFACTION FOUNDATION,donee-benefaction-foundation-on,CA,,TORONTO,ON,CHARITYDATA_CA,toronto-foundation/grants.csv,,,,
+org:donee-vibe-arts-on,ORG,VIBE ARTS,donee-vibe-arts-on,CA,,TORONTO,ON,CHARITYDATA_CA,toronto-foundation/grants.csv,,,,
+org:donee-big-brothers-big-sisters-of-toronto-on,ORG,BIG BROTHERS BIG SISTERS OF TORONTO,donee-big-brothers-big-sisters-of-toronto-on,CA,,TORONTO,ON,CHARITYDATA_CA,toronto-foundation/grants.csv,,,,
+org:donee-westcoast-sacred-arts-society-bc,ORG,WESTCOAST SACRED ARTS SOCIETY,donee-westcoast-sacred-arts-society-bc,CA,,VANCOUVER,BC,CHARITYDATA_CA,toronto-foundation/grants.csv,,,,
+org:donee-petites-mains-qc,ORG,PETITES-MAINS,donee-petites-mains-qc,CA,,MONTRÉAL,QC,CHARITYDATA_CA,toronto-foundation/grants.csv,,,,
+org:donee-women-in-need-society-of-calgary-ab,ORG,WOMEN IN NEED SOCIETY OF CALGARY,donee-women-in-need-society-of-calgary-ab,CA,,CALGARY,AB,CHARITYDATA_CA,toronto-foundation/grants.csv,,,,
+org:donee-canada-company-many-ways-to-serve-on,ORG,CANADA COMPANY: MANY WAYS TO SERVE,donee-canada-company-many-ways-to-serve-on,CA,,TORONTO,ON,CHARITYDATA_CA,toronto-foundation/grants.csv,,,,
+org:donee-second-harvest-canada-deuxi-me-r-colte-canada-on,ORG,SECOND HARVEST CANADA / DEUXIÈME RÉCOLTE CANADA,donee-second-harvest-canada-deuxi-me-r-colte-canada-on,CA,,ETOBICOKE,ON,CHARITYDATA_CA,toronto-foundation/grants.csv,,,,
+org:donee-wellspring-cancer-support-foundation-fondation-wellspring-po-on,ORG,WELLSPRING CANCER SUPPORT FOUNDATION/FONDATION WELLSPRING PO,donee-wellspring-cancer-support-foundation-fondation-wellspring-po-on,CA,,TORONTO,ON,CHARITYDATA_CA,toronto-foundation/grants.csv,,,,
+org:donee-visions-of-science-network-for-learning-on,ORG,VISIONS OF SCIENCE NETWORK FOR LEARNING,donee-visions-of-science-network-for-learning-on,CA,,TORONTO,ON,CHARITYDATA_CA,toronto-foundation/grants.csv,,,,
+org:donee-cornell-university-ny,ORG,CORNELL UNIVERSITY,donee-cornell-university-ny,CA,,Ithaca,NY,CHARITYDATA_CA,toronto-foundation/grants.csv,,,,
+org:donee-epilepsy-toronto-on,ORG,EPILEPSY TORONTO,donee-epilepsy-toronto-on,CA,,EAST YORK,ON,CHARITYDATA_CA,toronto-foundation/grants.csv,,,,
+org:donee-foodshare-toronto-on,ORG,FOODSHARE TORONTO,donee-foodshare-toronto-on,CA,,TORONTO,ON,CHARITYDATA_CA,toronto-foundation/grants.csv,,,,
+org:donee-holland-bloorview-kids-rehabilitation-hospital-foundation-on,ORG,HOLLAND BLOORVIEW KIDS REHABILITATION HOSPITAL FOUNDATION,donee-holland-bloorview-kids-rehabilitation-hospital-foundation-on,CA,,TORONTO,ON,CHARITYDATA_CA,toronto-foundation/grants.csv,,,,
