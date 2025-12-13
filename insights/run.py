@@ -308,11 +308,11 @@ def compute_network_health(flow_stats, metrics_df, n_components, largest_compone
     # Connectivity
     if largest_component_pct >= 80:
         score += 20
-        positive_factors.append(f"🟢 **Highly connected** — {largest_component_pct:.0f}% in main component")
+        positive_factors.append(f"🟢 **Highly connected** — {largest_component_pct:.0f}% of organizations linked through shared funding")
     elif largest_component_pct >= 50:
         score += 10
     else:
-        risk_factors.append(f"🔴 **Fragmented** — only {largest_component_pct:.0f}% in main component")
+        risk_factors.append(f"🔴 **Fragmented** — only {largest_component_pct:.0f}% connected through shared funding, most operate in isolated clusters")
     
     # Concentration
     top5_share = flow_stats.get("top_5_funders_share", 100)
@@ -731,13 +731,13 @@ def generate_insight_cards(nodes_df, edges_df, metrics_df, interlock_graph, flow
         mf_interpretation = "No overlap — funders operate in complete silos with no shared grantees"
     
     if largest_cc_pct >= 90:
-        cc_interpretation = f"Highly unified — {largest_cc_pct:.0f}% of orgs connected through funding relationships"
+        cc_interpretation = f"Nearly all organizations ({largest_cc_pct:.0f}%) can reach each other through funding chains — a highly unified network"
     elif largest_cc_pct >= 70:
-        cc_interpretation = f"Mostly connected — {largest_cc_pct:.0f}% in main component, some isolated clusters exist"
+        cc_interpretation = f"Most organizations ({largest_cc_pct:.0f}%) are linked through overlapping grants, though some isolated clusters exist"
     elif largest_cc_pct >= 50:
-        cc_interpretation = f"Partially fragmented — only {largest_cc_pct:.0f}% in main component"
+        cc_interpretation = f"About half the organizations can reach each other through funding chains. The other {100-largest_cc_pct:.0f}% are in isolated pockets — funders with distinct portfolios that share nothing"
     else:
-        cc_interpretation = f"Highly fragmented — most orgs in disconnected clusters"
+        cc_interpretation = f"Only {largest_cc_pct:.0f}% of organizations are connected through shared funding. Most funders operate in isolated clusters with completely distinct portfolios"
     
     top5 = flow_stats['top_5_funders_share']
     if top5 >= 95:
@@ -757,7 +757,7 @@ def generate_insight_cards(nodes_df, edges_df, metrics_df, interlock_graph, flow
         "ranked_rows": [
             {"indicator": "Health Score", "value": f"{health_score}/100", "interpretation": health_label},
             {"indicator": "Multi-Funder Grantees", "value": f"{multi_funder_pct:.1f}%", "interpretation": mf_interpretation},
-            {"indicator": "Main Component", "value": f"{largest_cc_pct:.0f}%", "interpretation": cc_interpretation},
+            {"indicator": "Connected through Shared Funding", "value": f"{largest_cc_pct:.0f}%", "interpretation": cc_interpretation},
             {"indicator": "Top 5 Funder Share", "value": f"{top5}%", "interpretation": conc_interpretation},
         ],
         "health_factors": {"positive": positive_factors, "risk": risk_factors},
