@@ -256,6 +256,12 @@ if assets_file or directors_file or grants_file:
             cra_bn = grants_cra_bn
         
         if not grants_df.empty:
+            # MVP DESIGN CHOICE (Canada parity):
+            # charitydata.ca exports grants across many years. For sprint parity with US IRS 990 analysis
+            # (which is typically based on the most recent filing), we filter grant rows to the most
+            # recent fiscal year present in the dataset. We preserve the ability to analyze multi-year
+            # trends later, but for now we standardize on "latest-year grants" for comparability.
+            
             # Filter to most recent reporting period only
             total_rows = len(grants_df)
             
@@ -263,8 +269,12 @@ if assets_file or directors_file or grants_file:
                 # Get unique periods and find the most recent one
                 periods = grants_df["Reporting Period"].dropna().unique()
                 if len(periods) > 0:
-                    # Sort periods (format is typically YYYY-MM-DD or similar)
-                    latest_period = sorted(periods, reverse=True)[0]
+                    # Handle edge case: some periods might be malformed
+                    try:
+                        latest_period = sorted(periods, reverse=True)[0]
+                    except Exception:
+                        latest_period = periods[0]  # Fallback to first available
+                    
                     grants_df = grants_df[grants_df["Reporting Period"] == latest_period]
                     filtered_rows = len(grants_df)
                     st.info(f"📅 Filtered to most recent period: **{latest_period}** ({filtered_rows} of {total_rows} grants)")
