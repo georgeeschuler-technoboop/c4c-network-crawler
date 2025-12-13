@@ -1,33 +1,84 @@
 """
 Network Export utilities for C4C Network Intelligence Engine
 
-Converts parsed 990 data into Polinode-ready node and edge CSVs.
+Converts parsed 990 data into canonical node and edge CSVs.
+
+Canonical Schema v1 (MVP):
+- nodes.csv: ORG and PERSON nodes
+- edges.csv: GRANT and BOARD_MEMBERSHIP edges
+
+Compatible with both US IRS 990 and CA charitydata.ca sources.
 """
 
 import re
+import hashlib
 import pandas as pd
 from typing import List
 
+# =============================================================================
+# Constants
+# =============================================================================
 
-def slugify_name(name: str) -> str:
+SOURCE_SYSTEM = "IRS_990"
+JURISDICTION = "US"
+CURRENCY = "USD"
+
+NODE_COLUMNS = [
+    "node_id", "node_type", "label", "org_slug", "jurisdiction", "tax_id",
+    "city", "region", "source_system", "source_ref", "assets_latest", "assets_year",
+    "first_name", "last_name"
+]
+
+EDGE_COLUMNS = [
+    "edge_id", "from_id", "to_id", "edge_type",
+    "amount", "amount_cash", "amount_in_kind", "currency",
+    "fiscal_year", "reporting_period", "purpose",
+    "role", "start_date", "end_date", "at_arms_length",
+    "city", "region",
+    "source_system", "source_ref"
+]
+
+
+# =============================================================================
+# Helper Functions
+# =============================================================================
+
+def slugify_loose(text: str) -> str:
     """
-    Convert a name to a slug for use as node ID.
+    Convert text to a lowercase slug for org_slug field.
     
     Rules:
-    - Uppercase
-    - Non-alphanumeric characters → underscore
-    - Trim leading/trailing underscores
-    - Collapse multiple underscores
+    - Lowercase
+    - Non-alphanumeric characters → hyphen
+    - Trim leading/trailing hyphens
+    - Collapse multiple hyphens
     """
-    if not name:
+    if not text:
         return ""
     
-    slug = name.upper()
-    slug = re.sub(r'[^A-Z0-9]', '_', slug)
-    slug = re.sub(r'_+', '_', slug)
-    slug = slug.strip('_')
-    return slug
+    text = text.strip().lower()
+    text = re.sub(r"&|\+", " and ", text)
+    text = re.sub(r"[^a-z0-9]+", "-", text)
+    text = re.sub(r"-+", "-", text).strip("-")
+    return text or "unknown"
 
+
+def generate_edge_hash(s: str) -> str:
+    """Generate short hash for edge ID when amount is 0."""
+    return hashlib.md5(s.encode()).hexdigest()[:8]
+
+
+def format_ein(ein: str) -> str:
+    """Normalize EIN to XX-XXXXXXX format."""
+    ein = (ein or "").replace("-", "").strip()
+    if len(ein) == 9:
+        return f"{ein[:2]}-{ein[2:]}"
+    return ein
+
+
+# =============================================================================
+# Build Nodes DataFrame
+# =============================================================================
 
 def build_nodes_df(
     grants_df: pd.DataFrame,
@@ -38,87 +89,130 @@ def build_nodes_df(
     Build unified nodes DataFrame from grants, people, and foundation metadata.
     
     Node types:
-    - foundation: FNDN_<EIN>
-    - grantee: ORG_<SLUG(name)>
-    - person: PERSON_<SLUG(name)>
+    - ORG: org:<org_slug> — foundations and grantees
+    - PERSON: person:<context>:<name_key> — board members
     
-    Returns DataFrame with columns:
-        node_id, label, type, city, state, country, source
+    Returns DataFrame with canonical columns.
     """
     nodes = []
     seen_ids = set()
     
-    # 1. Foundation nodes
+    # 1. Foundation nodes (ORG)
     for meta in foundations_meta_list:
         ein = meta.get('foundation_ein', '').replace('-', '')
         if not ein:
             continue
         
-        node_id = f"FNDN_{ein}"
+        org_name = meta.get('foundation_name', '')
+        org_slug = slugify_loose(org_name) if org_name else f"ein-{ein}"
+        node_id = f"org:{org_slug}"
+        
         if node_id not in seen_ids:
             nodes.append({
-                'node_id': node_id,
-                'label': meta.get('foundation_name', ''),
-                'type': 'foundation',
-                'city': '',
-                'state': '',
-                'country': 'US',
-                'source': 'irs_990',
+                "node_id": node_id,
+                "node_type": "ORG",
+                "label": org_name,
+                "org_slug": org_slug,
+                "jurisdiction": JURISDICTION,
+                "tax_id": format_ein(ein),
+                "city": "",
+                "region": "",
+                "source_system": SOURCE_SYSTEM,
+                "source_ref": format_ein(ein),
+                "assets_latest": meta.get('total_assets'),
+                "assets_year": meta.get('tax_year'),
+                "first_name": "",
+                "last_name": "",
             })
             seen_ids.add(node_id)
     
-    # 2. Grantee nodes from grants_df
+    # 2. Grantee nodes (ORG) from grants_df
     if not grants_df.empty:
         for _, row in grants_df.iterrows():
             grantee_name = row.get('grantee_name', '')
             if not grantee_name:
                 continue
             
-            slug = slugify_name(grantee_name)
-            node_id = f"ORG_{slug}"
+            grantee_slug = f"grantee-{slugify_loose(grantee_name)}"
+            state = row.get('grantee_state', '')
+            if state:
+                grantee_slug = f"{grantee_slug}-{state.lower()}"
+            
+            node_id = f"org:{grantee_slug}"
             
             if node_id not in seen_ids:
                 nodes.append({
-                    'node_id': node_id,
-                    'label': grantee_name,
-                    'type': 'grantee',
-                    'city': row.get('grantee_city', ''),
-                    'state': row.get('grantee_state', ''),
-                    'country': 'US',
-                    'source': 'irs_990',
+                    "node_id": node_id,
+                    "node_type": "ORG",
+                    "label": grantee_name,
+                    "org_slug": grantee_slug,
+                    "jurisdiction": JURISDICTION,
+                    "tax_id": "",
+                    "city": row.get('grantee_city', ''),
+                    "region": row.get('grantee_state', ''),
+                    "source_system": SOURCE_SYSTEM,
+                    "source_ref": row.get('source_file', ''),
+                    "assets_latest": None,
+                    "assets_year": None,
+                    "first_name": "",
+                    "last_name": "",
                 })
                 seen_ids.add(node_id)
     
-    # 3. Person nodes from people_df
+    # 3. Person nodes (PERSON) from people_df
     if not people_df.empty:
         for _, row in people_df.iterrows():
             person_name = row.get('person_name', '')
             if not person_name:
                 continue
             
-            slug = slugify_name(person_name)
-            node_id = f"PERSON_{slug}"
+            org_ein = row.get('org_ein', '').replace('-', '')
+            org_name = row.get('org_name', '')
+            org_slug = slugify_loose(org_name) if org_name else f"ein-{org_ein}"
+            tax_year = row.get('tax_year', '')
+            
+            # Contextual person ID (same pattern as CA adapter)
+            # person:<context_org_slug>:<name_slug>|<year>
+            name_slug = slugify_loose(person_name)
+            person_key = f"{org_slug}:{name_slug}|{tax_year}"
+            node_id = f"person:{person_key}"
             
             if node_id not in seen_ids:
+                # Try to split first/last name
+                name_parts = person_name.strip().split()
+                first_name = name_parts[0] if name_parts else ""
+                last_name = " ".join(name_parts[1:]) if len(name_parts) > 1 else ""
+                
                 nodes.append({
-                    'node_id': node_id,
-                    'label': person_name,
-                    'type': 'person',
-                    'city': row.get('person_city', ''),
-                    'state': row.get('person_state', ''),
-                    'country': 'US',
-                    'source': 'irs_990_board',
+                    "node_id": node_id,
+                    "node_type": "PERSON",
+                    "label": person_name,
+                    "org_slug": "",
+                    "jurisdiction": "",
+                    "tax_id": "",
+                    "city": row.get('person_city', ''),
+                    "region": row.get('person_state', ''),
+                    "source_system": SOURCE_SYSTEM,
+                    "source_ref": row.get('source_file', ''),
+                    "assets_latest": None,
+                    "assets_year": None,
+                    "first_name": first_name,
+                    "last_name": last_name,
                 })
                 seen_ids.add(node_id)
     
-    # Create DataFrame
+    # Create DataFrame with canonical column order
     if nodes:
-        df = pd.DataFrame(nodes)
+        df = pd.DataFrame(nodes).reindex(columns=NODE_COLUMNS)
     else:
-        df = pd.DataFrame(columns=['node_id', 'label', 'type', 'city', 'state', 'country', 'source'])
+        df = pd.DataFrame(columns=NODE_COLUMNS)
     
     return df
 
+
+# =============================================================================
+# Build Edges DataFrame
+# =============================================================================
 
 def build_edges_df(
     grants_df: pd.DataFrame,
@@ -129,14 +223,20 @@ def build_edges_df(
     Build unified edges DataFrame combining grants and board memberships.
     
     Edge types:
-    - grant: foundation → grantee
-    - board_membership: person → foundation
+    - GRANT: org (foundation) → org (grantee)
+    - BOARD_MEMBERSHIP: person → org (foundation)
     
-    Returns DataFrame with columns:
-        from_id, to_id, edge_type, grant_amount, tax_year, grant_purpose_raw,
-        role, start_year, end_year, foundation_name, grantee_name, source_file
+    Returns DataFrame with canonical columns.
     """
     edges = []
+    
+    # Build foundation EIN → org_slug lookup
+    ein_to_slug = {}
+    for meta in foundations_meta_list:
+        ein = meta.get('foundation_ein', '').replace('-', '')
+        org_name = meta.get('foundation_name', '')
+        if ein:
+            ein_to_slug[ein] = slugify_loose(org_name) if org_name else f"ein-{ein}"
     
     # 1. Grant edges
     if not grants_df.empty:
@@ -147,22 +247,58 @@ def build_edges_df(
             if not ein or not grantee_name:
                 continue
             
-            from_id = f"FNDN_{ein}"
-            to_id = f"ORG_{slugify_name(grantee_name)}"
+            # Foundation org_slug
+            foundation_slug = ein_to_slug.get(ein, f"ein-{ein}")
+            from_id = f"org:{foundation_slug}"
+            
+            # Grantee org_slug
+            grantee_slug = f"grantee-{slugify_loose(grantee_name)}"
+            state = row.get('grantee_state', '')
+            if state:
+                grantee_slug = f"{grantee_slug}-{state.lower()}"
+            to_id = f"org:{grantee_slug}"
+            
+            # Amount
+            amount = row.get('grant_amount', 0)
+            try:
+                amount = float(amount) if pd.notna(amount) else 0
+            except:
+                amount = 0
+            
+            # Fiscal year
+            fiscal_year = row.get('tax_year')
+            try:
+                fiscal_year = int(fiscal_year) if pd.notna(fiscal_year) else None
+            except:
+                fiscal_year = None
+            
+            # Deterministic edge_id
+            if amount > 0:
+                edge_id = f"gr:{from_id}->{to_id}:{fiscal_year}:{int(amount)}"
+            else:
+                hash_input = f"{from_id}{to_id}{fiscal_year}{grantee_name}"
+                edge_id = f"gr:{from_id}->{to_id}:{fiscal_year}:h{generate_edge_hash(hash_input)}"
             
             edges.append({
-                'from_id': from_id,
-                'to_id': to_id,
-                'edge_type': 'grant',
-                'grant_amount': row.get('grant_amount'),
-                'tax_year': row.get('tax_year'),
-                'grant_purpose_raw': row.get('grant_purpose_raw', ''),
-                'role': '',
-                'start_year': None,
-                'end_year': None,
-                'foundation_name': row.get('foundation_name', ''),
-                'grantee_name': grantee_name,
-                'source_file': row.get('source_file', ''),
+                "edge_id": edge_id,
+                "from_id": from_id,
+                "to_id": to_id,
+                "edge_type": "GRANT",
+                "amount": amount,
+                "amount_cash": None,
+                "amount_in_kind": None,
+                "currency": CURRENCY,
+                "fiscal_year": fiscal_year,
+                "reporting_period": "",
+                "purpose": row.get('grant_purpose_raw', ''),
+                "role": "",
+                "start_date": "",
+                "end_date": "",
+                "at_arms_length": "",
+                "city": row.get('grantee_city', ''),
+                "region": row.get('grantee_state', ''),
+                "source_system": SOURCE_SYSTEM,
+                "source_ref": row.get('source_file', ''),
             })
     
     # 2. Board membership edges
@@ -174,32 +310,46 @@ def build_edges_df(
             if not person_name or not org_ein:
                 continue
             
-            from_id = f"PERSON_{slugify_name(person_name)}"
-            to_id = f"FNDN_{org_ein}"
+            # Person node_id
+            org_name = row.get('org_name', '')
+            org_slug = slugify_loose(org_name) if org_name else f"ein-{org_ein}"
+            tax_year = row.get('tax_year', '')
+            name_slug = slugify_loose(person_name)
+            person_key = f"{org_slug}:{name_slug}|{tax_year}"
+            from_id = f"person:{person_key}"
+            
+            # Foundation node_id
+            to_id = f"org:{org_slug}"
+            
+            # Deterministic edge_id
+            edge_id = f"bm:{from_id}->{to_id}:{tax_year}"
             
             edges.append({
-                'from_id': from_id,
-                'to_id': to_id,
-                'edge_type': 'board_membership',
-                'grant_amount': None,
-                'tax_year': row.get('tax_year'),
-                'grant_purpose_raw': '',
-                'role': row.get('role', ''),
-                'start_year': None,
-                'end_year': None,
-                'foundation_name': row.get('org_name', ''),
-                'grantee_name': '',
-                'source_file': row.get('source_file', ''),
+                "edge_id": edge_id,
+                "from_id": from_id,
+                "to_id": to_id,
+                "edge_type": "BOARD_MEMBERSHIP",
+                "amount": None,
+                "amount_cash": None,
+                "amount_in_kind": None,
+                "currency": "",
+                "fiscal_year": tax_year if tax_year else None,
+                "reporting_period": "",
+                "purpose": "",
+                "role": row.get('role', ''),
+                "start_date": "",
+                "end_date": "",
+                "at_arms_length": "",
+                "city": "",
+                "region": "",
+                "source_system": SOURCE_SYSTEM,
+                "source_ref": row.get('source_file', ''),
             })
     
-    # Create DataFrame
+    # Create DataFrame with canonical column order
     if edges:
-        df = pd.DataFrame(edges)
+        df = pd.DataFrame(edges).reindex(columns=EDGE_COLUMNS)
     else:
-        df = pd.DataFrame(columns=[
-            'from_id', 'to_id', 'edge_type', 'grant_amount', 'tax_year',
-            'grant_purpose_raw', 'role', 'start_year', 'end_year',
-            'foundation_name', 'grantee_name', 'source_file'
-        ])
+        df = pd.DataFrame(columns=EDGE_COLUMNS)
     
     return df
