@@ -720,16 +720,45 @@ def generate_insight_cards(nodes_df, edges_df, metrics_df, interlock_graph, flow
             "overlap or governance ties. Building basic coordination infrastructure is the priority."
         )
     
+    # Build rich interpretation statements
+    if multi_funder_pct >= 10:
+        mf_interpretation = f"Strong signal — {multi_funder_pct:.1f}% of grantees have multiple funders, indicating active co-investment"
+    elif multi_funder_pct >= 5:
+        mf_interpretation = f"Moderate — {multi_funder_pct:.1f}% have multiple funders, some natural coordination exists"
+    elif multi_funder_pct >= 1:
+        mf_interpretation = f"Weak signal — only {multi_funder_pct:.1f}% have multiple funders, funders rarely co-invest"
+    else:
+        mf_interpretation = "No overlap — funders operate in complete silos with no shared grantees"
+    
+    if largest_cc_pct >= 90:
+        cc_interpretation = f"Highly unified — {largest_cc_pct:.0f}% of orgs connected through funding relationships"
+    elif largest_cc_pct >= 70:
+        cc_interpretation = f"Mostly connected — {largest_cc_pct:.0f}% in main component, some isolated clusters exist"
+    elif largest_cc_pct >= 50:
+        cc_interpretation = f"Partially fragmented — only {largest_cc_pct:.0f}% in main component"
+    else:
+        cc_interpretation = f"Highly fragmented — most orgs in disconnected clusters"
+    
+    top5 = flow_stats['top_5_funders_share']
+    if top5 >= 95:
+        conc_interpretation = f"Extreme — top 5 funders control {top5}%, a few actors dominate the landscape"
+    elif top5 >= 80:
+        conc_interpretation = f"High — top 5 control {top5}%, limited funder diversity"
+    elif top5 >= 60:
+        conc_interpretation = f"Moderate — top 5 control {top5}%, reasonable distribution"
+    else:
+        conc_interpretation = f"Distributed — top 5 control only {top5}%, healthy funder diversity"
+    
     cards.append({
         "card_id": "network_health",
         "use_case": "System Framing",
         "title": "Network Health Overview",
         "summary": f"{health_emoji} **Network Health: {health_score}/100** — *{health_label}*\n\n{health_narrative}",
         "ranked_rows": [
-            {"indicator": "Health Score", "value": f"{health_score}/100", "status": health_label},
-            {"indicator": "Multi-Funder Grantees", "value": f"{multi_funder_pct:.1f}%", "interpretation": "coordination signal"},
-            {"indicator": "Main Component", "value": f"{largest_cc_pct:.0f}%", "interpretation": "network reach"},
-            {"indicator": "Top 5 Funder Share", "value": f"{flow_stats['top_5_funders_share']}%", "interpretation": "concentration"},
+            {"indicator": "Health Score", "value": f"{health_score}/100", "interpretation": health_label},
+            {"indicator": "Multi-Funder Grantees", "value": f"{multi_funder_pct:.1f}%", "interpretation": mf_interpretation},
+            {"indicator": "Main Component", "value": f"{largest_cc_pct:.0f}%", "interpretation": cc_interpretation},
+            {"indicator": "Top 5 Funder Share", "value": f"{top5}%", "interpretation": conc_interpretation},
         ],
         "health_factors": {"positive": positive_factors, "risk": risk_factors},
         "evidence": {"node_ids": [], "edge_ids": []},
@@ -1096,6 +1125,148 @@ def generate_insight_cards(nodes_df, edges_df, metrics_df, interlock_graph, flow
 
 
 # =============================================================================
+# Markdown Report Generator
+# =============================================================================
+
+def generate_markdown_report(insight_cards: dict, project_summary: dict, project_id: str = "glfn") -> str:
+    """
+    Generate a complete markdown report from insight cards.
+    Returns formatted markdown string.
+    """
+    lines = []
+    
+    # Header
+    lines.append(f"# Network Insight Report")
+    lines.append(f"**Project:** {project_id.upper()}")
+    lines.append(f"**Generated:** {insight_cards.get('generated_at', 'Unknown')[:10]}")
+    lines.append("")
+    
+    # Summary stats
+    summary = project_summary
+    nodes = summary.get("node_counts", {})
+    edges = summary.get("edge_counts", {})
+    funding = summary.get("funding", {})
+    
+    lines.append(f"**Nodes:** {nodes.get('total', 0)} ({nodes.get('organizations', 0)} organizations, {nodes.get('people', 0)} people)")
+    lines.append(f"**Edges:** {edges.get('total', 0)} ({edges.get('grants', 0)} grants, {edges.get('board_memberships', 0)} board memberships)")
+    lines.append(f"**Total Funding:** ${funding.get('total_amount', 0):,.0f}")
+    lines.append("")
+    lines.append("---")
+    lines.append("")
+    
+    # Health overview
+    health = insight_cards.get("health", {})
+    health_score = health.get("score", 0)
+    health_label = health.get("label", "Unknown")
+    
+    if health_score >= 70:
+        health_emoji = "🟢"
+    elif health_score >= 40:
+        health_emoji = "🟡"
+    else:
+        health_emoji = "🔴"
+    
+    lines.append(f"## {health_emoji} Network Health: {health_score}/100 ({health_label})")
+    lines.append("")
+    
+    # Health factors
+    positive = health.get("positive", [])
+    risk = health.get("risk", [])
+    
+    if positive:
+        lines.append("### ✅ Positive Factors")
+        lines.append("")
+        for f in positive:
+            lines.append(f"- {f}")
+        lines.append("")
+    
+    if risk:
+        lines.append("### ⚠️ Risk Factors")
+        lines.append("")
+        for f in risk:
+            lines.append(f"- {f}")
+        lines.append("")
+    
+    lines.append("---")
+    lines.append("")
+    
+    # Each card
+    cards = insight_cards.get("cards", [])
+    
+    for card in cards:
+        card_id = card.get("card_id", "")
+        
+        # Skip network_health card (already rendered above)
+        if card_id == "network_health":
+            continue
+        
+        title = card.get("title", "Untitled")
+        use_case = card.get("use_case", "")
+        summary_text = card.get("summary", "")
+        
+        lines.append(f"## {title}")
+        lines.append(f"*Use Case: {use_case}*")
+        lines.append("")
+        lines.append(summary_text)
+        lines.append("")
+        
+        # Ranked rows
+        ranked_rows = card.get("ranked_rows", [])
+        if ranked_rows:
+            # Check if rows have narratives
+            has_narratives = any(r.get("narrative") for r in ranked_rows)
+            
+            if has_narratives:
+                for row in ranked_rows:
+                    rank = row.get("rank", "")
+                    entity = (
+                        row.get("grantee") or 
+                        row.get("person") or 
+                        row.get("org") or 
+                        row.get("funder") or 
+                        row.get("node") or 
+                        row.get("pair") or
+                        ""
+                    )
+                    
+                    if rank and entity:
+                        lines.append(f"### {rank}. {entity}")
+                        lines.append("")
+                    
+                    if row.get("narrative"):
+                        lines.append(row["narrative"])
+                        lines.append("")
+                    
+                    if row.get("recommendation"):
+                        lines.append(row["recommendation"])
+                        lines.append("")
+            else:
+                # Simple table
+                if ranked_rows:
+                    # Get column headers from first row
+                    cols = [k for k in ranked_rows[0].keys() if k not in ["rank", "node_ids", "edge_ids"]]
+                    
+                    # Header row
+                    lines.append("| " + " | ".join(cols) + " |")
+                    lines.append("| " + " | ".join(["---"] * len(cols)) + " |")
+                    
+                    # Data rows
+                    for row in ranked_rows:
+                        vals = [str(row.get(c, "")) for c in cols]
+                        lines.append("| " + " | ".join(vals) + " |")
+                    
+                    lines.append("")
+        
+        lines.append("---")
+        lines.append("")
+    
+    # Footer
+    lines.append("*Report generated by C4C Network Insight Engine*")
+    
+    return "\n".join(lines)
+
+
+# =============================================================================
 # Project Summary
 # =============================================================================
 
@@ -1132,7 +1303,7 @@ def generate_project_summary(nodes_df, edges_df, metrics_df, flow_stats):
 def run(nodes_path, edges_path, output_dir, project_id="glfn"):
     """Main pipeline."""
     print("\n" + "="*60)
-    print("C4C Network Intelligence Engine — Phase 3")
+    print("C4C Network Insight Engine — Phase 3")
     print("="*60 + "\n")
     
     nodes_df, edges_df = load_and_validate(nodes_path, edges_path)
@@ -1152,6 +1323,9 @@ def run(nodes_path, edges_path, output_dir, project_id="glfn"):
     insight_cards = generate_insight_cards(nodes_df, edges_df, metrics_df, interlock_graph, flow_stats, overlap_df, project_id)
     project_summary = generate_project_summary(nodes_df, edges_df, metrics_df, flow_stats)
     
+    # Generate markdown report
+    markdown_report = generate_markdown_report(insight_cards, project_summary, project_id)
+    
     print("\nWriting outputs...")
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -1161,22 +1335,25 @@ def run(nodes_path, edges_path, output_dir, project_id="glfn"):
         json.dump(insight_cards, f, indent=2)
     with open(output_dir / "project_summary.json", "w") as f:
         json.dump(project_summary, f, indent=2)
+    with open(output_dir / "insight_report.md", "w") as f:
+        f.write(markdown_report)
     
     print(f"\n✅ Done! Outputs in {output_dir}")
-    return project_summary
+    return project_summary, markdown_report
 
 
 def main():
-    parser = argparse.ArgumentParser(description="C4C Network Intelligence Engine")
+    parser = argparse.ArgumentParser(description="C4C Network Insight Engine")
     parser.add_argument("--nodes", type=Path, default=DEFAULT_NODES)
     parser.add_argument("--edges", type=Path, default=DEFAULT_EDGES)
     parser.add_argument("--out", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--project", type=str, default="glfn")
     args = parser.parse_args()
     
-    summary = run(args.nodes, args.edges, args.out, args.project)
+    summary, markdown_report = run(args.nodes, args.edges, args.out, args.project)
     print(f"\nNodes: {summary['node_counts']['total']}, Edges: {summary['edge_counts']['total']}")
     print(f"Funding: ${summary['funding']['total_amount']:,.0f}")
+    print(f"Report: insight_report.md ({len(markdown_report)} chars)")
 
 
 if __name__ == "__main__":
