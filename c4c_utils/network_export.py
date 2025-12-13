@@ -240,6 +240,9 @@ def build_edges_df(
     
     # 1. Grant edges
     if not grants_df.empty:
+        # Track edge base IDs to add sequence numbers for duplicates
+        edge_base_counts = {}
+        
         for _, row in grants_df.iterrows():
             ein = row.get('foundation_ein', '').replace('-', '')
             grantee_name = row.get('grantee_name', '')
@@ -272,12 +275,19 @@ def build_edges_df(
             except:
                 fiscal_year = None
             
-            # Deterministic edge_id
+            # Build edge base ID
             if amount > 0:
-                edge_id = f"gr:{from_id}->{to_id}:{fiscal_year}:{int(amount)}"
+                edge_base = f"gr:{from_id}->{to_id}:{fiscal_year}:{int(amount)}"
             else:
                 hash_input = f"{from_id}{to_id}{fiscal_year}{grantee_name}"
-                edge_id = f"gr:{from_id}->{to_id}:{fiscal_year}:h{generate_edge_hash(hash_input)}"
+                edge_base = f"gr:{from_id}->{to_id}:{fiscal_year}:h{generate_edge_hash(hash_input)}"
+            
+            # Add sequence number to preserve multiple identical grants
+            if edge_base not in edge_base_counts:
+                edge_base_counts[edge_base] = 0
+            edge_base_counts[edge_base] += 1
+            seq = edge_base_counts[edge_base]
+            edge_id = f"{edge_base}:{seq}"
             
             edges.append({
                 "edge_id": edge_id,
@@ -353,3 +363,36 @@ def build_edges_df(
         df = pd.DataFrame(columns=EDGE_COLUMNS)
     
     return df
+
+
+# =============================================================================
+# Helper Functions
+# =============================================================================
+
+def get_existing_foundations(nodes_df: pd.DataFrame) -> list:
+    """
+    Extract list of foundation names already in GLFN data.
+    Foundations are ORG nodes that have a tax_id.
+    Returns: list of (label, source_system) tuples
+    """
+    if nodes_df.empty or "node_type" not in nodes_df.columns:
+        return []
+    
+    # Filter to ORG nodes with tax_id (foundations have tax_ids, donees don't)
+    orgs = nodes_df[nodes_df["node_type"] == "ORG"].copy()
+    
+    if "tax_id" not in orgs.columns:
+        return []
+    
+    foundations = orgs[orgs["tax_id"].notna() & (orgs["tax_id"] != "")]
+    
+    if foundations.empty:
+        return []
+    
+    result = []
+    for _, row in foundations.iterrows():
+        label = row.get("label", "Unknown")
+        source = row.get("source_system", "")
+        result.append((label, source))
+    
+    return result
