@@ -1,0 +1,20 @@
+node_id,node_type,label,org_slug,jurisdiction,tax_id,city,region,source_system,source_ref,assets_latest,assets_year,first_name,last_name
+org:the-consecon-foundation,ORG,THE CONSECON FOUNDATION,the-consecon-foundation,CA,830918298RR0001,,,CHARITYDATA_CA,830918298RR0001,35848482.0,2024.0,,
+person:the-consecon-foundation:Burt|Geoffrey|2009-01-14,PERSON,Geoffrey Burt,,,,,,CHARITYDATA_CA,the-consecon-foundation/directors-trustees.csv,,,Geoffrey,Burt
+person:the-consecon-foundation:Burt|Lauren|2017-07-31,PERSON,Lauren Burt,,,,,,CHARITYDATA_CA,the-consecon-foundation/directors-trustees.csv,,,Lauren,Burt
+person:the-consecon-foundation:Harbin|Alexander|2017-10-19,PERSON,Alexander Harbin,,,,,,CHARITYDATA_CA,the-consecon-foundation/directors-trustees.csv,,,Alexander,Harbin
+org:donee-clean-prosperity-foundation-on,ORG,Clean Prosperity Foundation,donee-clean-prosperity-foundation-on,CA,,Toronto,ON,CHARITYDATA_CA,the-consecon-foundation/grants.csv,,,,
+org:donee-toronto-zoo-wildlife-conservancy-on,ORG,Toronto Zoo Wildlife Conservancy,donee-toronto-zoo-wildlife-conservancy-on,CA,,Toronto,ON,CHARITYDATA_CA,the-consecon-foundation/grants.csv,,,,
+org:donee-clean-economy-fund-on,ORG,Clean Economy Fund,donee-clean-economy-fund-on,CA,,East York,ON,CHARITYDATA_CA,the-consecon-foundation/grants.csv,,,,
+org:donee-environment-funders-canada-on,ORG,Environment Funders Canada,donee-environment-funders-canada-on,CA,,Toronto,ON,CHARITYDATA_CA,the-consecon-foundation/grants.csv,,,,
+org:donee-yellowstone-to-yukon-conservation-initiative-foundation-ab,ORG,Yellowstone to Yukon Conservation Initiative Foundation,donee-yellowstone-to-yukon-conservation-initiative-foundation-ab,CA,,Canmore,AB,CHARITYDATA_CA,the-consecon-foundation/grants.csv,,,,
+org:donee-the-earth-rangers-foundation-on,ORG,The Earth Rangers Foundation,donee-the-earth-rangers-foundation-on,CA,,Woodbridge,ON,CHARITYDATA_CA,the-consecon-foundation/grants.csv,,,,
+org:donee-gord-martineau-foundation-on,ORG,Gord Martineau Foundation,donee-gord-martineau-foundation-on,CA,,Etobicoke,ON,CHARITYDATA_CA,the-consecon-foundation/grants.csv,,,,
+org:donee-mars-discovery-district-on,ORG,MaRS Discovery District,donee-mars-discovery-district-on,CA,,Toronto,ON,CHARITYDATA_CA,the-consecon-foundation/grants.csv,,,,
+org:donee-charities-aid-foundation-canada-on,ORG,Charities Aid Foundation Canada,donee-charities-aid-foundation-canada-on,CA,,Toronto,ON,CHARITYDATA_CA,the-consecon-foundation/grants.csv,,,,
+org:donee-canadian-parks-and-wilderness-society-on,ORG,Canadian Parks and Wilderness Society,donee-canadian-parks-and-wilderness-society-on,CA,,Ottawa,ON,CHARITYDATA_CA,the-consecon-foundation/grants.csv,,,,
+org:donee-prince-edward-county-community-foundation-on,ORG,Prince Edward County Community Foundation,donee-prince-edward-county-community-foundation-on,CA,,Picton,ON,CHARITYDATA_CA,the-consecon-foundation/grants.csv,,,,
+org:donee-nature-quebec-qc,ORG,Nature Quebec,donee-nature-quebec-qc,CA,,Quebec,QC,CHARITYDATA_CA,the-consecon-foundation/grants.csv,,,,
+org:donee-ecoschools-canada-on,ORG,EcoSchools Canada,donee-ecoschools-canada-on,CA,,Toronto,ON,CHARITYDATA_CA,the-consecon-foundation/grants.csv,,,,
+org:donee-quinte-region-natural-history-museum-on,ORG,Quinte Region Natural History Museum,donee-quinte-region-natural-history-museum-on,CA,,Trenton,ON,CHARITYDATA_CA,the-consecon-foundation/grants.csv,,,,
+org:donee-reaching-for-rainbows-children-s-program-on,ORG,Reaching for Rainbows Children's Program,donee-reaching-for-rainbows-children-s-program-on,CA,,Picton,ON,CHARITYDATA_CA,the-consecon-foundation/grants.csv,,,,
