@@ -1,7 +1,7 @@
 """
-C4C Network Intelligence Engine — Streamlit App
+Insight Cards — Streamlit App
 
-Runs Phase 3 insights on canonical GLFN data and displays results.
+Structured insight from complex networks.
 """
 
 import streamlit as st
@@ -45,7 +45,7 @@ C4C_LOGO_URL = "https://static.wixstatic.com/media/275a3f_c94bb96428e843ab828bed
 GLFN_DATA_DIR = REPO_ROOT / "demo_data" / "glfn"
 
 st.set_page_config(
-    page_title="C4C Network Insight Engine",
+    page_title="Insight Cards",
     page_icon=C4C_LOGO_URL,
     layout="wide"
 )
@@ -183,13 +183,10 @@ def main():
     with col_logo:
         st.image(C4C_LOGO_URL, width=60)
     with col_title:
-        st.title("C4C Network Insight Engine")
+        st.title("Insight Cards")
     
-    st.markdown("""
-    Analyze funder networks, compute structural metrics, and generate actionable insight cards.
-    
-    *Phase 3 — Interpreted Signals & Strategic Recommendations*
-    """)
+    st.markdown("Structured insight from complex networks.")
+    st.caption(f"v{APP_VERSION}")
     
     st.divider()
     
@@ -223,7 +220,7 @@ def main():
         project_id = st.text_input("Project ID", value="glfn", label_visibility="collapsed")
     
     if run_button:
-        with st.spinner("Running Network Intelligence Engine..."):
+        with st.spinner("Generating Insight Cards..."):
             try:
                 # Load and validate
                 nodes_df, edges_df = load_and_validate(nodes_path, edges_path)
