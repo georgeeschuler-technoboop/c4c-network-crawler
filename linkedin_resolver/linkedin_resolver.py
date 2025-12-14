@@ -15,7 +15,7 @@ SEARCHAPI_ENDPOINT = "https://www.searchapi.io/api/v1/search"
 # ---------------------------
 
 APP_NAME = "Resolver"
-APP_VERSION = "0.5.4"  # bump whenever query/scoring/output logic changes
+APP_VERSION = "0.5.5"  # bump whenever query/scoring/output logic changes
 
 # ---------------------------
 # Page config with icon
@@ -41,6 +41,8 @@ if "last_uploaded_file" not in st.session_state:
     st.session_state.last_uploaded_file = None
 if "show_success" not in st.session_state:
     st.session_state.show_success = False
+if "api_search_count" not in st.session_state:
+    st.session_state.api_search_count = 0
 
 # ---------------------------
 # Header with logo and title
@@ -98,21 +100,22 @@ api_key_manual = st.sidebar.text_input(
 st.sidebar.markdown("---")
 st.sidebar.markdown("**API Searches**")
 
-# Initialize the widget key if not exists
-if "api_counter_input" not in st.session_state:
-    st.session_state.api_counter_input = 0
-
+# Widget for display and manual editing
 api_count = st.sidebar.number_input(
     "Total searches",
     min_value=0,
+    value=st.session_state.api_search_count,
     step=1,
-    key="api_counter_input",
     help="Tracks cumulative API calls. Set to your dashboard value to sync, or reset to 0.",
     label_visibility="collapsed",
 )
 
+# Sync manual edits back to internal counter
+if api_count != st.session_state.api_search_count:
+    st.session_state.api_search_count = api_count
+
 if st.sidebar.button("Reset to 0", use_container_width=True):
-    st.session_state.api_counter_input = 0
+    st.session_state.api_search_count = 0
     st.rerun()
 
 st.sidebar.markdown("---")
@@ -212,9 +215,8 @@ def fetch_searchapi_results(api_key: str, q: str, num: int = 10) -> Dict:
     r = requests.get(SEARCHAPI_ENDPOINT, params=params, timeout=30)
     r.raise_for_status()
     
-    # Increment API search counter (use widget key directly)
-    if "api_counter_input" in st.session_state:
-        st.session_state.api_counter_input += 1
+    # Increment internal API search counter
+    st.session_state.api_search_count += 1
     
     return r.json()
 
