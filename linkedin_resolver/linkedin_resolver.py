@@ -15,7 +15,7 @@ SEARCHAPI_ENDPOINT = "https://www.searchapi.io/api/v1/search"
 # ---------------------------
 
 APP_NAME = "Resolver"
-APP_VERSION = "0.5.3"  # bump whenever query/scoring/output logic changes
+APP_VERSION = "0.5.4"  # bump whenever query/scoring/output logic changes
 
 # ---------------------------
 # Page config with icon
@@ -157,7 +157,9 @@ class Candidate:
 
 
 def normalize_text(x: Optional[str]) -> str:
-    return (x or "").strip()
+    if x is None or (isinstance(x, float) and pd.isna(x)):
+        return ""
+    return str(x).strip()
 
 
 def build_queries(row: Dict[str, str]) -> List[str]:
