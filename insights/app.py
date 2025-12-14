@@ -40,6 +40,7 @@ generate_markdown_report = run_module.generate_markdown_report
 # Config
 # =============================================================================
 
+APP_VERSION = "0.4.0"
 C4C_LOGO_URL = "https://static.wixstatic.com/media/275a3f_c94bb96428e843ab828bed6ea6c43ead~mv2.png"
 
 GLFN_DATA_DIR = REPO_ROOT / "demo_data" / "glfn"
