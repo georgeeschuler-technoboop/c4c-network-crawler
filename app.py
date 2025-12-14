@@ -1587,7 +1587,7 @@ def create_brokerage_role_chart(brokerage_roles: Dict[str, str]) -> 'go.Figure':
 def main():
     st.set_page_config(
         page_title="ActorGraph",
-        page_icon="https://static.wixstatic.com/media/275a3f_9c48d5079fcf4b688606c81d8f34d5a5~mv2.jpg",
+        page_icon="https://static.wixstatic.com/media/275a3f_5747a8179bda42ab9b268accbdaf4ac2~mv2.png",
         layout="wide"
     )
     
@@ -1597,7 +1597,7 @@ def main():
     # Header with C4C logo
     col1, col2 = st.columns([1, 9])
     with col1:
-        st.image("https://static.wixstatic.com/media/275a3f_9c48d5079fcf4b688606c81d8f34d5a5~mv2.jpg", width=80)
+        st.image("https://static.wixstatic.com/media/275a3f_5747a8179bda42ab9b268accbdaf4ac2~mv2.png", width=80)
     with col2:
         st.title("ActorGraph")
         st.markdown("People-centered network graphs from public profile data.")
