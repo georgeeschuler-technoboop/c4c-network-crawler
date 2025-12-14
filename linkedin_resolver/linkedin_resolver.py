@@ -8,14 +8,14 @@ import requests
 import streamlit as st
 from rapidfuzz import fuzz
 
-SERPAPI_ENDPOINT = "https://serpapi.com/search.json"
+SEARCHAPI_ENDPOINT = "https://www.searchapi.io/api/v1/search"
 
 # ---------------------------
 # App metadata
 # ---------------------------
 
 APP_NAME = "Resolver"
-APP_VERSION = "0.2.1"  # bump whenever query/scoring/output logic changes
+APP_VERSION = "0.3.0"  # bump whenever query/scoring/output logic changes
 
 # ---------------------------
 # Page config with icon
@@ -76,24 +76,31 @@ The app returns the best LinkedIn URL match, a confidence score, a review flag, 
 st.sidebar.header("Settings")
 
 api_key_manual = st.sidebar.text_input(
-    "SerpApi API key",
+    "SearchAPI.io API key",
     type="password",
-    help="Paste your SerpApi key here for this session. If blank, the app will try Streamlit Secrets.",
+    help="Paste your SearchAPI.io key here for this session. If blank, the app will try Streamlit Secrets.",
 )
 
 api_key = api_key_manual.strip() if api_key_manual else ""
 
 if not api_key:
     try:
-        api_key = st.secrets["SERPAPI_API_KEY"].strip()
+        api_key = st.secrets["SEARCHAPI_API_KEY"].strip()
     except Exception:
-        api_key = ""
+        pass
+    
+    # Fallback to old key name for backwards compatibility
+    if not api_key:
+        try:
+            api_key = st.secrets["SERPAPI_API_KEY"].strip()
+        except Exception:
+            api_key = ""
 
 if not api_key:
     st.warning(
-        "No SerpApi API key provided.\n\n"
+        "No SearchAPI.io API key provided.\n\n"
         "• Paste one into the sidebar, or\n"
-        "• Add SERPAPI_API_KEY to Streamlit Secrets"
+        "• Add SEARCHAPI_API_KEY to Streamlit Secrets"
     )
     st.stop()
 
@@ -157,14 +164,14 @@ def build_queries(row: Dict[str, str]) -> List[str]:
     return [q1, q2, q3]
 
 
-def fetch_serpapi_results(api_key: str, q: str, num: int = 10) -> Dict:
+def fetch_searchapi_results(api_key: str, q: str, num: int = 10) -> Dict:
     params = {
         "engine": "google",
         "q": q,
         "num": num,
         "api_key": api_key,
     }
-    r = requests.get(SERPAPI_ENDPOINT, params=params, timeout=30)
+    r = requests.get(SEARCHAPI_ENDPOINT, params=params, timeout=30)
     r.raise_for_status()
     return r.json()
 
@@ -269,9 +276,9 @@ if uploaded is not None:
             for q in queries:
                 query_used = q
                 try:
-                    data = fetch_serpapi_results(api_key, q, num=10)
+                    data = fetch_searchapi_results(api_key, q, num=10)
                 except Exception as e:
-                    status.error(f"Row {i}: SerpApi error: {e}")
+                    status.error(f"Row {i}: SearchAPI error: {e}")
                     continue
 
                 organic = data.get("organic_results", []) or []
