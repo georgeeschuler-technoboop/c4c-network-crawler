@@ -15,7 +15,7 @@ SEARCHAPI_ENDPOINT = "https://www.searchapi.io/api/v1/search"
 # ---------------------------
 
 APP_NAME = "Resolver"
-APP_VERSION = "0.5.0"  # bump whenever query/scoring/output logic changes
+APP_VERSION = "0.5.1"  # bump whenever query/scoring/output logic changes
 
 # ---------------------------
 # Page config with icon
@@ -76,8 +76,8 @@ st.info(
 **How to prepare your CSV:**
 
 1. **Required columns:** `full_name`, `country`
-2. **Recommended for better matching:** `city`, `state_province`, `metro_region`
-3. **Improves accuracy:** `company` or `organization`, `title`
+2. **Recommended (sweet spot for accuracy):** `city` and/or `state_province` — these disambiguate common names far better than country alone
+3. **Helpful but less reliable:** `company` or `organization`, `title` — only helps if it matches what's currently on their LinkedIn profile
 
 The app returns the best LinkedIn URL match, a confidence score, a review flag, and top candidates for each row.
 """,
@@ -233,8 +233,13 @@ def score_candidate(row: Dict[str, str], cand_title: str, cand_snippet: str, url
 
     hay = f"{cand_title} {cand_snippet}".strip()
 
-    # Name similarity: use token sort ratio against result title (good signal)
-    name_score = fuzz.token_sort_ratio(name, cand_title) / 100.0
+    # Name similarity: use token sort ratio against result title
+    name_fuzz_score = fuzz.token_sort_ratio(name, cand_title) / 100.0
+    
+    # Name substring bonus: if full name appears in title, don't penalize for extra words
+    # This prevents "George Schuler" matching better than "George Schuler - Global Sustainability Executive"
+    name_in_title = 1.0 if name.lower() in cand_title.lower() else 0.0
+    name_score = max(name_fuzz_score, name_in_title * 0.95)  # Substring match = 95% score
 
     # Location hits
     loc_terms = [t for t in [metro, city, state, country] if t]
@@ -255,8 +260,6 @@ def score_candidate(row: Dict[str, str], cand_title: str, cand_snippet: str, url
     url_bonus = 0.05 if "/in/" in (url or "").lower() else 0.0
 
     # Weighted blend (rebalanced: less name weight, more biz weight)
-    # Previous: 0.65 name + 0.25 loc + 0.10 biz
-    # New:      0.50 name + 0.25 loc + 0.25 biz
     return (0.50 * name_score) + (0.25 * loc_score) + (0.25 * biz_score) + company_bonus + url_bonus
 
 
