@@ -15,7 +15,7 @@ SEARCHAPI_ENDPOINT = "https://www.searchapi.io/api/v1/search"
 # ---------------------------
 
 APP_NAME = "Resolver"
-APP_VERSION = "0.4.2"  # bump whenever query/scoring/output logic changes
+APP_VERSION = "0.4.3"  # bump whenever query/scoring/output logic changes
 
 # ---------------------------
 # Page config with icon
@@ -41,6 +41,8 @@ if "last_uploaded_file" not in st.session_state:
     st.session_state.last_uploaded_file = None
 if "api_search_count" not in st.session_state:
     st.session_state.api_search_count = 0
+if "show_success" not in st.session_state:
+    st.session_state.show_success = False
 
 # ---------------------------
 # Header with logo and title
@@ -281,6 +283,7 @@ if uploaded is not None:
         st.session_state.last_uploaded_file = file_id
         st.session_state.results_df = None
         st.session_state.summary_data = None
+        st.session_state.show_success = False
 
 colA, colB, colC = st.columns([1, 1, 2])
 with colA:
@@ -388,7 +391,10 @@ if uploaded is not None:
         
         # Store in session state for persistence
         st.session_state.results_df = out_df
-        st.success("✅ Resolution complete!")
+        st.session_state.show_success = True
+        
+        # Rerun to refresh sidebar counter display
+        st.rerun()
 
 # -------------------------------------------------
 # Display Results (from session state - persists across reruns)
@@ -396,6 +402,11 @@ if uploaded is not None:
 
 if st.session_state.results_df is not None:
     out_df = st.session_state.results_df
+    
+    # Show success message only once after a fresh run
+    if st.session_state.show_success:
+        st.success("✅ Resolution complete!")
+        st.session_state.show_success = False
     
     # -------------------------------------------------
     # Summary Statistics
