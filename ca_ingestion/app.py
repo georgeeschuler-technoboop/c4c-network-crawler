@@ -1,9 +1,10 @@
 """
 OrgGraph (CA) — Canadian Nonprofit Registry Ingestion
 
-Dual-mode Streamlit app:
-- GLFN Demo: Load pre-built canonical graph from repo
-- Add to GLFN: Upload charitydata.ca exports, auto-merge with existing GLFN data
+Multi-project Streamlit app:
+- New Project: Create a new project and upload initial data
+- Add to Existing: Select existing project and merge new data
+- View Demo: Read-only view of sample demo data
 
 Outputs conform to C4C Network Schema v1 (MVP):
 - nodes.csv: ORG and PERSON nodes
@@ -23,15 +24,16 @@ from io import BytesIO, StringIO
 # Config
 # =============================================================================
 
-APP_VERSION = "0.3.0"  # Track app version
+APP_VERSION = "0.4.0"
 C4C_LOGO_URL = "https://static.wixstatic.com/media/275a3f_71fc58eb3cdf401cb972889063c2c132~mv2.png"
 SOURCE_SYSTEM = "CHARITYDATA_CA"
 JURISDICTION = "CA"
 CURRENCY = "CAD"
 
-# Demo data paths (relative to app location)
+# Demo data paths
 REPO_ROOT = Path(__file__).resolve().parent.parent
-GLFN_DEMO_DIR = REPO_ROOT / "demo_data" / "glfn"
+DEMO_DATA_DIR = REPO_ROOT / "demo_data"
+DEMO_PROJECT_NAME = "_demo"  # Reserved name for demo dataset
 
 st.set_page_config(
     page_title="OrgGraph (CA)",
@@ -57,6 +59,114 @@ EDGE_COLUMNS = [
     "city", "region",
     "source_system", "source_ref"
 ]
+
+
+# =============================================================================
+# Project Management Functions
+# =============================================================================
+
+def get_projects() -> list:
+    """Get list of existing projects from demo_data folder."""
+    if not DEMO_DATA_DIR.exists():
+        return []
+    
+    projects = []
+    for item in DEMO_DATA_DIR.iterdir():
+        if item.is_dir() and not item.name.startswith('.'):
+            has_data = (item / "nodes.csv").exists() or (item / "edges.csv").exists()
+            projects.append({
+                "name": item.name,
+                "path": item,
+                "has_data": has_data,
+                "is_demo": item.name == DEMO_PROJECT_NAME
+            })
+    
+    projects.sort(key=lambda x: (not x["is_demo"], x["name"].lower()))
+    return projects
+
+
+def get_project_display_name(project_name: str) -> str:
+    """Convert folder name to display name."""
+    if project_name == DEMO_PROJECT_NAME:
+        return "Demo Dataset"
+    return project_name.replace("_", " ").replace("-", " ").title()
+
+
+def get_folder_name(display_name: str) -> str:
+    """Convert display name to folder name."""
+    folder = display_name.lower().strip()
+    folder = re.sub(r'[^a-z0-9\s]', '', folder)
+    folder = re.sub(r'\s+', '_', folder)
+    return folder
+
+
+def create_project(project_name: str) -> tuple:
+    """Create a new project folder. Returns (success, message)."""
+    folder_name = get_folder_name(project_name)
+    
+    if not folder_name:
+        return False, "Invalid project name"
+    
+    if folder_name == DEMO_PROJECT_NAME:
+        return False, f"'{DEMO_PROJECT_NAME}' is reserved for demo data"
+    
+    project_path = DEMO_DATA_DIR / folder_name
+    
+    if project_path.exists():
+        return False, f"Project '{project_name}' already exists"
+    
+    try:
+        project_path.mkdir(parents=True, exist_ok=True)
+        return True, f"Created project: {project_name}"
+    except Exception as e:
+        return False, f"Failed to create project: {str(e)}"
+
+
+def load_project_data(project_name: str) -> tuple:
+    """Load existing data from a project folder."""
+    project_path = DEMO_DATA_DIR / project_name
+    nodes_path = project_path / "nodes.csv"
+    edges_path = project_path / "edges.csv"
+    
+    nodes_df = pd.DataFrame(columns=NODE_COLUMNS)
+    edges_df = pd.DataFrame(columns=EDGE_COLUMNS)
+    
+    if nodes_path.exists():
+        try:
+            df = pd.read_csv(nodes_path)
+            if not df.empty and len(df) > 0:
+                nodes_df = df
+        except:
+            pass
+    
+    if edges_path.exists():
+        try:
+            df = pd.read_csv(edges_path)
+            if not df.empty and len(df) > 0:
+                edges_df = df
+        except:
+            pass
+    
+    return nodes_df, edges_df
+
+
+def get_existing_foundations(nodes_df: pd.DataFrame) -> list:
+    """Get list of existing foundations from nodes."""
+    if nodes_df.empty or "node_type" not in nodes_df.columns:
+        return []
+    
+    orgs = nodes_df[nodes_df["node_type"] == "ORG"]
+    if orgs.empty:
+        return []
+    
+    foundations = []
+    for _, row in orgs.iterrows():
+        label = row.get("label", "Unknown")
+        source = row.get("source_system", "")
+        foundations.append((label, source))
+    
+    return foundations
+
 
 # =============================================================================
 # Parsing Functions
@@ -149,87 +259,266 @@ def extract_fiscal_year(reporting_period: str) -> int:
     """Extract year from reporting period."""
     if not reporting_period:
         return None
-    match = re.search(r'(\d{4})', str(reporting_period).strip())
+    match = re.search(r"(\d{4})", str(reporting_period))
     if match:
         return int(match.group(1))
     return None
 
 
-def generate_edge_hash(s: str) -> str:
-    """Generate short hash for edge ID."""
-    return hashlib.md5(s.encode()).hexdigest()[:8]
+def deterministic_person_id(first: str, last: str, org_slug: str) -> str:
+    """Generate deterministic person node ID."""
+    raw = f"{first}|{last}|{org_slug}".lower()
+    h = hashlib.sha256(raw.encode()).hexdigest()[:12]
+    return f"person-{h}"
+
+
+def deterministic_grant_edge_id(from_id: str, to_id: str, amount: float, fiscal_year: int) -> str:
+    """Generate deterministic grant edge ID."""
+    raw = f"{from_id}|{to_id}|{amount}|{fiscal_year}"
+    h = hashlib.sha256(raw.encode()).hexdigest()[:12]
+    return f"grant-{h}"
+
+
+def deterministic_board_edge_id(from_id: str, to_id: str, role: str) -> str:
+    """Generate deterministic board edge ID."""
+    raw = f"{from_id}|{to_id}|{role}".lower()
+    h = hashlib.sha256(raw.encode()).hexdigest()[:12]
+    return f"board-{h}"
 
 
 # =============================================================================
-# Data Loading Functions
+# Data Processing Functions
 # =============================================================================
 
-def load_glfn_data() -> tuple:
-    """
-    Load existing GLFN data from demo_data/glfn/.
-    Returns: (nodes_df, edges_df) - empty DataFrames if files don't exist
-    """
-    nodes_path = GLFN_DEMO_DIR / "nodes.csv"
-    edges_path = GLFN_DEMO_DIR / "edges.csv"
+def process_directors_file(directors_df: pd.DataFrame, org_slug: str, cra_bn: str) -> tuple:
+    """Process directors/trustees CSV into canonical format."""
+    nodes = []
+    edges = []
     
-    nodes_df = pd.DataFrame(columns=NODE_COLUMNS)
-    edges_df = pd.DataFrame(columns=EDGE_COLUMNS)
+    year_col = latest_year_column(directors_df)
     
-    if nodes_path.exists():
-        try:
-            df = pd.read_csv(nodes_path)
-            if not df.empty and len(df) > 0:
-                nodes_df = df
-        except:
-            pass
+    for _, row in directors_df.iterrows():
+        name_field = row.get("Director / Trustee") or row.get("Name") or ""
+        if not name_field or pd.isna(name_field):
+            continue
+        
+        if year_col and year_col in row.index:
+            active_val = row.get(year_col)
+            if pd.isna(active_val) or str(active_val).strip() == "":
+                continue
+        
+        # Parse name
+        name_str = str(name_field).strip()
+        parts = name_str.split(",", 1)
+        if len(parts) == 2:
+            last_name = parts[0].strip()
+            first_name = parts[1].strip()
+        else:
+            name_parts = name_str.split()
+            first_name = name_parts[0] if name_parts else ""
+            last_name = " ".join(name_parts[1:]) if len(name_parts) > 1 else ""
+        
+        # Generate IDs
+        person_id = deterministic_person_id(first_name, last_name, org_slug)
+        org_id = f"org-{cra_bn}" if cra_bn else f"org-{org_slug}"
+        
+        # Create person node
+        person_node = {col: "" for col in NODE_COLUMNS}
+        person_node.update({
+            "node_id": person_id,
+            "node_type": "PERSON",
+            "label": f"{first_name} {last_name}".strip(),
+            "first_name": first_name,
+            "last_name": last_name,
+            "jurisdiction": JURISDICTION,
+            "source_system": SOURCE_SYSTEM,
+        })
+        nodes.append(person_node)
+        
+        # Create board edge
+        role = "Director/Trustee"
+        edge_id = deterministic_board_edge_id(person_id, org_id, role)
+        
+        board_edge = {col: "" for col in EDGE_COLUMNS}
+        board_edge.update({
+            "edge_id": edge_id,
+            "from_id": person_id,
+            "to_id": org_id,
+            "edge_type": "BOARD_MEMBERSHIP",
+            "role": role,
+            "source_system": SOURCE_SYSTEM,
+        })
+        edges.append(board_edge)
     
-    if edges_path.exists():
-        try:
-            df = pd.read_csv(edges_path)
-            if not df.empty and len(df) > 0:
-                edges_df = df
-        except:
-            pass
-    
-    return nodes_df, edges_df
+    return nodes, edges
 
 
-def get_existing_foundations(nodes_df: pd.DataFrame) -> list:
-    """
-    Extract list of foundation names already in GLFN data.
-    Foundations are ORG nodes that have a tax_id (CRA BN).
-    Returns: list of (label, source_system) tuples
-    """
-    if nodes_df.empty or "node_type" not in nodes_df.columns:
-        return []
+def process_grants_file(grants_df: pd.DataFrame, org_slug: str, cra_bn: str) -> tuple:
+    """Process grants CSV into canonical format."""
+    nodes = []
+    edges = []
     
-    # Filter to ORG nodes with tax_id (these are foundations, not donees)
-    orgs = nodes_df[nodes_df["node_type"] == "ORG"].copy()
+    org_id = f"org-{cra_bn}" if cra_bn else f"org-{org_slug}"
     
-    if "tax_id" not in orgs.columns:
-        return []
+    for _, row in grants_df.iterrows():
+        grantee_name = row.get("Qualified donee") or row.get("Donee") or ""
+        if not grantee_name or pd.isna(grantee_name):
+            continue
+        
+        # Extract values
+        cash = row.get("Cash ($)", 0)
+        in_kind = row.get("In-kind ($)", 0)
+        
+        try:
+            cash = float(cash) if pd.notna(cash) else 0
+        except:
+            cash = 0
+        
+        try:
+            in_kind = float(in_kind) if pd.notna(in_kind) else 0
+        except:
+            in_kind = 0
+        
+        total_amount = cash + in_kind
+        
+        # Get reporting period
+        reporting_period = clean_nan(row.get("Reporting period", ""))
+        fiscal_year = extract_fiscal_year(reporting_period)
+        
+        # Get location
+        city = clean_nan(row.get("City", ""))
+        province = clean_nan(row.get("Prov", ""))
+        
+        # Create grantee org node
+        grantee_slug = slugify_loose(str(grantee_name))
+        grantee_id = f"org-{grantee_slug}"
+        
+        grantee_node = {col: "" for col in NODE_COLUMNS}
+        grantee_node.update({
+            "node_id": grantee_id,
+            "node_type": "ORG",
+            "label": str(grantee_name).strip(),
+            "org_slug": grantee_slug,
+            "city": city,
+            "region": province,
+            "jurisdiction": JURISDICTION,
+            "source_system": SOURCE_SYSTEM,
+        })
+        nodes.append(grantee_node)
+        
+        # Create grant edge
+        edge_id = deterministic_grant_edge_id(org_id, grantee_id, total_amount, fiscal_year or 0)
+        
+        grant_edge = {col: "" for col in EDGE_COLUMNS}
+        grant_edge.update({
+            "edge_id": edge_id,
+            "from_id": org_id,
+            "to_id": grantee_id,
+            "edge_type": "GRANT",
+            "amount": total_amount,
+            "amount_cash": cash,
+            "amount_in_kind": in_kind,
+            "currency": CURRENCY,
+            "fiscal_year": fiscal_year or "",
+            "reporting_period": reporting_period,
+            "city": city,
+            "region": province,
+            "source_system": SOURCE_SYSTEM,
+        })
+        edges.append(grant_edge)
     
-    # Foundations have tax_ids, donees don't
-    foundations = orgs[orgs["tax_id"].notna() & (orgs["tax_id"] != "")]
+    return nodes, edges
+
+
+def process_uploaded_files(assets_file, directors_file, grants_file) -> tuple:
+    """Process uploaded charitydata.ca files."""
     
-    if foundations.empty:
-        return []
+    all_nodes = []
+    all_edges = []
+    org_name = ""
+    cra_bn = ""
+    total_assets = None
+    latest_year = None
     
-    result = []
-    for _, row in foundations.iterrows():
-        label = row.get("label", "Unknown")
-        source = row.get("source_system", "")
-        result.append((label, source))
+    # Parse assets file first (contains org metadata)
+    if assets_file:
+        assets_df, org_name, cra_bn = read_charitydata_csv_from_upload(assets_file)
+        latest_year, total_assets = extract_total_assets(assets_df)
     
-    return result
+    # Try to get org info from other files if not in assets
+    if not org_name and directors_file:
+        _, org_name, cra_bn = read_charitydata_csv_from_upload(directors_file)
+        directors_file.seek(0)  # Reset for later use
+    
+    if not org_name and grants_file:
+        _, org_name, cra_bn = read_charitydata_csv_from_upload(grants_file)
+        grants_file.seek(0)  # Reset for later use
+    
+    if not org_name:
+        org_name = "Unknown Organization"
+    
+    org_slug = slugify_loose(org_name)
+    org_id = f"org-{cra_bn}" if cra_bn else f"org-{org_slug}"
+    
+    # Create org node
+    org_node = {col: "" for col in NODE_COLUMNS}
+    org_node.update({
+        "node_id": org_id,
+        "node_type": "ORG",
+        "label": org_name,
+        "org_slug": org_slug,
+        "jurisdiction": JURISDICTION,
+        "tax_id": cra_bn,
+        "source_system": SOURCE_SYSTEM,
+        "assets_latest": total_assets if total_assets is not None else "",
+        "assets_year": latest_year if latest_year is not None else "",
+    })
+    all_nodes.append(org_node)
+    
+    # Process directors
+    if directors_file:
+        directors_df, _, _ = read_charitydata_csv_from_upload(directors_file)
+        if not directors_df.empty:
+            person_nodes, board_edges = process_directors_file(directors_df, org_slug, cra_bn)
+            all_nodes.extend(person_nodes)
+            all_edges.extend(board_edges)
+    
+    # Process grants
+    if grants_file:
+        grants_df, _, _ = read_charitydata_csv_from_upload(grants_file)
+        if not grants_df.empty:
+            grantee_nodes, grant_edges = process_grants_file(grants_df, org_slug, cra_bn)
+            all_nodes.extend(grantee_nodes)
+            all_edges.extend(grant_edges)
+    
+    # Create DataFrames
+    nodes_df = pd.DataFrame(all_nodes, columns=NODE_COLUMNS)
+    edges_df = pd.DataFrame(all_edges, columns=EDGE_COLUMNS)
+    
+    # Deduplicate nodes by node_id
+    if not nodes_df.empty:
+        nodes_df = nodes_df.drop_duplicates(subset=["node_id"], keep="first")
+    
+    org_attributes = {
+        "org_id": org_id,
+        "org_slug": org_slug,
+        "jurisdiction": JURISDICTION,
+        "source_system": SOURCE_SYSTEM,
+        "org_legal_name": org_name,
+        "org_display_name": org_name.title() if org_name else "",
+        "tax_id": cra_bn,
+        "source_url": "",
+        "assets_latest": total_assets if total_assets is not None else "",
+        "assets_year": latest_year if latest_year is not None else "",
+        "notes": ""
+    }
+    
+    return nodes_df, edges_df, org_attributes
 
 
 def merge_graph_data(existing_nodes: pd.DataFrame, existing_edges: pd.DataFrame,
                      new_nodes: pd.DataFrame, new_edges: pd.DataFrame) -> tuple:
-    """
-    Merge new graph data with existing, deduplicating by ID.
-    Returns: (merged_nodes, merged_edges, stats)
-    """
+    """Merge new graph data with existing, deduplicating by ID."""
     stats = {
         "existing_nodes": len(existing_nodes),
         "existing_edges": len(existing_edges),
@@ -276,242 +565,6 @@ def merge_graph_data(existing_nodes: pd.DataFrame, existing_edges: pd.DataFrame,
     return merged_nodes, merged_edges, stats
 
 
-def process_uploaded_files(assets_file, directors_file, grants_file) -> tuple:
-    """
-    Process uploaded charitydata.ca files and return canonical outputs.
-    Returns: (nodes_df, edges_df, org_attributes)
-    """
-    assets_df = pd.DataFrame()
-    directors_df = pd.DataFrame()
-    grants_df = pd.DataFrame()
-    org_name = ""
-    cra_bn = ""
-    
-    if assets_file:
-        assets_df, org_name, cra_bn = read_charitydata_csv_from_upload(assets_file)
-    if directors_file:
-        directors_df, dir_org, dir_bn = read_charitydata_csv_from_upload(directors_file)
-        if not org_name:
-            org_name = dir_org
-        if not cra_bn:
-            cra_bn = dir_bn
-    if grants_file:
-        grants_df, gr_org, gr_bn = read_charitydata_csv_from_upload(grants_file)
-        if not org_name:
-            org_name = gr_org
-        if not cra_bn:
-            cra_bn = gr_bn
-    
-    if not org_name:
-        return pd.DataFrame(), pd.DataFrame(), {}
-    
-    org_slug = slugify_loose(org_name)
-    latest_year, total_assets = extract_total_assets(assets_df) if not assets_df.empty else (None, None)
-    fiscal_year = None
-    foundation_node_id = f"org:{org_slug}"
-    
-    nodes = []
-    edges = []
-    seen_node_ids = set()
-    
-    # Foundation node
-    nodes.append({
-        "node_id": foundation_node_id,
-        "node_type": "ORG",
-        "label": org_name,
-        "org_slug": org_slug,
-        "jurisdiction": JURISDICTION,
-        "tax_id": cra_bn,
-        "city": "",
-        "region": "",
-        "source_system": SOURCE_SYSTEM,
-        "source_ref": cra_bn,
-        "assets_latest": total_assets,
-        "assets_year": latest_year,
-        "first_name": "",
-        "last_name": "",
-    })
-    seen_node_ids.add(foundation_node_id)
-    
-    # Directors
-    if not directors_df.empty:
-        for _, r in directors_df.iterrows():
-            last = clean_nan(r.get("Last Name", ""))
-            first = clean_nan(r.get("First Name", ""))
-            position = clean_nan(r.get("Position", ""))
-            appointed = clean_nan(r.get("Appointed", ""))
-            ceased = clean_nan(r.get("Ceased", ""))
-            arms = clean_nan(r.get("At Arm's Length", ""))
-            
-            if not last and not first:
-                continue
-            
-            person_key = f"{org_slug}:{last}|{first}|{appointed}"
-            person_node_id = f"person:{person_key}"
-            
-            if person_node_id not in seen_node_ids:
-                nodes.append({
-                    "node_id": person_node_id,
-                    "node_type": "PERSON",
-                    "label": f"{first} {last}".strip(),
-                    "org_slug": "",
-                    "jurisdiction": "",
-                    "tax_id": "",
-                    "city": "",
-                    "region": "",
-                    "source_system": SOURCE_SYSTEM,
-                    "source_ref": f"{org_slug}/directors-trustees.csv",
-                    "assets_latest": None,
-                    "assets_year": None,
-                    "first_name": first,
-                    "last_name": last,
-                })
-                seen_node_ids.add(person_node_id)
-            
-            edge_id = f"bm:{person_node_id}->{foundation_node_id}:{appointed or 'unknown'}"
-            edges.append({
-                "edge_id": edge_id,
-                "from_id": person_node_id,
-                "to_id": foundation_node_id,
-                "edge_type": "BOARD_MEMBERSHIP",
-                "amount": None,
-                "amount_cash": None,
-                "amount_in_kind": None,
-                "currency": "",
-                "fiscal_year": None,
-                "reporting_period": "",
-                "purpose": "",
-                "role": position,
-                "start_date": appointed,
-                "end_date": ceased,
-                "at_arms_length": arms,
-                "city": "",
-                "region": "",
-                "source_system": SOURCE_SYSTEM,
-                "source_ref": f"{org_slug}/directors-trustees.csv",
-            })
-    
-    # Grants
-    if not grants_df.empty:
-        grants_filtered = grants_df.copy()
-        
-        if "Reporting Period" in grants_filtered.columns:
-            periods = grants_filtered["Reporting Period"].dropna().unique()
-            if len(periods) > 0:
-                try:
-                    latest_period = sorted(periods, reverse=True)[0]
-                except:
-                    latest_period = periods[0]
-                
-                grants_filtered = grants_filtered[grants_filtered["Reporting Period"] == latest_period]
-                fiscal_year = extract_fiscal_year(latest_period)
-        
-        # Track edge base IDs to add sequence numbers for duplicates
-        edge_base_counts = {}
-        
-        for _, r in grants_filtered.iterrows():
-            donee = clean_nan(r.get("Donee Name", ""))
-            if not donee:
-                continue
-            
-            city = clean_nan(r.get("City", ""))
-            prov = clean_nan(r.get("Prov", ""))
-            period = r.get("Reporting Period", "")
-            amt = r.get("Reported Amount ($)", 0)
-            gik = r.get("Gifts In Kind ($)", 0)
-            
-            try:
-                amt_cash = float(amt) if pd.notna(amt) else 0
-            except:
-                amt_cash = 0
-            try:
-                amt_in_kind = float(gik) if pd.notna(gik) else 0
-            except:
-                amt_in_kind = 0
-            amt_total = amt_cash + amt_in_kind
-            
-            donee_slug = f"donee-{slugify_loose(donee)}"
-            if prov:
-                donee_slug = f"{donee_slug}-{prov.lower()}"
-            
-            donee_node_id = f"org:{donee_slug}"
-            
-            if donee_node_id not in seen_node_ids:
-                nodes.append({
-                    "node_id": donee_node_id,
-                    "node_type": "ORG",
-                    "label": donee,
-                    "org_slug": donee_slug,
-                    "jurisdiction": JURISDICTION,
-                    "tax_id": "",
-                    "city": city,
-                    "region": prov,
-                    "source_system": SOURCE_SYSTEM,
-                    "source_ref": f"{org_slug}/grants.csv",
-                    "assets_latest": None,
-                    "assets_year": None,
-                    "first_name": "",
-                    "last_name": "",
-                })
-                seen_node_ids.add(donee_node_id)
-            
-            # Build edge ID with sequence number to preserve multiple identical grants
-            fy = extract_fiscal_year(period) or fiscal_year
-            if amt_total > 0:
-                edge_base = f"gr:{foundation_node_id}->{donee_node_id}:{fy}:{int(amt_total)}"
-            else:
-                hash_input = f"{foundation_node_id}{donee_node_id}{fy}{period}"
-                edge_base = f"gr:{foundation_node_id}->{donee_node_id}:{fy}:h{generate_edge_hash(hash_input)}"
-            
-            # Add sequence number
-            if edge_base not in edge_base_counts:
-                edge_base_counts[edge_base] = 0
-            edge_base_counts[edge_base] += 1
-            seq = edge_base_counts[edge_base]
-            edge_id = f"{edge_base}:{seq}"
-            
-            edges.append({
-                "edge_id": edge_id,
-                "from_id": foundation_node_id,
-                "to_id": donee_node_id,
-                "edge_type": "GRANT",
-                "amount": amt_total,
-                "amount_cash": amt_cash if amt_cash > 0 else None,
-                "amount_in_kind": amt_in_kind if amt_in_kind > 0 else None,
-                "currency": CURRENCY,
-                "fiscal_year": fy,
-                "reporting_period": str(period) if period else "",
-                "purpose": "",
-                "role": "",
-                "start_date": "",
-                "end_date": "",
-                "at_arms_length": "",
-                "city": city,
-                "region": prov,
-                "source_system": SOURCE_SYSTEM,
-                "source_ref": f"{org_slug}/grants.csv",
-            })
-    
-    nodes_df = pd.DataFrame(nodes).reindex(columns=NODE_COLUMNS) if nodes else pd.DataFrame()
-    edges_df = pd.DataFrame(edges).reindex(columns=EDGE_COLUMNS) if edges else pd.DataFrame()
-    
-    org_attributes = {
-        "schema_version": "1.0-mvp",
-        "org_slug": org_slug,
-        "jurisdiction": JURISDICTION,
-        "source_system": SOURCE_SYSTEM,
-        "org_legal_name": org_name,
-        "org_display_name": org_name.title() if org_name else "",
-        "tax_id": cra_bn,
-        "source_url": "",
-        "assets_latest": total_assets if total_assets is not None else "",
-        "assets_year": latest_year if latest_year is not None else "",
-        "notes": ""
-    }
-    
-    return nodes_df, edges_df, org_attributes
-
-
 # =============================================================================
 # UI Rendering Functions
 # =============================================================================
@@ -532,13 +585,13 @@ def render_graph_summary(nodes_df: pd.DataFrame, edges_df: pd.DataFrame) -> None
     
     col1, col2, col3, col4 = st.columns(4)
     with col1:
-        st.metric("ORG Nodes", org_nodes)
+        st.metric("🏛️ Organizations", org_nodes)
     with col2:
-        st.metric("PERSON Nodes", person_nodes)
+        st.metric("👤 People", person_nodes)
     with col3:
-        st.metric("GRANT Edges", grant_edges)
+        st.metric("💰 Grant Edges", grant_edges)
     with col4:
-        st.metric("BOARD Edges", board_edges)
+        st.metric("🪪 Board Edges", board_edges)
     
     st.divider()
     
@@ -562,16 +615,17 @@ def render_graph_summary(nodes_df: pd.DataFrame, edges_df: pd.DataFrame) -> None
             st.info("No edges found.")
 
 
-def render_downloads(nodes_df: pd.DataFrame, edges_df: pd.DataFrame) -> None:
+def render_downloads(nodes_df: pd.DataFrame, edges_df: pd.DataFrame, project_name: str = None) -> None:
     """Render download buttons."""
     
     if nodes_df is None or nodes_df.empty:
         return
     
     st.divider()
-    st.subheader("📥 Download & Upload to GitHub")
+    st.subheader("💾 Download")
     
-    st.info("⬇️ **Download these files and upload to `demo_data/glfn/` on GitHub** (replace existing files)")
+    if project_name and project_name != DEMO_PROJECT_NAME:
+        st.info(f"⬇️ **Download these files and upload to `demo_data/{project_name}/` on GitHub** (replace existing files)")
     
     def create_zip_download():
         zip_buffer = BytesIO()
@@ -583,10 +637,12 @@ def render_downloads(nodes_df: pd.DataFrame, edges_df: pd.DataFrame) -> None:
         zip_buffer.seek(0)
         return zip_buffer.getvalue()
     
+    file_prefix = project_name if project_name else "orggraph_ca"
+    
     st.download_button(
         label="📦 Download All (ZIP)",
         data=create_zip_download(),
-        file_name="c4c_glfn_update.zip",
+        file_name=f"{file_prefix}_export.zip",
         mime="application/zip",
         type="primary",
         use_container_width=True
@@ -599,7 +655,7 @@ def render_downloads(nodes_df: pd.DataFrame, edges_df: pd.DataFrame) -> None:
     with col1:
         if not nodes_df.empty:
             st.download_button(
-                label="📄 nodes.csv",
+                label="📥 nodes.csv",
                 data=nodes_df.to_csv(index=False),
                 file_name="nodes.csv",
                 mime="text/csv"
@@ -608,11 +664,100 @@ def render_downloads(nodes_df: pd.DataFrame, edges_df: pd.DataFrame) -> None:
     with col2:
         if not edges_df.empty:
             st.download_button(
-                label="📄 edges.csv",
+                label="📥 edges.csv",
                 data=edges_df.to_csv(index=False),
                 file_name="edges.csv",
                 mime="text/csv"
             )
+
+
+# =============================================================================
+# Upload Interface
+# =============================================================================
+
+def render_upload_interface(project_name: str):
+    """Render the upload and processing interface for a project."""
+    display_name = get_project_display_name(project_name)
+    
+    # Load existing data
+    existing_nodes, existing_edges = load_project_data(project_name)
+    
+    # Show existing data status
+    if not existing_nodes.empty or not existing_edges.empty:
+        st.success(f"📂 **Existing {display_name} data:** {len(existing_nodes)} nodes, {len(existing_edges)} edges")
+        
+        existing_foundations = get_existing_foundations(existing_nodes)
+        if existing_foundations:
+            with st.expander(f"📋 Organizations already in {display_name} ({len(existing_foundations)})", expanded=False):
+                for label, source in existing_foundations:
+                    flag = "🇨🇦" if source == "CHARITYDATA_CA" else "🇺🇸" if source == "IRS_990" else "📄"
+                    st.write(f"{flag} {label}")
+        
+        st.caption("New data will be merged. Duplicates automatically skipped.")
+    else:
+        st.info(f"📂 **No existing {display_name} data.** This will be the first organization.")
+    
+    st.divider()
+    st.subheader("📤 Upload charitydata.ca Files")
+    
+    st.markdown("Upload CSV files for **one organization**:")
+    
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        assets_file = st.file_uploader("assets.csv", type=["csv"])
+    with col2:
+        directors_file = st.file_uploader("directors-trustees.csv", type=["csv"])
+    with col3:
+        grants_file = st.file_uploader("grants.csv", type=["csv"])
+    
+    if not (assets_file or directors_file or grants_file):
+        st.info("👆 Upload at least one CSV file")
+        st.stop()
+    
+    with st.spinner("Processing..."):
+        new_nodes, new_edges, org_attributes = process_uploaded_files(
+            assets_file, directors_file, grants_file
+        )
+    
+    if new_nodes.empty:
+        st.warning("Could not extract data from uploaded files.")
+        st.stop()
+    
+    org_name = org_attributes.get("org_legal_name", "Unknown")
+    st.success(f"✅ Processed **{org_name}**: {len(new_nodes)} nodes, {len(new_edges)} edges")
+    
+    st.divider()
+    
+    # Merge
+    nodes_df, edges_df, stats = merge_graph_data(
+        existing_nodes, existing_edges, new_nodes, new_edges
+    )
+    
+    st.subheader(f"🔀 Merge Results — {org_name}")
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        st.markdown("**Nodes:**")
+        st.write(f"- Existing: {stats['existing_nodes']}")
+        st.write(f"- From this org: {stats['new_nodes_total']}")
+        st.write(f"- ✅ **Added: {stats['nodes_added']}**")
+        if stats['nodes_skipped'] > 0:
+            st.write(f"- ⏭️ Skipped (duplicates): {stats['nodes_skipped']}")
+    
+    with col2:
+        st.markdown("**Edges:**")
+        st.write(f"- Existing: {stats['existing_edges']}")
+        st.write(f"- From this org: {stats['new_edges_total']}")
+        st.write(f"- ✅ **Added: {stats['edges_added']}**")
+        if stats['edges_skipped'] > 0:
+            st.write(f"- ⏭️ Skipped (duplicates): {stats['edges_skipped']}")
+    
+    st.divider()
+    st.success(f"📊 **Combined {display_name} dataset:** {len(nodes_df)} nodes, {len(edges_df)} edges")
+    
+    render_graph_summary(nodes_df, edges_df)
+    render_downloads(nodes_df, edges_df, project_name)
 
 
 # =============================================================================
@@ -633,129 +778,137 @@ def main():
     
     st.divider()
     
-    project_mode = st.selectbox(
-        "Mode",
-        ["GLFN Demo (view existing)", "Add to GLFN (upload + merge)"],
-        index=0,
-        help="View existing GLFN data or add a new organization"
+    # ==========================================================================
+    # Project Mode Selection
+    # ==========================================================================
+    
+    st.subheader("📁 Project")
+    
+    projects = get_projects()
+    existing_project_names = [p["name"] for p in projects if not p["is_demo"]]
+    has_demo = any(p["is_demo"] for p in projects)
+    
+    # Mode selection
+    mode_options = ["➕ New Project"]
+    if existing_project_names:
+        mode_options.append("📂 Add to Existing Project")
+    if has_demo:
+        mode_options.append("👁️ View Demo")
+    
+    project_mode = st.radio(
+        "What would you like to do?",
+        mode_options,
+        horizontal=True,
+        label_visibility="collapsed"
     )
     
     st.divider()
     
-    nodes_df = pd.DataFrame()
-    edges_df = pd.DataFrame()
-    
-    if project_mode == "GLFN Demo (view existing)":
-        # ---------------------------------------------------------------------
-        # View Mode
-        # ---------------------------------------------------------------------
-        st.caption("📂 Loading from `demo_data/glfn/`...")
+    # ==========================================================================
+    # NEW PROJECT MODE
+    # ==========================================================================
+    if project_mode == "➕ New Project":
+        st.markdown("### Create New Project")
         
-        nodes_df, edges_df = load_glfn_data()
+        col1, col2 = st.columns([3, 1])
+        with col1:
+            new_project_name = st.text_input(
+                "Project Name",
+                placeholder="e.g., BC Foundations Network",
+                help="Choose a descriptive name for your project"
+            )
+        
+        with col2:
+            st.markdown("<br>", unsafe_allow_html=True)
+            create_btn = st.button("Create Project", type="primary", disabled=not new_project_name)
+        
+        if new_project_name:
+            folder_name = get_folder_name(new_project_name)
+            st.caption(f"📁 Will create folder: `demo_data/{folder_name}/`")
+        
+        if create_btn and new_project_name:
+            success, message = create_project(new_project_name)
+            if success:
+                st.success(f"✅ {message}")
+                st.session_state.current_project = get_folder_name(new_project_name)
+                st.rerun()
+            else:
+                st.error(f"❌ {message}")
+        
+        # If project was just created, show upload interface
+        if "current_project" in st.session_state and st.session_state.current_project:
+            project_name = st.session_state.current_project
+            st.divider()
+            render_upload_interface(project_name)
+    
+    # ==========================================================================
+    # ADD TO EXISTING PROJECT MODE
+    # ==========================================================================
+    elif project_mode == "📂 Add to Existing Project":
+        st.markdown("### Select Project")
+        
+        # Build dropdown options with node/edge counts
+        project_options = []
+        for p in projects:
+            if not p["is_demo"]:
+                display_name = get_project_display_name(p["name"])
+                if p["has_data"]:
+                    nodes_df, edges_df = load_project_data(p["name"])
+                    display_name += f" ({len(nodes_df)} nodes, {len(edges_df)} edges)"
+                else:
+                    display_name += " (empty)"
+                project_options.append((p["name"], display_name))
+        
+        if not project_options:
+            st.info("No existing projects found. Create a new project first.")
+            st.stop()
+        
+        selected_display = st.selectbox(
+            "Select project to add data to:",
+            [display for _, display in project_options],
+            label_visibility="collapsed"
+        )
+        
+        # Find selected project name
+        selected_project = None
+        for name, display in project_options:
+            if display == selected_display:
+                selected_project = name
+                break
+        
+        if selected_project:
+            st.divider()
+            render_upload_interface(selected_project)
+    
+    # ==========================================================================
+    # VIEW DEMO MODE
+    # ==========================================================================
+    elif project_mode == "👁️ View Demo":
+        st.markdown("### Demo Dataset")
+        st.caption(f"📂 Loading from `demo_data/{DEMO_PROJECT_NAME}/`...")
+        
+        nodes_df, edges_df = load_project_data(DEMO_PROJECT_NAME)
         
         if nodes_df.empty and edges_df.empty:
             st.warning("""
-            **No GLFN data found yet.**
+            **No demo data found.**
             
-            Switch to **"Add to GLFN"** mode to start building the dataset.
+            The demo dataset hasn't been set up yet. Create a new project to get started.
             """)
             st.stop()
         
-        st.success(f"✅ GLFN data: {len(nodes_df)} nodes, {len(edges_df)} edges")
+        st.success(f"✅ Demo data: {len(nodes_df)} nodes, {len(edges_df)} edges")
         
         # Show existing foundations
         existing_foundations = get_existing_foundations(nodes_df)
         if existing_foundations:
-            with st.expander(f"📋 Foundations in GLFN ({len(existing_foundations)})", expanded=True):
+            with st.expander(f"📋 Organizations in Demo ({len(existing_foundations)})", expanded=True):
                 for label, source in existing_foundations:
                     flag = "🇨🇦" if source == "CHARITYDATA_CA" else "🇺🇸" if source == "IRS_990" else "📄"
                     st.write(f"{flag} {label}")
         
-    else:
-        # ---------------------------------------------------------------------
-        # Add to GLFN Mode
-        # ---------------------------------------------------------------------
-        existing_nodes, existing_edges = load_glfn_data()
-        
-        if not existing_nodes.empty or not existing_edges.empty:
-            st.success(f"📂 **Existing GLFN data:** {len(existing_nodes)} nodes, {len(existing_edges)} edges")
-            
-            # Show existing foundations
-            existing_foundations = get_existing_foundations(existing_nodes)
-            if existing_foundations:
-                with st.expander(f"📋 Foundations already in GLFN ({len(existing_foundations)})", expanded=False):
-                    for label, source in existing_foundations:
-                        flag = "🇨🇦" if source == "CHARITYDATA_CA" else "🇺🇸" if source == "IRS_990" else "📄"
-                        st.write(f"{flag} {label}")
-            
-            st.caption("New data will be merged. Duplicates automatically skipped.")
-        else:
-            st.info("📂 **No existing GLFN data.** This will be the first organization.")
-        
-        st.divider()
-        st.subheader("📤 Upload charitydata.ca Files")
-        
-        st.markdown("Upload CSV files for **one organization**:")
-        
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
-            assets_file = st.file_uploader("assets.csv", type=["csv"])
-        with col2:
-            directors_file = st.file_uploader("directors-trustees.csv", type=["csv"])
-        with col3:
-            grants_file = st.file_uploader("grants.csv", type=["csv"])
-        
-        if not (assets_file or directors_file or grants_file):
-            st.info("👆 Upload at least one CSV file")
-            st.stop()
-        
-        with st.spinner("Processing..."):
-            new_nodes, new_edges, org_attributes = process_uploaded_files(
-                assets_file, directors_file, grants_file
-            )
-        
-        if new_nodes.empty:
-            st.warning("Could not extract data from uploaded files.")
-            st.stop()
-        
-        org_name = org_attributes.get("org_legal_name", "Unknown")
-        st.success(f"✅ Processed **{org_name}**: {len(new_nodes)} nodes, {len(new_edges)} edges")
-        
-        st.divider()
-        
-        # Merge
-        nodes_df, edges_df, stats = merge_graph_data(
-            existing_nodes, existing_edges, new_nodes, new_edges
-        )
-        
-        st.subheader(f"🔀 Merge Results — {org_name}")
-        
-        col1, col2 = st.columns(2)
-        with col1:
-            st.markdown("**Nodes:**")
-            st.write(f"- Existing: {stats['existing_nodes']}")
-            st.write(f"- From this org: {stats['new_nodes_total']}")
-            st.write(f"- ✅ **Added: {stats['nodes_added']}**")
-            if stats['nodes_skipped'] > 0:
-                st.write(f"- ⏭️ Skipped (duplicates): {stats['nodes_skipped']}")
-        
-        with col2:
-            st.markdown("**Edges:**")
-            st.write(f"- Existing: {stats['existing_edges']}")
-            st.write(f"- From this org: {stats['new_edges_total']}")
-            st.write(f"- ✅ **Added: {stats['edges_added']}**")
-            if stats['edges_skipped'] > 0:
-                st.write(f"- ⏭️ Skipped (duplicates): {stats['edges_skipped']}")
-        
-        st.divider()
-        st.success(f"📊 **Combined GLFN dataset:** {len(nodes_df)} nodes, {len(edges_df)} edges")
-    
-    # ---------------------------------------------------------------------
-    # Common Output
-    # ---------------------------------------------------------------------
-    render_graph_summary(nodes_df, edges_df)
-    render_downloads(nodes_df, edges_df)
+        render_graph_summary(nodes_df, edges_df)
+        render_downloads(nodes_df, edges_df, DEMO_PROJECT_NAME)
 
 
 if __name__ == "__main__":
