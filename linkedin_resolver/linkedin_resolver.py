@@ -15,7 +15,7 @@ SEARCHAPI_ENDPOINT = "https://www.searchapi.io/api/v1/search"
 # ---------------------------
 
 APP_NAME = "Resolver"
-APP_VERSION = "0.5.6"  # bump whenever query/scoring/output logic changes
+APP_VERSION = "0.6.0"  # bump whenever query/scoring/output logic changes
 
 # ---------------------------
 # Page config with icon
@@ -257,6 +257,13 @@ def score_candidate(row: Dict[str, str], cand_title: str, cand_snippet: str, url
     # This prevents "George Schuler" matching better than "George Schuler - Global Sustainability Executive"
     name_in_title = 1.0 if name.lower() in cand_title.lower() else 0.0
     name_score = max(name_fuzz_score, name_in_title * 0.95)  # Substring match = 95% score
+    
+    # CRITICAL: Name match floor - if name similarity is too low, reject candidate
+    # This prevents location/company matches from overriding a complete name mismatch
+    # (e.g., "Gregg Brill" should never match "Honey Mathew" regardless of shared org)
+    NAME_MATCH_FLOOR = 0.40
+    if name_score < NAME_MATCH_FLOOR:
+        return 0.0  # Reject this candidate entirely
 
     # Location hits
     loc_terms = [t for t in [metro, city, state, country] if t]
@@ -277,7 +284,10 @@ def score_candidate(row: Dict[str, str], cand_title: str, cand_snippet: str, url
     url_bonus = 0.05 if "/in/" in (url or "").lower() else 0.0
 
     # Weighted blend (rebalanced: less name weight, more biz weight)
-    return (0.50 * name_score) + (0.25 * loc_score) + (0.25 * biz_score) + company_bonus + url_bonus
+    raw_score = (0.50 * name_score) + (0.25 * loc_score) + (0.25 * biz_score) + company_bonus + url_bonus
+    
+    # Cap at 1.0 for display
+    return min(raw_score, 1.0)
 
 
 def pick_best(cands: List[Candidate]) -> Tuple[Optional[Candidate], float, bool]:
