@@ -15,7 +15,7 @@ SEARCHAPI_ENDPOINT = "https://www.searchapi.io/api/v1/search"
 # ---------------------------
 
 APP_NAME = "Resolver"
-APP_VERSION = "0.5.5"  # bump whenever query/scoring/output logic changes
+APP_VERSION = "0.5.6"  # bump whenever query/scoring/output logic changes
 
 # ---------------------------
 # Page config with icon
@@ -73,13 +73,26 @@ st.markdown("---")
 
 st.info(
     """
-**How to prepare your CSV:**
+**Preparing your CSV**
 
-1. **Required columns:** `full_name`, `country`
-2. **Recommended (sweet spot for accuracy):** `city` and/or `state` — these disambiguate common names far better than country alone
-3. **Helpful but less reliable:** `company` or `organization`, `title` — only helps if it matches what's currently on their LinkedIn profile
+This tool works best when it has enough location context to disambiguate common names.
 
-*Also accepts: `province`, `state_province`, `metro`, `metro_area`, `metro_region`*
+**Required**
+- `full_name`
+- `country`
+
+**Strongly recommended** *(biggest accuracy boost)*
+- `city` or `state`
+
+Location detail is far more reliable than organization or title for resolving profiles.
+
+**Optional** *(helpful when accurate, ignored when not)*
+- `company` or `organization`
+- `title`
+
+**Accepted location variants:** `province`, `state_province`, `metro`, `metro_area`, `metro_region`
+
+💡 *If you can only add one extra column beyond country, add city or state — it improves results much more than company alone.*
 """,
     icon="📋",
 )
