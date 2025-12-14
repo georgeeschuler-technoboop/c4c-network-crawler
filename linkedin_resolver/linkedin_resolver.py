@@ -15,7 +15,7 @@ SEARCHAPI_ENDPOINT = "https://www.searchapi.io/api/v1/search"
 # ---------------------------
 
 APP_NAME = "Resolver"
-APP_VERSION = "0.4.3"  # bump whenever query/scoring/output logic changes
+APP_VERSION = "0.5.0"  # bump whenever query/scoring/output logic changes
 
 # ---------------------------
 # Page config with icon
@@ -245,12 +245,19 @@ def score_candidate(row: Dict[str, str], cand_title: str, cand_snippet: str, url
     biz_terms = [t for t in [company, title] if t]
     biz_hits = sum(1 for t in biz_terms if t.lower() in hay.lower())
     biz_score = min(biz_hits / max(len(biz_terms), 1), 1.0) if biz_terms else 0.0
+    
+    # Bonus: exact company name match in snippet (strong disambiguation signal)
+    company_bonus = 0.0
+    if company and company.lower() in hay.lower():
+        company_bonus = 0.10  # Significant boost when company name found
 
     # URL quality bonus (vanity URLs slightly preferred)
     url_bonus = 0.05 if "/in/" in (url or "").lower() else 0.0
 
-    # Weighted blend
-    return (0.65 * name_score) + (0.25 * loc_score) + (0.10 * biz_score) + url_bonus
+    # Weighted blend (rebalanced: less name weight, more biz weight)
+    # Previous: 0.65 name + 0.25 loc + 0.10 biz
+    # New:      0.50 name + 0.25 loc + 0.25 biz
+    return (0.50 * name_score) + (0.25 * loc_score) + (0.25 * biz_score) + company_bonus + url_bonus
 
 
 def pick_best(cands: List[Candidate]) -> Tuple[Optional[Candidate], float, bool]:
