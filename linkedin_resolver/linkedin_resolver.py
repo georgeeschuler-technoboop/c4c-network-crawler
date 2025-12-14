@@ -15,7 +15,7 @@ SEARCHAPI_ENDPOINT = "https://www.searchapi.io/api/v1/search"
 # ---------------------------
 
 APP_NAME = "Resolver"
-APP_VERSION = "0.5.2"  # bump whenever query/scoring/output logic changes
+APP_VERSION = "0.5.3"  # bump whenever query/scoring/output logic changes
 
 # ---------------------------
 # Page config with icon
@@ -74,10 +74,10 @@ st.info(
 **How to prepare your CSV:**
 
 1. **Required columns:** `full_name`, `country`
-2. **Recommended (sweet spot for accuracy):** `city` and/or `state_province` — these disambiguate common names far better than country alone
+2. **Recommended (sweet spot for accuracy):** `city` and/or `state` — these disambiguate common names far better than country alone
 3. **Helpful but less reliable:** `company` or `organization`, `title` — only helps if it matches what's currently on their LinkedIn profile
 
-The app returns the best LinkedIn URL match, a confidence score, a review flag, and top candidates for each row.
+*Also accepts: `province`, `state_province`, `metro`, `metro_area`, `metro_region`*
 """,
     icon="📋",
 )
@@ -306,9 +306,24 @@ with colC:
 if uploaded is not None:
     df = pd.read_csv(uploaded)
 
-    # Normalize column names: accept 'organization' as alias for 'company'
+    # Normalize column names: accept common aliases
+    # organization → company
     if "organization" in df.columns and "company" not in df.columns:
         df["company"] = df["organization"]
+    
+    # state or province → state_province
+    if "state_province" not in df.columns:
+        if "state" in df.columns:
+            df["state_province"] = df["state"]
+        elif "province" in df.columns:
+            df["state_province"] = df["province"]
+    
+    # metro or metro_area → metro_region
+    if "metro_region" not in df.columns:
+        if "metro" in df.columns:
+            df["metro_region"] = df["metro"]
+        elif "metro_area" in df.columns:
+            df["metro_region"] = df["metro_area"]
     
     missing = [c for c in REQUIRED_COLS if c not in df.columns]
     if missing:
