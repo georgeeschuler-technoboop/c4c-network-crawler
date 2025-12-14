@@ -35,7 +35,7 @@ from c4c_utils.network_export import build_nodes_df, build_edges_df, NODE_COLUMN
 
 APP_VERSION = "0.4.0"
 MAX_FILES = 50
-C4C_LOGO_URL = "https://static.wixstatic.com/media/275a3f_71fc58eb3cdf401cb972889063c2c132~mv2.png"
+C4C_LOGO_URL = "https://static.wixstatic.com/media/275a3f_25063966d6cd496eb2fe3f6ee5cde0fa~mv2.png"
 SOURCE_SYSTEM = "IRS_990"
 JURISDICTION = "US"
 
