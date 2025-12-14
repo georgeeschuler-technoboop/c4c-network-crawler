@@ -1,6 +1,5 @@
 import json
 import time
-import urllib.parse
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
@@ -12,11 +11,47 @@ from rapidfuzz import fuzz
 SERPAPI_ENDPOINT = "https://serpapi.com/search.json"
 
 # ---------------------------
+# App metadata
+# ---------------------------
+
+APP_NAME = "linkedin_resolver"
+APP_VERSION = "0.1.0"  # bump whenever query/scoring/output logic changes
+
+# ---------------------------
+# API key handling (manual first, secrets fallback)
+# ---------------------------
+
+st.sidebar.header("Settings")
+
+api_key_manual = st.sidebar.text_input(
+    "SerpApi API key",
+    type="password",
+    help="Paste your SerpApi key here for this session. If blank, the app will try Streamlit Secrets.",
+)
+
+api_key = api_key_manual.strip() if api_key_manual else ""
+
+if not api_key:
+    try:
+        api_key = st.secrets["SERPAPI_API_KEY"].strip()
+    except Exception:
+        api_key = ""
+
+if not api_key:
+    st.warning(
+        "No SerpApi API key provided.\n\n"
+        "• Paste one into the sidebar, or\n"
+        "• Add SERPAPI_API_KEY to Streamlit Secrets"
+    )
+    st.stop()
+
+# ---------------------------
 # Scoring + query logic
 # ---------------------------
 
 REQUIRED_COLS = ["full_name", "country"]
 OPTIONAL_COLS = ["city", "state_province", "metro_region", "company", "title"]
+
 
 @dataclass
 class Candidate:
@@ -25,8 +60,10 @@ class Candidate:
     snippet: str
     score: float
 
+
 def normalize_text(x: Optional[str]) -> str:
     return (x or "").strip()
+
 
 def build_queries(row: Dict[str, str]) -> List[str]:
     name = normalize_text(row.get("full_name"))
@@ -41,23 +78,32 @@ def build_queries(row: Dict[str, str]) -> List[str]:
 
     # 3 passes: specific -> medium -> fallback
     q1_parts = [f'"{name}"', "site:linkedin.com/in"]
-    if loc: q1_parts.append(f'"{loc}"')
-    if country: q1_parts.append(f'"{country}"')
-    if company: q1_parts.append(f'"{company}"')
-    if title: q1_parts.append(f'"{title}"')
+    if loc:
+        q1_parts.append(f'"{loc}"')
+    if country:
+        q1_parts.append(f'"{country}"')
+    if company:
+        q1_parts.append(f'"{company}"')
+    if title:
+        q1_parts.append(f'"{title}"')
     q1 = " ".join(q1_parts)
 
     q2_parts = [f'"{name}"', "site:linkedin.com/in"]
-    if loc: q2_parts.append(f'"{loc}"')
-    if country: q2_parts.append(f'"{country}"')
+    if loc:
+        q2_parts.append(f'"{loc}"')
+    if country:
+        q2_parts.append(f'"{country}"')
     q2 = " ".join(q2_parts)
 
     q3_parts = [f'"{name}"', "site:linkedin.com/in"]
-    if country: q3_parts.append(f'"{country}"')
-    if company: q3_parts.append(f'"{company}"')
+    if country:
+        q3_parts.append(f'"{country}"')
+    if company:
+        q3_parts.append(f'"{company}"')
     q3 = " ".join(q3_parts)
 
     return [q1, q2, q3]
+
 
 def fetch_serpapi_results(api_key: str, q: str, num: int = 10) -> Dict:
     params = {
@@ -70,9 +116,11 @@ def fetch_serpapi_results(api_key: str, q: str, num: int = 10) -> Dict:
     r.raise_for_status()
     return r.json()
 
+
 def is_linkedin_profile_url(url: str) -> bool:
-    url = url.lower()
-    return ("linkedin.com/in/" in url) or ("linkedin.com/pub/" in url)
+    u = (url or "").lower()
+    return ("linkedin.com/in/" in u) or ("linkedin.com/pub/" in u)
+
 
 def score_candidate(row: Dict[str, str], cand_title: str, cand_snippet: str, url: str) -> float:
     name = normalize_text(row.get("full_name"))
@@ -85,7 +133,7 @@ def score_candidate(row: Dict[str, str], cand_title: str, cand_snippet: str, url
 
     hay = f"{cand_title} {cand_snippet}".strip()
 
-    # Name similarity: use token sort
+    # Name similarity: use token sort ratio against result title (good signal)
     name_score = fuzz.token_sort_ratio(name, cand_title) / 100.0
 
     # Location hits
@@ -99,10 +147,11 @@ def score_candidate(row: Dict[str, str], cand_title: str, cand_snippet: str, url
     biz_score = min(biz_hits / max(len(biz_terms), 1), 1.0) if biz_terms else 0.0
 
     # URL quality bonus (vanity URLs slightly preferred)
-    url_bonus = 0.05 if "/in/" in url.lower() else 0.0
+    url_bonus = 0.05 if "/in/" in (url or "").lower() else 0.0
 
     # Weighted blend
     return (0.65 * name_score) + (0.25 * loc_score) + (0.10 * biz_score) + url_bonus
+
 
 def pick_best(cands: List[Candidate]) -> Tuple[Optional[Candidate], float, bool]:
     if not cands:
@@ -120,20 +169,19 @@ def pick_best(cands: List[Candidate]) -> Tuple[Optional[Candidate], float, bool]
     review = (best.score < 0.55) or (conf < 0.75) or (second and (best.score - second.score) < 0.08)
     return best, float(round(conf, 3)), review
 
+
 # ---------------------------
 # Streamlit UI
 # ---------------------------
 
 st.set_page_config(page_title="LinkedIn URL Resolver (CSV → CSV)", layout="wide")
 st.title("LinkedIn Profile URL Resolver (CSV → CSV)")
+st.caption(f"{APP_NAME} v{APP_VERSION}")
 
-st.caption("Upload a CSV with at least: full_name, country. Strongly recommended: city/state_province/metro_region. "
-           "Returns best LinkedIn URL + confidence + review flag + top candidates.")
-
-api_key = st.secrets.get("SERPAPI_API_KEY") if hasattr(st, "secrets") else None
-if not api_key:
-    st.warning("Missing SERPAPI_API_KEY. Add it in Streamlit Secrets before running.")
-    st.stop()
+st.caption(
+    "Upload a CSV with at least: full_name, country. Strongly recommended: city/state_province/metro_region. "
+    "Returns best LinkedIn URL + confidence + review flag + top candidates."
+)
 
 uploaded = st.file_uploader("Upload input CSV", type=["csv"])
 
@@ -169,7 +217,7 @@ if uploaded is not None:
             queries = build_queries(row_dict)
 
             all_candidates: List[Candidate] = []
-            query_used = None
+            query_used = ""
 
             for q in queries:
                 query_used = q
@@ -198,27 +246,39 @@ if uploaded is not None:
                     time.sleep(per_row_pause)
 
             # Deduplicate by URL, keep best score per URL
-            by_url = {}
+            by_url: Dict[str, Candidate] = {}
             for c in all_candidates:
                 if c.url not in by_url or c.score > by_url[c.url].score:
                     by_url[c.url] = c
+
             uniq_candidates = sorted(by_url.values(), key=lambda c: c.score, reverse=True)[:max_candidates]
 
             best, conf, review = pick_best(uniq_candidates)
 
-            out_rows.append({
-                "id": row_dict.get("id", i),
-                "full_name": row_dict.get("full_name"),
-                "country": row_dict.get("country"),
-                "linkedin_url_best": best.url if best else "",
-                "confidence": conf,
-                "review_flag": review,
-                "query_used": query_used or "",
-                "candidates_json": json.dumps(
-                    [{"url": c.url, "title": c.title, "snippet": c.snippet, "score": round(c.score, 3)} for c in uniq_candidates],
-                    ensure_ascii=False
-                ),
-            })
+            out_rows.append(
+                {
+                    "id": row_dict.get("id", i),
+                    "full_name": row_dict.get("full_name"),
+                    "country": row_dict.get("country"),
+                    "linkedin_url_best": best.url if best else "",
+                    "confidence": conf,
+                    "review_flag": review,
+                    "resolver_version": APP_VERSION,
+                    "query_used": query_used or "",
+                    "candidates_json": json.dumps(
+                        [
+                            {
+                                "url": c.url,
+                                "title": c.title,
+                                "snippet": c.snippet,
+                                "score": round(c.score, 3),
+                            }
+                            for c in uniq_candidates
+                        ],
+                        ensure_ascii=False,
+                    ),
+                }
+            )
 
             progress.progress(int(((i + 1) / total) * 100))
             status.write(f"Processed {i + 1}/{total}")
