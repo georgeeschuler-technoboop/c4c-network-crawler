@@ -15,7 +15,7 @@ SEARCHAPI_ENDPOINT = "https://www.searchapi.io/api/v1/search"
 # ---------------------------
 
 APP_NAME = "Resolver"
-APP_VERSION = "0.3.0"  # bump whenever query/scoring/output logic changes
+APP_VERSION = "0.4.0"  # bump whenever query/scoring/output logic changes
 
 # ---------------------------
 # Page config with icon
@@ -340,12 +340,185 @@ if uploaded is not None:
         out_df = pd.DataFrame(out_rows)
 
         st.success("✅ Resolution complete!")
-        st.dataframe(out_df, use_container_width=True)
-
+        
+        # -------------------------------------------------
+        # Summary Statistics
+        # -------------------------------------------------
+        st.markdown("---")
+        st.subheader("📊 Run Summary")
+        
+        total_names = len(out_df)
+        matches_found = len(out_df[out_df["linkedin_url_best"] != ""])
+        no_matches = total_names - matches_found
+        needs_review = len(out_df[out_df["review_flag"] == True])
+        auto_accept = matches_found - len(out_df[(out_df["linkedin_url_best"] != "") & (out_df["review_flag"] == True)])
+        avg_confidence = out_df[out_df["confidence"] > 0]["confidence"].mean() if matches_found > 0 else 0
+        
+        # Confidence bins
+        high_conf = len(out_df[out_df["confidence"] > 0.7])
+        med_conf = len(out_df[(out_df["confidence"] >= 0.5) & (out_df["confidence"] <= 0.7)])
+        low_conf = len(out_df[(out_df["confidence"] > 0) & (out_df["confidence"] < 0.5)])
+        
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("Total Names Processed", total_names)
+        with col2:
+            st.metric("Matches Found", f"{matches_found} ({100*matches_found//total_names}%)")
+        with col3:
+            st.metric("No Match", no_matches)
+        with col4:
+            st.metric("Avg Confidence", f"{avg_confidence:.1%}" if avg_confidence else "N/A")
+        
+        # Quality Distribution
+        st.markdown("**Quality Distribution**")
+        qual_col1, qual_col2, qual_col3 = st.columns(3)
+        with qual_col1:
+            st.markdown(f"🟢 **High** (>0.7): **{high_conf}**")
+        with qual_col2:
+            st.markdown(f"🟡 **Medium** (0.5–0.7): **{med_conf}**")
+        with qual_col3:
+            st.markdown(f"🔴 **Low** (<0.5): **{low_conf}**")
+        
+        # By Country Performance
+        if "country" in out_df.columns:
+            st.markdown("**Match Rate by Country**")
+            country_stats = out_df.groupby("country").agg(
+                total=("full_name", "count"),
+                matched=("linkedin_url_best", lambda x: (x != "").sum()),
+                avg_conf=("confidence", lambda x: x[x > 0].mean() if (x > 0).any() else 0)
+            ).reset_index()
+            country_stats["match_rate"] = (country_stats["matched"] / country_stats["total"] * 100).round(1)
+            country_stats["avg_conf"] = (country_stats["avg_conf"] * 100).round(1)
+            country_stats.columns = ["Country", "Total", "Matched", "Avg Conf %", "Match Rate %"]
+            country_stats = country_stats.sort_values("Match Rate %", ascending=True)
+            st.dataframe(country_stats, use_container_width=True, hide_index=True)
+        
+        # No Match List
+        no_match_df = out_df[out_df["linkedin_url_best"] == ""][["full_name", "country"]]
+        if len(no_match_df) > 0:
+            with st.expander(f"🔍 No Match — Manual Lookup Needed ({len(no_match_df)})", expanded=False):
+                for _, row in no_match_df.iterrows():
+                    st.write(f"• {row['full_name']} ({row['country']})")
+        
+        # Too Close to Call
+        too_close_rows = []
+        for _, row in out_df.iterrows():
+            if row["linkedin_url_best"] and row["candidates_json"]:
+                try:
+                    cands = json.loads(row["candidates_json"])
+                    if len(cands) >= 2:
+                        top_score = cands[0]["score"]
+                        second_score = cands[1]["score"]
+                        if (top_score - second_score) < 0.08 and top_score < 0.75:
+                            too_close_rows.append({
+                                "name": row["full_name"],
+                                "country": row["country"],
+                                "picked": cands[0]["title"],
+                                "picked_score": round(top_score, 3),
+                                "runner_up": cands[1]["title"],
+                                "runner_up_score": round(second_score, 3),
+                            })
+                except:
+                    pass
+        
+        if too_close_rows:
+            with st.expander(f"⚠️ Too Close to Call! ({len(too_close_rows)})", expanded=False):
+                st.caption("These matches have very similar scores — verify manually.")
+                for item in too_close_rows:
+                    st.markdown(f"**{item['name']}** ({item['country']})")
+                    st.markdown(f"  - Picked: {item['picked']} ({item['picked_score']})")
+                    st.markdown(f"  - Runner-up: {item['runner_up']} ({item['runner_up_score']})")
+                    st.markdown("---")
+        
+        # -------------------------------------------------
+        # Generate Summary Report (Markdown)
+        # -------------------------------------------------
+        report_lines = [
+            f"# Resolver Run Summary",
+            f"**Version:** {APP_VERSION}",
+            f"**Date:** {time.strftime('%Y-%m-%d %H:%M:%S')}",
+            "",
+            "## Overview",
+            f"- **Total Names Processed:** {total_names}",
+            f"- **Matches Found:** {matches_found} ({100*matches_found//total_names}%)",
+            f"- **No Match:** {no_matches}",
+            f"- **Average Confidence:** {avg_confidence:.1%}" if avg_confidence else "- **Average Confidence:** N/A",
+            "",
+            "## Quality Distribution",
+            f"- 🟢 **High** (>0.7): {high_conf}",
+            f"- 🟡 **Medium** (0.5–0.7): {med_conf}",
+            f"- 🔴 **Low** (<0.5): {low_conf}",
+            "",
+        ]
+        
+        if "country" in out_df.columns:
+            report_lines.append("## Match Rate by Country")
+            report_lines.append("| Country | Total | Matched | Match Rate | Avg Conf |")
+            report_lines.append("|---------|-------|---------|------------|----------|")
+            for _, row in country_stats.iterrows():
+                report_lines.append(f"| {row['Country']} | {row['Total']} | {row['Matched']} | {row['Match Rate %']}% | {row['Avg Conf %']}% |")
+            report_lines.append("")
+        
+        if len(no_match_df) > 0:
+            report_lines.append("## No Match — Manual Lookup Needed")
+            for _, row in no_match_df.iterrows():
+                report_lines.append(f"- {row['full_name']} ({row['country']})")
+            report_lines.append("")
+        
+        if too_close_rows:
+            report_lines.append("## Too Close to Call!")
+            report_lines.append("These matches have very similar scores — verify manually.")
+            report_lines.append("")
+            for item in too_close_rows:
+                report_lines.append(f"### {item['name']} ({item['country']})")
+                report_lines.append(f"- **Picked:** {item['picked']} ({item['picked_score']})")
+                report_lines.append(f"- **Runner-up:** {item['runner_up']} ({item['runner_up_score']})")
+                report_lines.append("")
+        
+        summary_report = "\n".join(report_lines)
+        
+        # -------------------------------------------------
+        # Downloads
+        # -------------------------------------------------
+        st.markdown("---")
+        st.subheader("📥 Downloads")
+        
         csv_bytes = out_df.to_csv(index=False).encode("utf-8")
-        st.download_button(
-            "⬇️ Download output CSV",
-            data=csv_bytes,
-            file_name="linkedin_resolved_output.csv",
-            mime="text/csv",
-        )
+        summary_bytes = summary_report.encode("utf-8")
+        
+        # Create ZIP with both files
+        import io
+        import zipfile
+        zip_buffer = io.BytesIO()
+        with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr("linkedin_resolved_output.csv", csv_bytes)
+            zf.writestr("resolver_summary.md", summary_bytes)
+        zip_bytes = zip_buffer.getvalue()
+        
+        dl_col1, dl_col2, dl_col3 = st.columns(3)
+        with dl_col1:
+            st.download_button(
+                "📦 Download All (ZIP)",
+                data=zip_bytes,
+                file_name="resolver_results.zip",
+                mime="application/zip",
+            )
+        with dl_col2:
+            st.download_button(
+                "📄 Download CSV",
+                data=csv_bytes,
+                file_name="linkedin_resolved_output.csv",
+                mime="text/csv",
+            )
+        with dl_col3:
+            st.download_button(
+                "📋 Download Summary",
+                data=summary_bytes,
+                file_name="resolver_summary.md",
+                mime="text/markdown",
+            )
+        
+        # Results table
+        st.markdown("---")
+        st.subheader("📋 Results")
+        st.dataframe(out_df, use_container_width=True)
