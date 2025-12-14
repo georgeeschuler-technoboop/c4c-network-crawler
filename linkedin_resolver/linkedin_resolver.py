@@ -15,7 +15,7 @@ SERPAPI_ENDPOINT = "https://serpapi.com/search.json"
 # ---------------------------
 
 APP_NAME = "Resolver"
-APP_VERSION = "0.2.0"  # bump whenever query/scoring/output logic changes
+APP_VERSION = "0.2.1"  # bump whenever query/scoring/output logic changes
 
 # ---------------------------
 # Page config with icon
@@ -62,7 +62,7 @@ st.info(
 
 1. **Required columns:** `full_name`, `country`
 2. **Recommended for better matching:** `city`, `state_province`, `metro_region`
-3. **Improves accuracy:** `company` (or organization name), `title`
+3. **Improves accuracy:** `company` or `organization`, `title`
 
 The app returns the best LinkedIn URL match, a confidence score, a review flag, and top candidates for each row.
 """,
@@ -239,6 +239,10 @@ with colC:
 if uploaded is not None:
     df = pd.read_csv(uploaded)
 
+    # Normalize column names: accept 'organization' as alias for 'company'
+    if "organization" in df.columns and "company" not in df.columns:
+        df["company"] = df["organization"]
+    
     missing = [c for c in REQUIRED_COLS if c not in df.columns]
     if missing:
         st.error(f"Input CSV missing required columns: {missing}")
