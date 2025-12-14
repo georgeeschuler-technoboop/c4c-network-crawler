@@ -15,7 +15,7 @@ SEARCHAPI_ENDPOINT = "https://www.searchapi.io/api/v1/search"
 # ---------------------------
 
 APP_NAME = "Resolver"
-APP_VERSION = "0.6.0"  # bump whenever query/scoring/output logic changes
+APP_VERSION = "0.6.1"  # bump whenever query/scoring/output logic changes
 
 # ---------------------------
 # Page config with icon
@@ -30,6 +30,28 @@ st.set_page_config(
 )
 
 # ---------------------------
+# API Counter Persistence (file-based)
+# ---------------------------
+
+COUNTER_FILE = "/tmp/resolver_api_counter.txt"
+
+def load_api_counter() -> int:
+    """Load counter from file, return 0 if file doesn't exist."""
+    try:
+        with open(COUNTER_FILE, "r") as f:
+            return int(f.read().strip())
+    except:
+        return 0
+
+def save_api_counter(count: int):
+    """Save counter to file."""
+    try:
+        with open(COUNTER_FILE, "w") as f:
+            f.write(str(count))
+    except:
+        pass  # Fail silently if can't write
+
+# ---------------------------
 # Session state for persistence
 # ---------------------------
 
@@ -42,7 +64,8 @@ if "last_uploaded_file" not in st.session_state:
 if "show_success" not in st.session_state:
     st.session_state.show_success = False
 if "api_search_count" not in st.session_state:
-    st.session_state.api_search_count = 0
+    # Load from file on first run
+    st.session_state.api_search_count = load_api_counter()
 
 # ---------------------------
 # Header with logo and title
@@ -119,16 +142,18 @@ api_count = st.sidebar.number_input(
     min_value=0,
     value=st.session_state.api_search_count,
     step=1,
-    help="Tracks cumulative API calls. Set to your dashboard value to sync, or reset to 0.",
+    help="Tracks cumulative API calls. Set to your dashboard value to sync, or reset to 0. Persists across page refreshes.",
     label_visibility="collapsed",
 )
 
-# Sync manual edits back to internal counter
+# Sync manual edits back to internal counter and save to file
 if api_count != st.session_state.api_search_count:
     st.session_state.api_search_count = api_count
+    save_api_counter(api_count)
 
 if st.sidebar.button("Reset to 0", use_container_width=True):
     st.session_state.api_search_count = 0
+    save_api_counter(0)
     st.rerun()
 
 st.sidebar.markdown("---")
@@ -228,8 +253,9 @@ def fetch_searchapi_results(api_key: str, q: str, num: int = 10) -> Dict:
     r = requests.get(SEARCHAPI_ENDPOINT, params=params, timeout=30)
     r.raise_for_status()
     
-    # Increment internal API search counter
+    # Increment internal API search counter and save to file
     st.session_state.api_search_count += 1
+    save_api_counter(st.session_state.api_search_count)
     
     return r.json()
 
