@@ -1,6 +1,12 @@
 """
-990-PF Parser v2.4 - Complete Module for OrgGraph
+990-PF Parser v2.5 - Complete Module for OrgGraph
 ==================================================
+Changes in v2.5:
+- Added format detection diagnostics (Erb-style vs Joyce-style extraction order)
+- Added parsing confidence score based on total matching
+- Added sample grant logging for verification
+- Better error reporting when totals don't match
+
 Changes in v2.4:
 - Fixed regex pattern for "Total ... 3a/3b" to handle spaced dots (. . . . .)
   Previously only matched consecutive dots (......), now matches both styles
@@ -17,7 +23,7 @@ Exports:
 - IRS990PFParser class for direct use
 """
 
-PARSER_VERSION = "2.4"
+PARSER_VERSION = "2.5"
 
 import re
 import io
@@ -213,9 +219,41 @@ class GrantExtractor:
         'freshwater', 'clean water', 'river', 'wetland'
     ]
     
+    def __init__(self):
+        # Track extraction format for diagnostics
+        self.format_a_count = 0  # Erb-style: status/amount BEFORE org name
+        self.format_b_count = 0  # Joyce-style: org name BEFORE status/amount
+        self.sample_grants = []  # Store first few for verification
+    
+    def get_format_diagnostics(self) -> dict:
+        """Return diagnostics about which extraction format was detected."""
+        total = self.format_a_count + self.format_b_count
+        if total == 0:
+            dominant = "unknown"
+            confidence = 0
+        elif self.format_a_count > self.format_b_count:
+            dominant = "format_a_erb_style"
+            confidence = self.format_a_count / total
+        else:
+            dominant = "format_b_joyce_style"
+            confidence = self.format_b_count / total
+        
+        return {
+            "dominant_format": dominant,
+            "format_a_erb_style_count": self.format_a_count,
+            "format_b_joyce_style_count": self.format_b_count,
+            "format_confidence": round(confidence, 2),
+            "sample_grants": self.sample_grants[:5]  # First 5 for verification
+        }
+    
     def extract_grants(self, section_text: str, grant_bucket: str = "3a") -> List[Grant]:
         """Extract grants from the section text."""
         grants = []
+        
+        # Reset counters for this section
+        self.format_a_count = 0
+        self.format_b_count = 0
+        self.sample_grants = []
         
         # Split into potential grant blocks
         # Each grant typically has: ORG_NAME, ADDRESS, CITY/STATE/ZIP, PC/NC, PURPOSE, AMOUNT
@@ -291,6 +329,17 @@ class GrantExtractor:
                                 gl_relevant=self._is_gl_relevant(org_name + " " + purpose_text)
                             )
                             grants.append(grant)
+                            self.format_a_count += 1  # Track Format A
+                            
+                            # Store sample for verification
+                            if len(self.sample_grants) < 5:
+                                self.sample_grants.append({
+                                    "org": org_name,
+                                    "amount": amount,
+                                    "format": "A_erb_style",
+                                    "raw_line": line[:50]
+                                })
+                            
                             i = j
                             continue
                 
@@ -306,6 +355,17 @@ class GrantExtractor:
                         current_grant.recipient_name + " " + current_grant.purpose
                     )
                     grants.append(current_grant)
+                    self.format_b_count += 1  # Track Format B
+                    
+                    # Store sample for verification
+                    if len(self.sample_grants) < 5:
+                        self.sample_grants.append({
+                            "org": current_grant.recipient_name,
+                            "amount": amount,
+                            "format": "B_joyce_style",
+                            "raw_line": line[:50]
+                        })
+                    
                     current_grant = None
                     i += 1
                     continue
@@ -522,6 +582,37 @@ class IRS990PFParser:
         self.grant_extractor = GrantExtractor()
         self.board_extractor = BoardExtractor()
     
+    def _calculate_confidence(self, parsed_total: int, reported_total: int) -> dict:
+        """Calculate parsing confidence based on total matching."""
+        if reported_total == 0:
+            return {"match_pct": 0, "status": "no_reported_total", "confidence": "low"}
+        
+        match_pct = (parsed_total / reported_total) * 100
+        variance = abs(100 - match_pct)
+        
+        if variance <= 1:
+            status = "excellent"
+            confidence = "high"
+        elif variance <= 5:
+            status = "good"
+            confidence = "medium-high"
+        elif variance <= 10:
+            status = "acceptable"
+            confidence = "medium"
+        elif variance <= 20:
+            status = "needs_review"
+            confidence = "low"
+        else:
+            status = "poor"
+            confidence = "very_low"
+        
+        return {
+            "match_pct": round(match_pct, 1),
+            "variance_pct": round(variance, 1),
+            "status": status,
+            "confidence": confidence
+        }
+    
     def parse(self, file_bytes: bytes, source_file: str = "", tax_year_override: str = "") -> dict:
         """Parse 990-PF and return structured data."""
         
@@ -536,6 +627,11 @@ class IRS990PFParser:
             "board_count": 0,
             "reported_total_3a": 0,
             "reported_total_3b": 0,
+            "confidence_3a": {},
+            "confidence_3b": {},
+            "extraction_format": {},
+            "sample_grants": [],
+            "warnings": [],
             "errors": []
         }
         
@@ -565,8 +661,26 @@ class IRS990PFParser:
                 grants.extend(grants_3a)
                 diagnostics["grants_3a_count"] = len(grants_3a)
                 diagnostics["grants_3a_total"] = sum(g.amount for g in grants_3a)
+                
+                # Get format diagnostics from 3a extraction
+                format_diag = self.grant_extractor.get_format_diagnostics()
+                diagnostics["extraction_format"] = format_diag
+                diagnostics["sample_grants"] = format_diag.get("sample_grants", [])
+                
                 if len(result_3a) > 2:
                     diagnostics["reported_total_3a"] = result_3a[2]
+                    # Calculate confidence
+                    diagnostics["confidence_3a"] = self._calculate_confidence(
+                        diagnostics["grants_3a_total"],
+                        diagnostics["reported_total_3a"]
+                    )
+                    
+                    # Add warning if confidence is low
+                    if diagnostics["confidence_3a"].get("confidence") in ["low", "very_low"]:
+                        diagnostics["warnings"].append(
+                            f"3a parsing variance is {diagnostics['confidence_3a'].get('variance_pct')}% - "
+                            f"parsed ${diagnostics['grants_3a_total']:,} vs reported ${diagnostics['reported_total_3a']:,}"
+                        )
             
             # Extract grants from 3b section
             result_3b = self.section_finder.find_grants_section_3b(cleaned_text)
@@ -578,10 +692,26 @@ class IRS990PFParser:
                 diagnostics["grants_3b_total"] = sum(g.amount for g in grants_3b)
                 if len(result_3b) > 2:
                     diagnostics["reported_total_3b"] = result_3b[2]
+                    # Calculate confidence
+                    diagnostics["confidence_3b"] = self._calculate_confidence(
+                        diagnostics["grants_3b_total"],
+                        diagnostics["reported_total_3b"]
+                    )
+                    
+                    # Add warning if confidence is low
+                    if diagnostics["confidence_3b"].get("confidence") in ["low", "very_low"]:
+                        diagnostics["warnings"].append(
+                            f"3b parsing variance is {diagnostics['confidence_3b'].get('variance_pct')}% - "
+                            f"parsed ${diagnostics['grants_3b_total']:,} vs reported ${diagnostics['reported_total_3b']:,}"
+                        )
             
             # Extract board members
             board = self.board_extractor.extract(cleaned_text)
             diagnostics["board_count"] = len(board)
+            
+            # Overall parsing quality
+            if not grants:
+                diagnostics["warnings"].append("No grants extracted - check PDF format")
             
             # Convert to DataFrames
             grants_df = pd.DataFrame([{
@@ -639,6 +769,7 @@ def parse_990_pdf(file_bytes: bytes, source_file: str = "", tax_year_override: s
 # CLI for testing
 if __name__ == "__main__":
     import sys
+    import json
     
     if len(sys.argv) < 2:
         print(f"990-PF Parser v{PARSER_VERSION}")
@@ -651,17 +782,53 @@ if __name__ == "__main__":
         pdf_bytes = f.read()
     
     result = parse_990_pdf(pdf_bytes, pdf_path)
+    diag = result['diagnostics']
     
-    print(f"\n=== Parser v{PARSER_VERSION} Results ===\n")
-    print(f"Foundation: {result['foundation_meta']['foundation_name']}")
-    print(f"EIN: {result['foundation_meta']['foundation_ein']}")
-    print(f"Tax Year: {result['foundation_meta']['tax_year']}")
-    print(f"\nGrants (3a - Paid): {result['diagnostics']['grants_3a_count']} grants, ${result['diagnostics']['grants_3a_total']:,}")
-    print(f"  Reported Total: ${result['diagnostics']['reported_total_3a']:,}")
-    print(f"\nGrants (3b - Future): {result['diagnostics']['grants_3b_count']} grants, ${result['diagnostics']['grants_3b_total']:,}")
-    print(f"  Reported Total: ${result['diagnostics']['reported_total_3b']:,}")
-    print(f"\nBoard Members: {result['diagnostics']['board_count']}")
+    print(f"\n{'='*60}")
+    print(f"990-PF Parser v{PARSER_VERSION} Results")
+    print('='*60)
     
-    if not result['grants_df'].empty:
-        print(f"\n=== Sample Grants ===")
-        print(result['grants_df'].head(10).to_string())
+    print(f"\n📋 FOUNDATION INFO")
+    print(f"   Name: {result['foundation_meta']['foundation_name']}")
+    print(f"   EIN: {result['foundation_meta']['foundation_ein']}")
+    print(f"   Tax Year: {result['foundation_meta']['tax_year']}")
+    
+    print(f"\n📊 GRANTS SECTION 3a (Paid During Year)")
+    print(f"   Parsed: {diag['grants_3a_count']} grants, ${diag['grants_3a_total']:,}")
+    print(f"   Reported: ${diag['reported_total_3a']:,}")
+    if diag.get('confidence_3a'):
+        conf = diag['confidence_3a']
+        print(f"   Match: {conf.get('match_pct', 0)}% ({conf.get('status', 'unknown')}) - Confidence: {conf.get('confidence', 'unknown')}")
+    
+    print(f"\n📊 GRANTS SECTION 3b (Approved Future)")
+    print(f"   Parsed: {diag['grants_3b_count']} grants, ${diag['grants_3b_total']:,}")
+    print(f"   Reported: ${diag['reported_total_3b']:,}")
+    if diag.get('confidence_3b'):
+        conf = diag['confidence_3b']
+        print(f"   Match: {conf.get('match_pct', 0)}% ({conf.get('status', 'unknown')}) - Confidence: {conf.get('confidence', 'unknown')}")
+    
+    print(f"\n👥 BOARD MEMBERS: {diag['board_count']}")
+    
+    print(f"\n🔍 EXTRACTION FORMAT DETECTION")
+    fmt = diag.get('extraction_format', {})
+    print(f"   Dominant format: {fmt.get('dominant_format', 'unknown')}")
+    print(f"   Format A (Erb-style): {fmt.get('format_a_erb_style_count', 0)} grants")
+    print(f"   Format B (Joyce-style): {fmt.get('format_b_joyce_style_count', 0)} grants")
+    print(f"   Format confidence: {fmt.get('format_confidence', 0)*100:.0f}%")
+    
+    if diag.get('sample_grants'):
+        print(f"\n📝 SAMPLE GRANTS (for verification)")
+        for i, sg in enumerate(diag['sample_grants'][:3], 1):
+            print(f"   {i}. {sg.get('org', 'Unknown')[:40]} - ${sg.get('amount', 0):,} [{sg.get('format', '')}]")
+    
+    if diag.get('warnings'):
+        print(f"\n⚠️  WARNINGS")
+        for w in diag['warnings']:
+            print(f"   - {w}")
+    
+    if diag.get('errors'):
+        print(f"\n❌ ERRORS")
+        for e in diag['errors']:
+            print(f"   - {e}")
+    
+    print(f"\n{'='*60}")
