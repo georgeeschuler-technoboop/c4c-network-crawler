@@ -1,18 +1,25 @@
 """
-990-PF Parser v2.2 - Complete Module for OrgGraph (US)
+990-PF Parser v2.3 - Complete Module for OrgGraph (US)
 ======================================================
-Based on team review of v2.1. Key changes:
+Based on team review of v2.1 and v2.2. Key changes:
 
-P0 Fixes:
+P0 Fixes (v2.2):
 - Fixed operator precedence bug in AM/PM line filtering
 - Changed re.DOTALL to re.MULTILINE for safer pattern matching
 
-P1 Fixes:
+P1 Fixes (v2.2):
 - Separates 3a (paid during year) from 3b (approved for future)
 - Adds reported vs computed totals for QA reconciliation
 - Adds Great Lakes state relevance tagging
 - Additional ProPublica artifact patterns
-- Improved city/state regex for edge cases
+
+P1 Patches (v2.3):
+1. Anchor Part XIV search before finding "a Paid during the year"
+2. Totals regex handles newlines between Total and number
+3. GL state inference falls back to recipient_address
+4. Mismatch threshold reports actual diffs (strict + lenient)
+5. Dedup pass to remove page-break duplicates
+6. Export grantee_address_raw for audit
 
 Exports:
 - parse_990_pdf(file_bytes, filename, tax_year_override) -> dict
@@ -98,9 +105,9 @@ class IRS990PFParser:
         r'^Total\s*\.+',
     ]
     
-    # Regex for reported totals
-    TOTAL_3A_RE = re.compile(r'\bTotal\b[^\n]*\b3a\b\s*([\d,]+)', re.IGNORECASE)
-    TOTAL_3B_RE = re.compile(r'\bTotal\b[^\n]*\b3b\b\s*([\d,]+)', re.IGNORECASE)
+    # Regex for reported totals - Patch 2: Allow newlines with tight window
+    TOTAL_3A_RE = re.compile(r'\bTotal\b[\s\S]{0,120}\b3a\b[\s\S]{0,40}?([\d,]+)', re.IGNORECASE)
+    TOTAL_3B_RE = re.compile(r'\bTotal\b[\s\S]{0,120}\b3b\b[\s\S]{0,40}?([\d,]+)', re.IGNORECASE)
     
     def __init__(self):
         # P0.2 fix: Use MULTILINE instead of DOTALL
@@ -147,6 +154,7 @@ class IRS990PFParser:
             # Extract 3a grants
             raw_3a = self._extract_grants(paid_text)
             grants_3a = [g for g in raw_3a if self._is_valid_grant(g)]
+            grants_3a = self._dedup_grants(grants_3a)  # Patch 5: dedup
             for g in grants_3a:
                 g.grant_bucket = "3a_paid"
                 self._tag_gl_relevance(g)
@@ -155,6 +163,7 @@ class IRS990PFParser:
             if future_text:
                 raw_3b = self._extract_grants(future_text)
                 grants_3b = [g for g in raw_3b if self._is_valid_grant(g)]
+                grants_3b = self._dedup_grants(grants_3b)  # Patch 5: dedup
                 for g in grants_3b:
                     g.grant_bucket = "3b_future"
                     self._tag_gl_relevance(g)
@@ -163,15 +172,27 @@ class IRS990PFParser:
         computed_total_3a = sum(g.amount for g in grants_3a)
         computed_total_3b = sum(g.amount for g in grants_3b)
         
+        # Patch 4: Calculate actual diffs for diagnostics
+        diff_3a = abs((reported_total_3a or 0) - computed_total_3a) if reported_total_3a else None
+        diff_3b = abs((reported_total_3b or 0) - computed_total_3b) if reported_total_3b else None
+        diff_pct_3a = (diff_3a / reported_total_3a * 100) if reported_total_3a and diff_3a else None
+        diff_pct_3b = (diff_3b / reported_total_3b * 100) if reported_total_3b and diff_3b else None
+        
         # Add totals to metadata for diagnostics
         metadata['reported_total_3a'] = reported_total_3a
         metadata['reported_total_3b'] = reported_total_3b
         metadata['computed_total_3a'] = computed_total_3a
         metadata['computed_total_3b'] = computed_total_3b
-        metadata['total_mismatch_3a'] = (reported_total_3a is not None and 
-                                          abs(reported_total_3a - computed_total_3a) > 100)
-        metadata['total_mismatch_3b'] = (reported_total_3b is not None and 
-                                          abs(reported_total_3b - computed_total_3b) > 100)
+        metadata['diff_3a'] = diff_3a
+        metadata['diff_3b'] = diff_3b
+        metadata['diff_pct_3a'] = diff_pct_3a
+        metadata['diff_pct_3b'] = diff_pct_3b
+        # Strict mismatch: any difference > $1
+        metadata['total_mismatch_3a_strict'] = (diff_3a is not None and diff_3a > 1)
+        metadata['total_mismatch_3b_strict'] = (diff_3b is not None and diff_3b > 1)
+        # Lenient mismatch: difference > $100 (allows for rounding)
+        metadata['total_mismatch_3a'] = (diff_3a is not None and diff_3a > 100)
+        metadata['total_mismatch_3b'] = (diff_3b is not None and diff_3b > 100)
         
         # Extract people (board members)
         people = self._extract_people(cleaned)
@@ -282,16 +303,32 @@ class IRS990PFParser:
         """
         Find the Part XIV Line 3 block containing both 3a and 3b.
         Returns the entire block from "a Paid during the year" to Part XV.
+        
+        Patch 1: Anchor to Part XIV first to avoid matching wrong "a Paid" marker.
         """
-        # Look for "a Paid during the year"
-        paid_match = re.search(r'a\s+Paid during the year', text, re.IGNORECASE)
+        # First find Part XIV
+        part_xiv = re.search(r'\bPart\s+XIV\b', text, re.IGNORECASE)
+        if not part_xiv:
+            # Fallback: try Part XV (some forms label it differently)
+            part_xiv = re.search(r'\bPart\s+XV\b.*Supplementary', text, re.IGNORECASE)
+            if not part_xiv:
+                return None
+        
+        # Now find "a Paid during the year" AFTER Part XIV
+        sub_text = text[part_xiv.start():]
+        paid_match = re.search(r'\ba\s+Paid during the year\b', sub_text, re.IGNORECASE)
         if not paid_match:
             return None
         
-        start = paid_match.start()  # Include the marker
+        start = part_xiv.start() + paid_match.start()  # Absolute position
         
-        # Find end at Part XV
-        end_match = re.search(r'\bPart\s+XV\b', text[start:], re.IGNORECASE)
+        # Find end at Part XV (or next Part after our section)
+        remaining = text[start:]
+        end_match = re.search(r'\bPart\s+XV\b(?!\s*Supplementary)', remaining, re.IGNORECASE)
+        if not end_match:
+            # Try Part XVI as fallback
+            end_match = re.search(r'\bPart\s+XVI\b', remaining, re.IGNORECASE)
+        
         end = start + end_match.start() if end_match else len(text)
         
         return text[start:end]
@@ -319,9 +356,44 @@ class IRS990PFParser:
                 return None
         return None
     
+    # Regex for extracting state from address (fallback)
+    STATE_FROM_ADDR_RE = re.compile(r',\s*([A-Z]{2})\s+\d{5}(?:-\d{4})?\b')
+    
+    def _dedup_grants(self, grants: list[Grant]) -> list[Grant]:
+        """
+        Patch 5: Remove duplicate grants caused by page breaks.
+        Keys on (name, amount, state, purpose prefix).
+        """
+        seen = set()
+        deduped = []
+        for g in grants:
+            key = (
+                g.recipient_name.strip().upper(),
+                g.amount,
+                g.recipient_state,
+                (g.purpose or "")[:50].strip().upper()
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(g)
+        return deduped
+    
     def _tag_gl_relevance(self, grant: Grant) -> None:
-        """Tag grant as Great Lakes relevant based on grantee state."""
-        grant.gl_relevant = grant.recipient_state in GL_STATES
+        """
+        Tag grant as Great Lakes relevant based on grantee state.
+        Patch 3: Falls back to parsing recipient_address if state not set.
+        """
+        st = grant.recipient_state
+        
+        # Fallback: try to extract state from full address
+        if not st and grant.recipient_address:
+            m = self.STATE_FROM_ADDR_RE.search(grant.recipient_address.upper())
+            if m:
+                st = m.group(1)
+                grant.recipient_state = st
+        
+        grant.gl_relevant = st in GL_STATES
     
     def _extract_grants(self, section: str) -> list[Grant]:
         """Extract grants from section text."""
@@ -798,6 +870,7 @@ def parse_990_pdf(file_bytes: bytes, filename: str, tax_year_override: str = "")
                 'grantee_name': g.recipient_name,
                 'grantee_city': g.recipient_city,
                 'grantee_state': g.recipient_state,
+                'grantee_address_raw': g.recipient_address,  # Patch 6: for audit
                 'grant_amount': float(g.amount),
                 'grant_purpose_raw': g.purpose,
                 'grant_bucket': g.grant_bucket,
@@ -808,7 +881,7 @@ def parse_990_pdf(file_bytes: bytes, filename: str, tax_year_override: str = "")
     else:
         grants_df = pd.DataFrame(columns=[
             'foundation_name', 'foundation_ein', 'tax_year',
-            'grantee_name', 'grantee_city', 'grantee_state',
+            'grantee_name', 'grantee_city', 'grantee_state', 'grantee_address_raw',
             'grant_amount', 'grant_purpose_raw', 'grant_bucket',
             'gl_relevant', 'source_file'
         ])
@@ -839,8 +912,14 @@ def parse_990_pdf(file_bytes: bytes, filename: str, tax_year_override: str = "")
         'reported_total_3b': metadata.get('reported_total_3b'),
         'computed_total_3a': metadata.get('computed_total_3a'),
         'computed_total_3b': metadata.get('computed_total_3b'),
+        'diff_3a': metadata.get('diff_3a'),
+        'diff_3b': metadata.get('diff_3b'),
+        'diff_pct_3a': metadata.get('diff_pct_3a'),
+        'diff_pct_3b': metadata.get('diff_pct_3b'),
         'total_mismatch_3a': metadata.get('total_mismatch_3a', False),
         'total_mismatch_3b': metadata.get('total_mismatch_3b', False),
+        'total_mismatch_3a_strict': metadata.get('total_mismatch_3a_strict', False),
+        'total_mismatch_3b_strict': metadata.get('total_mismatch_3b_strict', False),
         'grants_3a_count': len(grants_3a),
         'grants_3b_count': len(grants_3b),
         'gl_relevant_count': sum(1 for g in all_grants if g.gl_relevant),
@@ -868,7 +947,7 @@ def parse_990_pdf(file_bytes: bytes, filename: str, tax_year_override: str = "")
 def test_parser(pdf_path: str):
     """Run parser and show results (for command-line testing)."""
     print("=" * 80)
-    print("990-PF PARSER v2.2 TEST")
+    print("990-PF PARSER v2.3 TEST")
     print("=" * 80)
     print(f"\nInput: {pdf_path}\n")
     
@@ -883,14 +962,18 @@ def test_parser(pdf_path: str):
     print("3a GRANTS (Paid During Year) - PRIMARY")
     print("-" * 80)
     print(f"Count: {len(grants_3a)}")
-    computed_3a = sum(g.amount for g in grants_3a)
+    computed_3a = metadata.get('computed_total_3a', 0)
     reported_3a = metadata.get('reported_total_3a')
     print(f"Computed total: ${computed_3a:,}")
     if reported_3a:
         print(f"Reported total: ${reported_3a:,}")
-        diff = abs(reported_3a - computed_3a)
-        pct = (diff / reported_3a * 100) if reported_3a else 0
-        status = "✓ MATCH" if diff < 100 else f"⚠ MISMATCH (${diff:,}, {pct:.1f}%)"
+        diff = metadata.get('diff_3a', 0)
+        diff_pct = metadata.get('diff_pct_3a', 0)
+        if diff and diff > 1:
+            print(f"Difference: ${diff:,} ({diff_pct:.2f}%)")
+            status = "✓ MATCH (lenient)" if diff <= 100 else f"⚠ MISMATCH"
+        else:
+            status = "✓ EXACT MATCH"
         print(f"Status: {status}")
     
     # Great Lakes stats
@@ -901,11 +984,14 @@ def test_parser(pdf_path: str):
     print("3b GRANTS (Approved for Future) - SECONDARY")
     print("-" * 80)
     print(f"Count: {len(grants_3b)}")
-    computed_3b = sum(g.amount for g in grants_3b)
+    computed_3b = metadata.get('computed_total_3b', 0)
     reported_3b = metadata.get('reported_total_3b')
     print(f"Computed total: ${computed_3b:,}")
     if reported_3b:
         print(f"Reported total: ${reported_3b:,}")
+        diff = metadata.get('diff_3b', 0)
+        if diff:
+            print(f"Difference: ${diff:,}")
     
     print("\n" + "-" * 80)
     print("BOARD MEMBERS")
@@ -917,12 +1003,23 @@ def test_parser(pdf_path: str):
         print(f"  ... and {len(people) - 10} more")
     
     print("\n" + "-" * 80)
-    print("SAMPLE GRANTS (first 10)")
+    print("SAMPLE 3a GRANTS (first 10)")
     print("-" * 80)
     for i, g in enumerate(grants_3a[:10], 1):
         gl_tag = " [GL]" if g.gl_relevant else ""
         print(f"{i}. {g.recipient_name}{gl_tag}")
-        print(f"   {g.recipient_city}, {g.recipient_state} | ${g.amount:,}")
+        loc = f"{g.recipient_city}, {g.recipient_state}" if g.recipient_city else g.recipient_state or "(no location)"
+        print(f"   {loc} | ${g.amount:,}")
+    
+    if grants_3b:
+        print("\n" + "-" * 80)
+        print("SAMPLE 3b GRANTS (first 5)")
+        print("-" * 80)
+        for i, g in enumerate(grants_3b[:5], 1):
+            gl_tag = " [GL]" if g.gl_relevant else ""
+            print(f"{i}. {g.recipient_name}{gl_tag}")
+            loc = f"{g.recipient_city}, {g.recipient_state}" if g.recipient_city else g.recipient_state or "(no location)"
+            print(f"   {loc} | ${g.amount:,}")
     
     return grants_3a, grants_3b, people, metadata
 
