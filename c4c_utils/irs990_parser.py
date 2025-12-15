@@ -109,6 +109,22 @@ class IRS990PFParser:
     TOTAL_3A_RE = re.compile(r'\bTotal\b[\s\S]{0,120}\b3a\b[\s\S]{0,40}?([\d,]+)', re.IGNORECASE)
     TOTAL_3B_RE = re.compile(r'\bTotal\b[\s\S]{0,120}\b3b\b[\s\S]{0,40}?([\d,]+)', re.IGNORECASE)
     
+    # Part I line 25: "Contributions, gifts, grants paid"
+    # This is a QA check - should be >= Part XIV 3a total
+    # ProPublica PDFs have a specific layout where values appear separately from labels
+    # The value appears on a line before "Total expenses and disbursements"
+    # Format: "59,379,627 55,953,961\nTotal expenses and disbursements..."
+    # First number is line 25, second is related to grants
+    PART1_LINE25_RE = re.compile(
+        r'([\d,]{6,})\s+[\d,]{6,}\s*\n\s*Total\s+expenses\s+and\s+disbursements',
+        re.IGNORECASE
+    )
+    # Fallback: look for amount after "grants paid" with dots
+    PART1_LINE25_FALLBACK_RE = re.compile(
+        r'(?:25\s+)?Contributions,?\s*gifts,?\s*grants\s*paid[\.\s]{3,}([\d,]{6,})',
+        re.IGNORECASE
+    )
+    
     def __init__(self):
         # P0.2 fix: Use MULTILINE instead of DOTALL
         self.compiled_propublica = [re.compile(p, re.IGNORECASE | re.MULTILINE) for p in self.PROPUBLICA_PATTERNS]
@@ -130,6 +146,9 @@ class IRS990PFParser:
         """Parse extracted text. Returns (grants_3a, grants_3b, people, metadata)."""
         # Extract metadata first (before cleaning)
         metadata = self._extract_metadata(all_text)
+        
+        # Parse Part I line 25 for QA (before cleaning to get raw text)
+        reported_part1_line25 = self._parse_part1_line25(all_text)
         
         # Clean text
         cleaned = self._clean_text(all_text)
@@ -178,6 +197,13 @@ class IRS990PFParser:
         diff_pct_3a = (diff_3a / reported_total_3a * 100) if reported_total_3a and diff_3a else None
         diff_pct_3b = (diff_3b / reported_total_3b * 100) if reported_total_3b and diff_3b else None
         
+        # Part I line 25 QA: Compare to computed 3a
+        diff_part1_vs_3a = None
+        diff_pct_part1_vs_3a = None
+        if reported_part1_line25 and computed_total_3a:
+            diff_part1_vs_3a = reported_part1_line25 - computed_total_3a
+            diff_pct_part1_vs_3a = (diff_part1_vs_3a / reported_part1_line25 * 100) if reported_part1_line25 else None
+        
         # Add totals to metadata for diagnostics
         metadata['reported_total_3a'] = reported_total_3a
         metadata['reported_total_3b'] = reported_total_3b
@@ -187,10 +213,14 @@ class IRS990PFParser:
         metadata['diff_3b'] = diff_3b
         metadata['diff_pct_3a'] = diff_pct_3a
         metadata['diff_pct_3b'] = diff_pct_3b
-        # Strict mismatch: any difference > $1
+        # Part I line 25 QA
+        metadata['reported_part1_line25'] = reported_part1_line25
+        metadata['diff_part1_vs_3a'] = diff_part1_vs_3a
+        metadata['diff_pct_part1_vs_3a'] = diff_pct_part1_vs_3a
+        # Strict mismatch: any difference > $1 (threshold documented here)
         metadata['total_mismatch_3a_strict'] = (diff_3a is not None and diff_3a > 1)
         metadata['total_mismatch_3b_strict'] = (diff_3b is not None and diff_3b > 1)
-        # Lenient mismatch: difference > $100 (allows for rounding)
+        # Lenient mismatch: difference > $100 (allows for rounding; threshold documented here)
         metadata['total_mismatch_3a'] = (diff_3a is not None and diff_3a > 100)
         metadata['total_mismatch_3b'] = (diff_3b is not None and diff_3b > 100)
         
@@ -354,6 +384,29 @@ class IRS990PFParser:
                 return int(m.group(1).replace(",", ""))
             except ValueError:
                 return None
+        return None
+    
+    def _parse_part1_line25(self, text: str) -> Optional[int]:
+        """
+        Parse Part I line 25 "Contributions, gifts, grants paid" as QA check.
+        This should be >= Part XIV 3a total (includes all grant disbursements).
+        """
+        # Try primary pattern first
+        m = self.PART1_LINE25_RE.search(text)
+        if m:
+            try:
+                return int(m.group(1).replace(",", ""))
+            except ValueError:
+                pass
+        
+        # Try fallback pattern
+        m = self.PART1_LINE25_FALLBACK_RE.search(text)
+        if m:
+            try:
+                return int(m.group(1).replace(",", ""))
+            except ValueError:
+                pass
+        
         return None
     
     # Regex for extracting state from address (fallback)
@@ -908,6 +961,7 @@ def parse_990_pdf(file_bytes: bytes, filename: str, tax_year_override: str = "")
         'org_name': metadata.get('foundation_name', ''),
         'is_990pf': metadata.get('is_990pf', True),
         'form_type': metadata.get('form_type', '990-PF'),
+        # Part XIV totals
         'reported_total_3a': metadata.get('reported_total_3a'),
         'reported_total_3b': metadata.get('reported_total_3b'),
         'computed_total_3a': metadata.get('computed_total_3a'),
@@ -920,6 +974,11 @@ def parse_990_pdf(file_bytes: bytes, filename: str, tax_year_override: str = "")
         'total_mismatch_3b': metadata.get('total_mismatch_3b', False),
         'total_mismatch_3a_strict': metadata.get('total_mismatch_3a_strict', False),
         'total_mismatch_3b_strict': metadata.get('total_mismatch_3b_strict', False),
+        # Part I line 25 QA
+        'reported_part1_line25': metadata.get('reported_part1_line25'),
+        'diff_part1_vs_3a': metadata.get('diff_part1_vs_3a'),
+        'diff_pct_part1_vs_3a': metadata.get('diff_pct_part1_vs_3a'),
+        # Counts
         'grants_3a_count': len(grants_3a),
         'grants_3b_count': len(grants_3b),
         'gl_relevant_count': sum(1 for g in all_grants if g.gl_relevant),
@@ -959,6 +1018,15 @@ def test_parser(pdf_path: str):
     print(f"Tax Year: {metadata.get('tax_year', 'Unknown')}")
     
     print("\n" + "-" * 80)
+    print("PART I LINE 25 QA CHECK")
+    print("-" * 80)
+    part1_25 = metadata.get('reported_part1_line25')
+    if part1_25:
+        print(f"Contributions, gifts, grants paid: ${part1_25:,}")
+    else:
+        print("Part I line 25: NOT FOUND")
+    
+    print("\n" + "-" * 80)
     print("3a GRANTS (Paid During Year) - PRIMARY")
     print("-" * 80)
     print(f"Count: {len(grants_3a)}")
@@ -966,7 +1034,7 @@ def test_parser(pdf_path: str):
     reported_3a = metadata.get('reported_total_3a')
     print(f"Computed total: ${computed_3a:,}")
     if reported_3a:
-        print(f"Reported total: ${reported_3a:,}")
+        print(f"Reported total (Part XIV): ${reported_3a:,}")
         diff = metadata.get('diff_3a', 0)
         diff_pct = metadata.get('diff_pct_3a', 0)
         if diff and diff > 1:
@@ -975,6 +1043,14 @@ def test_parser(pdf_path: str):
         else:
             status = "✓ EXACT MATCH"
         print(f"Status: {status}")
+    
+    # Part I vs 3a comparison
+    if part1_25 and computed_3a:
+        diff_p1 = metadata.get('diff_part1_vs_3a', 0)
+        diff_pct_p1 = metadata.get('diff_pct_part1_vs_3a', 0)
+        print(f"\nPart I line 25 vs computed 3a: ${diff_p1:,} gap ({diff_pct_p1:.1f}%)")
+        if diff_p1 > 0:
+            print("  (Part I > 3a is expected - includes non-Part XIV disbursements)")
     
     # Great Lakes stats
     gl_grants = [g for g in grants_3a if g.gl_relevant]
@@ -988,7 +1064,7 @@ def test_parser(pdf_path: str):
     reported_3b = metadata.get('reported_total_3b')
     print(f"Computed total: ${computed_3b:,}")
     if reported_3b:
-        print(f"Reported total: ${reported_3b:,}")
+        print(f"Reported total (Part XIV): ${reported_3b:,}")
         diff = metadata.get('diff_3b', 0)
         if diff:
             print(f"Difference: ${diff:,}")
