@@ -27,13 +27,16 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from c4c_utils.irs990_parser import parse_990_pdf, PARSER_VERSION
 from c4c_utils.network_export import build_nodes_df, build_edges_df, NODE_COLUMNS, EDGE_COLUMNS, get_existing_foundations
+from c4c_utils.regions_presets import REGION_PRESETS, US_STATES, CA_PROVINCES
+from c4c_utils.regions_catalog import load_project_regions, save_project_regions
+from c4c_utils.region_tagger import apply_region_tagging, get_region_summary
 
 
 # =============================================================================
 # Constants
 # =============================================================================
 
-APP_VERSION = "0.5.0"  # Updated for v2.5 parser integration
+APP_VERSION = "0.6.0"  # Updated for v2.6 parser + region tagging
 MAX_FILES = 50
 C4C_LOGO_URL = "https://static.wixstatic.com/media/275a3f_25063966d6cd496eb2fe3f6ee5cde0fa~mv2.png"
 SOURCE_SYSTEM = "IRS_990"
@@ -176,6 +179,8 @@ def init_session_state():
         st.session_state.processed_orgs = []
     if "current_project" not in st.session_state:
         st.session_state.current_project = None
+    if "region_def" not in st.session_state:
+        st.session_state.region_def = None
 
 
 def clear_session_state():
@@ -187,9 +192,10 @@ def clear_session_state():
     st.session_state.parse_results = []
     st.session_state.merge_stats = {}
     st.session_state.processed_orgs = []
+    st.session_state.region_def = None
 
 
-def store_results(nodes_df, edges_df, grants_df, parse_results, merge_stats, processed_orgs):
+def store_results(nodes_df, edges_df, grants_df, parse_results, merge_stats, processed_orgs, region_def=None):
     """Store processing results in session state."""
     st.session_state.processed = True
     st.session_state.nodes_df = nodes_df
@@ -198,6 +204,7 @@ def store_results(nodes_df, edges_df, grants_df, parse_results, merge_stats, pro
     st.session_state.parse_results = parse_results
     st.session_state.merge_stats = merge_stats
     st.session_state.processed_orgs = processed_orgs
+    st.session_state.region_def = region_def
 
 
 # =============================================================================
@@ -535,6 +542,167 @@ def render_parse_status(parse_results: list):
 
 
 # =============================================================================
+# Region Selector UI
+# =============================================================================
+
+def region_selector_ui() -> dict:
+    """
+    Render region selector UI and return selected region definition.
+    
+    Returns:
+        Region definition dict (from presets, project, or custom)
+    """
+    st.subheader("🗺️ Regional Perspective (optional)")
+    st.caption("Apply regional tagging to identify grants in specific geographic areas")
+    
+    mode = st.selectbox(
+        "Region mode",
+        ["None (show all grants)", "Preset region", "Project region", "Custom region"],
+        index=0,
+        help="Choose how to filter/tag grants by region"
+    )
+    
+    project_regions = load_project_regions()
+    
+    # None mode
+    if mode == "None (show all grants)":
+        return REGION_PRESETS["none"]
+    
+    # Preset mode
+    if mode == "Preset region":
+        preset_ids = [k for k in REGION_PRESETS.keys() if k != "none"]
+        labels = [REGION_PRESETS[k]["name"] for k in preset_ids]
+        
+        choice = st.selectbox("Choose preset region", labels, index=2)  # Default to Great Lakes
+        chosen_id = preset_ids[labels.index(choice)]
+        
+        selected = REGION_PRESETS[chosen_id]
+        
+        # Show what's included
+        with st.expander("Region details", expanded=False):
+            if selected.get("include_us_states"):
+                st.write(f"**US States:** {', '.join(selected['include_us_states'])}")
+            if selected.get("include_ca_provinces"):
+                st.write(f"**Canadian Provinces:** {', '.join(selected['include_ca_provinces'])}")
+            if selected.get("notes"):
+                st.caption(selected["notes"])
+        
+        return selected
+    
+    # Project region mode
+    if mode == "Project region":
+        if not project_regions:
+            st.info("No project regions saved yet. Create one under 'Custom region' and save it.")
+            return REGION_PRESETS["none"]
+        
+        ids = list(project_regions.keys())
+        labels = [project_regions[i]["name"] for i in ids]
+        
+        choice = st.selectbox("Choose project region", labels, index=0)
+        chosen_id = ids[labels.index(choice)]
+        
+        selected = project_regions[chosen_id]
+        
+        # Show what's included
+        with st.expander("Region details", expanded=False):
+            if selected.get("include_us_states"):
+                st.write(f"**US States:** {', '.join(selected['include_us_states'])}")
+            if selected.get("include_ca_provinces"):
+                st.write(f"**Canadian Provinces:** {', '.join(selected['include_ca_provinces'])}")
+            if selected.get("notes"):
+                st.caption(selected["notes"])
+        
+        return selected
+    
+    # Custom region mode
+    st.markdown("**Build custom region**")
+    
+    name = st.text_input("Region name", value="Custom Region")
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        us_states = st.multiselect(
+            "US states to include",
+            US_STATES,
+            default=[],
+            help="Select US states for this region"
+        )
+    with col2:
+        ca_provinces = st.multiselect(
+            "Canadian provinces/territories",
+            CA_PROVINCES,
+            default=[],
+            help="Select Canadian provinces for this region"
+        )
+    
+    notes = st.text_area("Notes (optional)", value="", height=60)
+    
+    region_def = {
+        "id": "custom",
+        "name": name.strip() or "Custom Region",
+        "source": "custom",
+        "include_us_states": us_states,
+        "include_ca_provinces": ca_provinces,
+        "include_countries": [],
+        "notes": notes.strip(),
+    }
+    
+    # Option to save as project region
+    with st.expander("💾 Save as project region"):
+        project_id = st.text_input(
+            "Project region ID (unique)",
+            value="my_region",
+            help="Unique identifier for this region (no spaces)"
+        )
+        
+        if st.button("Save project region"):
+            pid = project_id.strip().lower().replace(" ", "_")
+            if not pid:
+                st.error("Project region ID cannot be empty.")
+            elif not us_states and not ca_provinces:
+                st.error("Please select at least one state or province.")
+            else:
+                region_to_save = dict(region_def)
+                region_to_save["id"] = pid
+                region_to_save["source"] = "project"
+                project_regions[pid] = region_to_save
+                save_project_regions(project_regions)
+                st.success(f"✅ Saved project region: {region_to_save['name']} ({pid})")
+    
+    return region_def
+
+
+def render_region_summary(grants_df: pd.DataFrame):
+    """Render region tagging summary if region columns exist."""
+    if grants_df is None or grants_df.empty:
+        return
+    
+    if "region_relevant" not in grants_df.columns:
+        return
+    
+    summary = get_region_summary(grants_df)
+    
+    if summary["region_name"] and summary["region_name"] != "(no region tagging)":
+        st.subheader(f"🗺️ {summary['region_name']} Relevance")
+        
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            st.metric("Total Grants", f"{summary['total_grants']:,}")
+        with col2:
+            st.metric(
+                "Region-Relevant",
+                f"{summary['region_relevant_count']:,}",
+                delta=f"{summary['region_relevant_count']/summary['total_grants']*100:.1f}%" if summary['total_grants'] > 0 else None
+            )
+        with col3:
+            st.metric(
+                "Region Amount",
+                f"${summary['region_relevant_amount']:,.0f}"
+            )
+
+
+# =============================================================================
 # Other Rendering Functions
 # =============================================================================
 
@@ -748,6 +916,9 @@ def render_upload_interface(project_name: str):
         # Render outputs from session state
         render_graph_summary(st.session_state.nodes_df, st.session_state.edges_df, st.session_state.grants_df)
         
+        # Render region summary if region tagging was applied
+        render_region_summary(st.session_state.grants_df)
+        
         show_analytics = st.checkbox("📊 Show Network Analytics", value=False)
         if show_analytics:
             render_analytics(st.session_state.grants_df)
@@ -783,6 +954,13 @@ def render_upload_interface(project_name: str):
             help="Override auto-detection if needed"
         )
         
+        st.divider()
+        
+        # Region selector (after upload, before processing)
+        region_def = region_selector_ui()
+        
+        st.divider()
+        
         parse_button = st.button("🔍 Parse 990 Filings", type="primary", disabled=not uploaded_files)
         
         if not uploaded_files:
@@ -796,12 +974,17 @@ def render_upload_interface(project_name: str):
                     uploaded_files, tax_year_override
                 )
             
+            # Apply region tagging (post-processing)
+            if grants_df is not None and not grants_df.empty and region_def and region_def.get("id") != "none":
+                with st.spinner("Applying region tagging..."):
+                    grants_df = apply_region_tagging(grants_df, region_def)
+            
             if new_nodes.empty:
                 st.warning("No data extracted from uploaded files.")
                 # Still store results to show errors
                 store_results(
                     pd.DataFrame(), pd.DataFrame(), None,
-                    parse_results, {}, []
+                    parse_results, {}, [], region_def
                 )
                 st.rerun()
             
@@ -814,7 +997,7 @@ def render_upload_interface(project_name: str):
             processed_orgs = [r["org_name"] for r in parse_results if r.get("status") == "success" and r.get("org_name")]
             
             # Store in session state
-            store_results(nodes_df, edges_df, grants_df, parse_results, merge_stats, processed_orgs)
+            store_results(nodes_df, edges_df, grants_df, parse_results, merge_stats, processed_orgs, region_def)
             
             # Rerun to show results
             st.rerun()
