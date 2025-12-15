@@ -25,7 +25,7 @@ from datetime import datetime
 # Add the project root to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from c4c_utils.irs990_parser import parse_990_pdf
+from c4c_utils.irs990_parser import parse_990_pdf, PARSER_VERSION
 from c4c_utils.network_export import build_nodes_df, build_edges_df, NODE_COLUMNS, EDGE_COLUMNS, get_existing_foundations
 
 
@@ -33,7 +33,7 @@ from c4c_utils.network_export import build_nodes_df, build_edges_df, NODE_COLUMN
 # Constants
 # =============================================================================
 
-APP_VERSION = "0.4.0"
+APP_VERSION = "0.5.0"  # Updated for v2.5 parser integration
 MAX_FILES = 50
 C4C_LOGO_URL = "https://static.wixstatic.com/media/275a3f_25063966d6cd496eb2fe3f6ee5cde0fa~mv2.png"
 SOURCE_SYSTEM = "IRS_990"
@@ -254,7 +254,11 @@ def merge_graph_data(existing_nodes: pd.DataFrame, existing_edges: pd.DataFrame,
 
 
 def process_uploaded_files(uploaded_files, tax_year_override: str = "") -> tuple:
-    """Process uploaded 990-PF files and return canonical outputs."""
+    """
+    Process uploaded 990-PF files and return canonical outputs.
+    
+    UPDATED for v2.5 parser with enhanced diagnostics.
+    """
     all_grants = []
     all_people = []
     foundations_meta = []
@@ -265,36 +269,60 @@ def process_uploaded_files(uploaded_files, tax_year_override: str = "") -> tuple
             file_bytes = uploaded_file.read()
             result = parse_990_pdf(file_bytes, uploaded_file.name, tax_year_override)
             
+            # Extract v2.5 diagnostics
             diagnostics = result.get('diagnostics', {})
-            org_name = diagnostics.get('org_name', '') or result['foundation_meta'].get('foundation_name', 'Unknown')
-            grants_count = len(result['grants_df'])
-            people_count = len(result['people_df'])
-            total_amount = result['grants_df']['grant_amount'].sum() if grants_count > 0 else 0
+            meta = result.get('foundation_meta', {})
+            grants_df = result.get('grants_df', pd.DataFrame())
+            people_df = result.get('people_df', pd.DataFrame())
             
-            foundations_meta.append(result['foundation_meta'])
+            org_name = meta.get('foundation_name', 'Unknown')
+            grants_count = len(grants_df)
+            people_count = len(people_df)
             
-            if not result['grants_df'].empty:
-                all_grants.append(result['grants_df'])
+            # Get amounts from diagnostics (more reliable)
+            grants_3a_total = diagnostics.get('grants_3a_total', 0)
+            grants_3b_total = diagnostics.get('grants_3b_total', 0)
+            total_amount = grants_3a_total + grants_3b_total
             
-            if not result['people_df'].empty:
-                all_people.append(result['people_df'])
+            foundations_meta.append(meta)
+            
+            if not grants_df.empty:
+                # Add source columns to grants
+                grants_df = grants_df.copy()
+                grants_df['foundation_name'] = org_name
+                grants_df['foundation_ein'] = meta.get('foundation_ein', '')
+                grants_df['tax_year'] = meta.get('tax_year', '')
+                # Rename columns to match expected schema
+                if 'amount' in grants_df.columns and 'grant_amount' not in grants_df.columns:
+                    grants_df['grant_amount'] = grants_df['amount']
+                if 'org_name' in grants_df.columns and 'grantee_name' not in grants_df.columns:
+                    grants_df['grantee_name'] = grants_df['org_name']
+                all_grants.append(grants_df)
+            
+            if not people_df.empty:
+                people_df = people_df.copy()
+                people_df['foundation_name'] = org_name
+                people_df['foundation_ein'] = meta.get('foundation_ein', '')
+                all_people.append(people_df)
             
             # Determine status
             if grants_count > 0:
                 status = "success"
-                message = f"{grants_count} grants (${total_amount:,.0f}), {people_count} board members"
-            elif not diagnostics.get('is_990pf', True):
-                status = "wrong_form"
-                message = f"Form {diagnostics.get('form_type', 'unknown')} (public charity) - no itemized grants"
             else:
                 status = "no_grants"
-                message = f"No grants found. {people_count} board members extracted."
             
+            # Build v2.5 parse result with full diagnostics
             parse_results.append({
                 "file": uploaded_file.name,
                 "status": status,
                 "org_name": org_name,
-                "message": message
+                "ein": meta.get('foundation_ein', ''),
+                "tax_year": meta.get('tax_year', ''),
+                "grants_count": grants_count,
+                "grants_total": total_amount,
+                "board_count": people_count,
+                "foundation_meta": meta,
+                "diagnostics": diagnostics  # Full v2.5 diagnostics
             })
             
         except Exception as e:
@@ -302,7 +330,8 @@ def process_uploaded_files(uploaded_files, tax_year_override: str = "") -> tuple
                 "file": uploaded_file.name,
                 "status": "error",
                 "org_name": "",
-                "message": str(e)
+                "message": str(e),
+                "diagnostics": {"errors": [str(e)], "parser_version": "unknown"}
             })
     
     # Combine all results
@@ -324,43 +353,190 @@ def process_uploaded_files(uploaded_files, tax_year_override: str = "") -> tuple
 
 
 # =============================================================================
-# Rendering Functions
+# v2.5 Diagnostic Display Functions
 # =============================================================================
 
+def get_confidence_color(confidence: str) -> str:
+    """Return emoji color code for confidence level."""
+    colors = {
+        "high": "🟢",
+        "medium-high": "🟡",
+        "medium": "🟠", 
+        "low": "🔴",
+        "very_low": "⛔"
+    }
+    return colors.get(confidence, "⚪")
+
+
+def get_confidence_badge(conf_dict: dict) -> str:
+    """Create a formatted confidence badge."""
+    if not conf_dict:
+        return "—"
+    
+    match_pct = conf_dict.get("match_pct", 0)
+    status = conf_dict.get("status", "unknown")
+    confidence = conf_dict.get("confidence", "unknown")
+    color = get_confidence_color(confidence)
+    
+    return f"{color} {match_pct}% ({status})"
+
+
+def render_single_file_diagnostics(result: dict, expanded: bool = False):
+    """Display diagnostics for a single parsed file."""
+    diag = result.get("diagnostics", {})
+    meta = result.get("foundation_meta", {})
+    
+    # Determine overall status icon
+    has_grants = result.get("grants_count", 0) > 0
+    has_warnings = len(diag.get("warnings", [])) > 0
+    has_errors = len(diag.get("errors", [])) > 0
+    
+    if has_errors:
+        status_icon = "❌"
+    elif has_warnings:
+        status_icon = "⚠️"
+    elif has_grants:
+        status_icon = "✅"
+    else:
+        status_icon = "❓"
+    
+    # Foundation name for display
+    foundation_name = result.get("org_name", "Unknown")
+    if len(foundation_name) > 45:
+        foundation_name = foundation_name[:42] + "..."
+    
+    with st.expander(f"{status_icon} {foundation_name}", expanded=expanded):
+        # Basic metrics
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("Grants (3a)", f"{diag.get('grants_3a_count', 0):,}")
+            st.caption(f"${diag.get('grants_3a_total', 0):,}")
+        with col2:
+            st.metric("Grants (3b)", f"{diag.get('grants_3b_count', 0):,}")
+            st.caption(f"${diag.get('grants_3b_total', 0):,}")
+        with col3:
+            st.metric("Board Members", diag.get("board_count", 0))
+        
+        # Confidence scores
+        st.markdown("**Parsing Confidence**")
+        conf_col1, conf_col2 = st.columns(2)
+        with conf_col1:
+            st.markdown(f"3a: {get_confidence_badge(diag.get('confidence_3a', {}))}")
+        with conf_col2:
+            st.markdown(f"3b: {get_confidence_badge(diag.get('confidence_3b', {}))}")
+        
+        # Format detection
+        fmt = diag.get("extraction_format", {})
+        if fmt:
+            dominant = fmt.get("dominant_format", "unknown")
+            fmt_conf = fmt.get("format_confidence", 0)
+            
+            # Human readable format names
+            if "erb" in dominant.lower():
+                fmt_display = "Erb-style (status→org)"
+            elif "joyce" in dominant.lower():
+                fmt_display = "Joyce-style (org→status)"
+            else:
+                fmt_display = dominant
+            
+            st.markdown(f"**PDF Format:** {fmt_display} ({fmt_conf*100:.0f}% confidence)")
+        
+        # Sample grants for verification
+        samples = diag.get("sample_grants", [])
+        if samples:
+            st.markdown("**Sample Grants** (verify against PDF)")
+            sample_data = []
+            for s in samples[:3]:
+                sample_data.append({
+                    "Organization": s.get("org", "")[:35],
+                    "Amount": f"${s.get('amount', 0):,}",
+                    "Format": "A" if "erb" in s.get("format", "").lower() else "B"
+                })
+            st.dataframe(pd.DataFrame(sample_data), hide_index=True, use_container_width=True)
+        
+        # Warnings
+        warnings = diag.get("warnings", [])
+        if warnings:
+            st.warning("**Warnings:**\n" + "\n".join(f"• {w}" for w in warnings))
+        
+        # Errors
+        errors = diag.get("errors", [])
+        if errors:
+            st.error("**Errors:**\n" + "\n".join(f"• {e}" for e in errors))
+        
+        # Parser version and pages
+        st.caption(f"Parser v{diag.get('parser_version', 'unknown')} • {diag.get('pages_processed', 0)} pages • File: {result.get('file', 'unknown')}")
+
+
 def render_parse_status(parse_results: list):
-    """Render the parsing status for each file."""
+    """
+    Render the parsing status for each file.
+    
+    UPDATED for v2.5 with enhanced diagnostics display.
+    """
     if not parse_results:
         return
     
+    # Get parser version from first result
+    parser_version = "unknown"
+    if parse_results:
+        parser_version = parse_results[0].get("diagnostics", {}).get("parser_version", "unknown")
+    
+    # Calculate summary stats
     success_count = sum(1 for r in parse_results if r["status"] == "success")
     error_count = sum(1 for r in parse_results if r["status"] == "error")
     no_grants_count = sum(1 for r in parse_results if r["status"] == "no_grants")
-    wrong_form_count = sum(1 for r in parse_results if r["status"] == "wrong_form")
     
-    st.subheader("📋 Parsing Status")
+    total_3a_grants = sum(r.get("diagnostics", {}).get("grants_3a_count", 0) for r in parse_results)
+    total_3b_grants = sum(r.get("diagnostics", {}).get("grants_3b_count", 0) for r in parse_results)
+    total_3a_amount = sum(r.get("diagnostics", {}).get("grants_3a_total", 0) for r in parse_results)
+    total_3b_amount = sum(r.get("diagnostics", {}).get("grants_3b_total", 0) for r in parse_results)
     
+    st.subheader("📋 Processing Summary")
+    st.caption(f"Parser v{parser_version}")
+    
+    # File status metrics
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("✅ Success", success_count)
     col2.metric("⚠️ No Grants", no_grants_count)
-    col3.metric("📄 Wrong Form", wrong_form_count)
-    col4.metric("❌ Errors", error_count)
+    col3.metric("❌ Errors", error_count)
+    col4.metric("📄 Total Files", len(parse_results))
     
-    with st.expander("View Details", expanded=False):
-        for result in parse_results:
-            status = result["status"]
-            file_name = result["file"]
-            org_name = result.get("org_name", "")
-            message = result.get("message", "")
-            
-            if status == "success":
-                st.success(f"✅ **{org_name or file_name}**: {message}")
-            elif status == "no_grants":
-                st.warning(f"⚠️ **{org_name or file_name}**: {message}")
-            elif status == "wrong_form":
-                st.info(f"📄 **{file_name}**: {message}")
-            else:
-                st.error(f"❌ **{file_name}**: {message}")
+    # Grant totals
+    st.markdown("**Grant Totals**")
+    gcol1, gcol2, gcol3 = st.columns(3)
+    with gcol1:
+        st.metric("3a (Paid)", f"{total_3a_grants:,} grants")
+        st.caption(f"${total_3a_amount:,}")
+    with gcol2:
+        st.metric("3b (Future)", f"{total_3b_grants:,} grants")
+        st.caption(f"${total_3b_amount:,}")
+    with gcol3:
+        st.metric("Combined", f"{total_3a_grants + total_3b_grants:,} grants")
+        st.caption(f"${total_3a_amount + total_3b_amount:,}")
+    
+    # Individual file results
+    st.markdown("**Individual Results**")
+    
+    # Sort: errors first, then warnings, then success
+    def sort_key(r):
+        if r.get("diagnostics", {}).get("errors"):
+            return 0
+        if r.get("diagnostics", {}).get("warnings"):
+            return 1
+        if r.get("status") == "no_grants":
+            return 2
+        return 3
+    
+    sorted_results = sorted(parse_results, key=sort_key)
+    
+    for result in sorted_results:
+        render_single_file_diagnostics(result, expanded=False)
 
+
+# =============================================================================
+# Other Rendering Functions
+# =============================================================================
 
 def render_graph_summary(nodes_df: pd.DataFrame, edges_df: pd.DataFrame, grants_df: pd.DataFrame = None):
     """Render summary metrics for the graph."""
@@ -477,7 +653,7 @@ def render_downloads(nodes_df: pd.DataFrame, edges_df: pd.DataFrame,
             if grants_df is not None and not grants_df.empty:
                 zip_file.writestr('grants_detail.csv', grants_df.to_csv(index=False))
             if parse_results:
-                zip_file.writestr('parse_log.json', json.dumps(parse_results, indent=2))
+                zip_file.writestr('parse_log.json', json.dumps(parse_results, indent=2, default=str))
         
         zip_buffer.seek(0)
         
@@ -538,7 +714,7 @@ def render_upload_interface(project_name: str):
                 orgs_label += f" + {len(st.session_state.processed_orgs) - 3} more"
             st.info(f"**Processed:** {orgs_label}")
         
-        # Render processing log
+        # Render processing log with v2.5 diagnostics
         if st.session_state.parse_results:
             render_parse_status(st.session_state.parse_results)
         
@@ -661,7 +837,7 @@ def main():
     st.markdown("""
     OrgGraph currently supports US and Canadian nonprofit registries; additional sources will be added in the future.
     """)
-    st.caption(f"v{APP_VERSION}")
+    st.caption(f"App v{APP_VERSION} • Parser v{PARSER_VERSION}")
     
     st.divider()
     
