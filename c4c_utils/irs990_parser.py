@@ -132,24 +132,40 @@ class IRS990PFParser:
             metadata['is_990pf'] = False
             metadata['form_type'] = '990'
         
-        # Find EIN
-        ein_match = re.search(r'Employer identification number\s*(\d{2}[-\s]?\d{7})', text, re.IGNORECASE)
+        # Find EIN - look for pattern near "Employer identification number"
+        ein_match = re.search(r'Employer identification number\s*\n?\s*(\d{2}[-\s]?\d{7})', text, re.IGNORECASE)
         if ein_match:
             metadata['ein'] = ein_match.group(1).replace('-', '').replace(' ', '')
+        else:
+            # Also try standalone EIN pattern
+            ein_match = re.search(r'\b(\d{2}-\d{7})\b', text[:3000])
+            if ein_match:
+                metadata['ein'] = ein_match.group(1).replace('-', '')
         
-        # Find organization name (usually near top)
-        name_patterns = [
-            r'Name of foundation\s*\n\s*([A-Z][A-Za-z\s&,\.]+(?:Foundation|Fund|Trust|Inc\.?|LLC))',
-            r'^([A-Z][A-Z\s&,\.]+(?:FOUNDATION|FUND|TRUST|INC\.?))',
-        ]
-        for pattern in name_patterns:
-            match = re.search(pattern, text, re.MULTILINE)
-            if match:
-                metadata['foundation_name'] = match.group(1).strip()
-                break
+        # Find organization name - multiple strategies
+        # Strategy 1: Look for "Name of foundation" followed by the name on next line
+        name_match = re.search(r'Name of (?:foundation|organization)\s*\n\s*([A-Za-z][A-Za-z\s&,\.\-\']+?)(?:\s*\n|\s{2,})', text, re.IGNORECASE)
+        if name_match:
+            name = name_match.group(1).strip()
+            # Clean up - remove trailing address fragments
+            name = re.sub(r'\s+\d+\s*$', '', name)  # Remove trailing numbers
+            if len(name) > 3 and 'Number and street' not in name:
+                metadata['foundation_name'] = name
+        
+        # Strategy 2: Look for foundation name in ProPublica header (often accurate)
+        if not metadata['foundation_name']:
+            header_match = re.search(r'PM([A-Za-z][A-Za-z\s&,\.\-\']+(?:Foundation|Fund|Trust|Inc\.?))\s*-\s*Full Filing', text)
+            if header_match:
+                metadata['foundation_name'] = header_match.group(1).strip()
+        
+        # Strategy 3: Look for ALL CAPS foundation name near top
+        if not metadata['foundation_name']:
+            caps_match = re.search(r'\n([A-Z][A-Z\s&,\.]+(?:FOUNDATION|FUND|TRUST))\s*\n', text[:3000])
+            if caps_match:
+                metadata['foundation_name'] = caps_match.group(1).strip()
         
         # Find tax year
-        year_match = re.search(r'(?:Tax year|Calendar year|For calendar year)\s*(\d{4})', text, re.IGNORECASE)
+        year_match = re.search(r'(?:calendar year|tax year beginning)\s*(\d{4})', text, re.IGNORECASE)
         if year_match:
             metadata['tax_year'] = year_match.group(1)
         else:
@@ -157,6 +173,11 @@ class IRS990PFParser:
             year_match = re.search(r'Form 990-PF\s*\((\d{4})\)', text)
             if year_match:
                 metadata['tax_year'] = year_match.group(1)
+            else:
+                # Look for year near "ending" date
+                year_match = re.search(r'ending\s*\d{1,2}[-/]\d{1,2}[-/](\d{4})', text)
+                if year_match:
+                    metadata['tax_year'] = year_match.group(1)
         
         return metadata
     
@@ -515,64 +536,111 @@ class IRS990PFParser:
         return True
     
     def _extract_people(self, text: str) -> list[Person]:
-        """Extract board members/officers from Part VII or Part VIII."""
+        """Extract board members/officers from Part VII."""
         people = []
         
-        # Look for Part VII "Officers, Directors, Trustees" section
+        # Look for Part VII section
         part_vii_match = re.search(
-            r'Part\s+VII[A-Z\s]*(?:Officers|Directors|Trustees|Key Employees)',
+            r'Part\s+VII[A-Z\s\-]*Information About Officers',
             text, re.IGNORECASE
         )
         
         if not part_vii_match:
-            return people
+            # Try alternate pattern
+            part_vii_match = re.search(r'Part\s+VII', text, re.IGNORECASE)
+            if not part_vii_match:
+                return people
         
-        # Get section text
+        # Get section text - Part VII to Part VIII (or next 10000 chars)
         start = part_vii_match.end()
         end_match = re.search(r'Part\s+VIII', text[start:], re.IGNORECASE)
-        end = start + end_match.start() if end_match else min(start + 5000, len(text))
+        end = start + end_match.start() if end_match else min(start + 10000, len(text))
         
         section = text[start:end]
         
-        # Look for name patterns - typically ALL CAPS names
-        # Pattern: NAME ... TITLE ... NUMBER
-        lines = section.split('\n')
+        # Clean ProPublica artifacts from section
+        section = re.sub(r'\d{1,2}/\d{1,2}/\d{2},?\s*\d{1,2}\s*:\s*\d{2}\s*[AP]M.*?ProPublica', '', section, flags=re.IGNORECASE)
+        section = re.sub(r'Page\s+\d+\s+of\s+\d+.*?full', '', section, flags=re.IGNORECASE)
+        section = re.sub(r'https?://[^\s]+', '', section)
         
-        for line in lines:
-            line = line.strip()
-            if not line:
+        lines = [l.strip() for l in section.split('\n') if l.strip()]
+        
+        # Title keywords to identify officer/director lines
+        title_keywords = [
+            'director', 'trustee', 'president', 'vice president', 'v.p.',
+            'secretary', 'treasurer', 'chairman', 'chair', 'ceo', 'cfo', 'coo',
+            'chief', 'officer', 'manager', 'executive'
+        ]
+        
+        # Skip patterns (addresses, headers, etc.)
+        skip_patterns = [
+            r'^[\d,\.\s]+$',  # Pure numbers
+            r'^\d+\s+[NSEW]\s+\w+',  # Street addresses
+            r'^Chicago|^New York|^Washington|^Los Angeles',  # City names
+            r'^IL\s+\d|^NY\s+\d|^CA\s+\d|^DC\s+\d',  # State + ZIP
+            r'^\(\d{3}\)',  # Phone numbers
+            r'^Name and address',  # Column headers
+            r'^\(a\)\s|^\(b\)\s|^\(c\)\s|^\(d\)\s|^\(e\)\s',  # Column labels
+            r'^Title,|^Compensation|^Contributions|^Expense',  # Column headers
+            r'^hours per week',  # Column header fragment
+            r'^Officer/|^Treasurer|^Secretary',  # Partial titles (continuation lines)
+        ]
+        
+        i = 0
+        while i < len(lines):
+            line = lines[i]
+            
+            # Skip header/address lines
+            skip = False
+            for pattern in skip_patterns:
+                if re.match(pattern, line, re.IGNORECASE):
+                    skip = True
+                    break
+            if skip:
+                i += 1
                 continue
             
-            # Look for lines with names (typically capitalized) followed by title
-            name_match = re.match(r'^([A-Z][A-Za-z\s\.,]+?)(?:\s{2,}|\t)(.+)', line)
-            if name_match:
-                potential_name = name_match.group(1).strip()
-                rest = name_match.group(2).strip()
+            # Check if this line contains a title keyword
+            line_lower = line.lower()
+            has_title = any(kw in line_lower for kw in title_keywords)
+            
+            if has_title:
+                # This might be a name + title line
+                # Common formats:
+                # "Ellen Alberding President/Director"
+                # "Jose B Alvarez Director"
                 
-                # Filter out obvious non-names
-                if len(potential_name) < 3:
-                    continue
-                if potential_name.upper() in ['NAME', 'TITLE', 'HOURS', 'COMPENSATION']:
-                    continue
-                
-                # Look for title keywords
-                title_keywords = ['director', 'trustee', 'officer', 'president', 'secretary', 
-                                 'treasurer', 'chairman', 'ceo', 'cfo', 'vice']
-                
-                title = ""
-                for keyword in title_keywords:
-                    if keyword in rest.lower():
-                        # Extract title
-                        title_match = re.search(rf'({keyword}[A-Za-z\s]*)', rest, re.IGNORECASE)
-                        if title_match:
-                            title = title_match.group(1).strip()
-                            break
-                
-                if title or 'X' in rest:  # 'X' often marks position checkboxes
-                    people.append(Person(
-                        name=potential_name,
-                        title=title
-                    ))
+                # Try to split name from title
+                for kw in title_keywords:
+                    kw_match = re.search(rf'\b({kw})', line, re.IGNORECASE)
+                    if kw_match:
+                        name_part = line[:kw_match.start()].strip()
+                        title_part = line[kw_match.start():].strip()
+                        
+                        # Clean up name - remove trailing punctuation
+                        name_part = re.sub(r'[\s/\-:]+$', '', name_part)
+                        
+                        # Validate name
+                        if name_part and len(name_part) >= 3:
+                            # Must start with capital letter (proper name)
+                            if re.match(r'^[A-Z][a-z]', name_part):
+                                # Check it's not an address or other garbage
+                                if not re.search(r'\d{5}|\bStreet\b|\bAve\b|\bRoad\b|\bSuite\b', name_part, re.IGNORECASE):
+                                    # Must have at least a first and last name (space in between)
+                                    if ' ' in name_part:
+                                        # Clean up the title
+                                        title_clean = re.sub(r'\s*\(.*?\)', '', title_part)  # Remove parentheticals
+                                        title_clean = title_clean.strip()
+                                        
+                                        # Don't add duplicates
+                                        if not any(p.name == name_part for p in people):
+                                            people.append(Person(
+                                                name=name_part,
+                                                title=title_clean
+                                            ))
+                                        break
+            
+            i += 1
         
         return people
 
