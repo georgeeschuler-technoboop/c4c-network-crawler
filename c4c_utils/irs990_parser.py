@@ -1,6 +1,13 @@
 """
-990-PF Parser v2.5 - Complete Module for OrgGraph
+990-PF Parser v2.6 - Complete Module for OrgGraph
 ==================================================
+Changes in v2.6:
+- REMOVED Great Lakes hardcoding (GL_KEYWORDS, gl_relevant)
+- Region tagging is now handled separately via region_tagger.py
+- Added grantee_address_raw for address fallback parsing
+- Renamed output columns for consistency with spec:
+  org_name → grantee_name, city_state_zip → split to grantee_state
+
 Changes in v2.5:
 - Added format detection diagnostics (Erb-style vs Joyce-style extraction order)
 - Added parsing confidence score based on total matching
@@ -23,7 +30,7 @@ Exports:
 - IRS990PFParser class for direct use
 """
 
-PARSER_VERSION = "2.5"
+PARSER_VERSION = "2.6"
 
 import re
 import io
@@ -44,7 +51,6 @@ class Grant:
     purpose: str = ""
     amount: int = 0
     grant_bucket: str = "3a"  # "3a" = paid, "3b" = approved future
-    gl_relevant: bool = False
     raw_text: str = ""
 
 
@@ -212,13 +218,6 @@ class SectionFinder:
 class GrantExtractor:
     """Extracts individual grants from section text."""
     
-    # Great Lakes keywords for tagging
-    GL_KEYWORDS = [
-        'great lakes', 'lake michigan', 'lake superior', 'lake huron', 
-        'lake erie', 'lake ontario', 'watershed', 'water quality',
-        'freshwater', 'clean water', 'river', 'wetland'
-    ]
-    
     def __init__(self):
         # Track extraction format for diagnostics
         self.format_a_count = 0  # Erb-style: status/amount BEFORE org name
@@ -258,11 +257,15 @@ class GrantExtractor:
         # Split into potential grant blocks
         # Each grant typically has: ORG_NAME, ADDRESS, CITY/STATE/ZIP, PC/NC, PURPOSE, AMOUNT
         
-        # Pattern for amount at end of line
+        # Pattern for amount at end of line - 3+ digits, possibly with comma
         amount_pattern = re.compile(r'([\d,]{3,})\s*$')
         
         # Pattern for foundation status codes
         status_pattern = re.compile(r'\b(PC|NC|PF|GOV|SO)\b')
+        
+        # Pattern for city/state/zip lines (should NOT be treated as amount lines)
+        # Matches: "CITY,ST 12345" or "CITY, ST 12345-6789" or "CITY,ST 123456789" (malformed zip)
+        city_state_zip_pattern = re.compile(r',\s*[A-Z]{2}\s+\d{5,9}$', re.IGNORECASE)
         
         lines = section_text.split('\n')
         
@@ -310,7 +313,10 @@ class GrantExtractor:
                             j = i + 2
                             while j < len(lines) and j < i + 5:
                                 addr_line = lines[j].strip()
-                                if not addr_line or status_pattern.search(addr_line) or amount_pattern.search(addr_line):
+                                if not addr_line or status_pattern.search(addr_line):
+                                    break
+                                # Check if this looks like an amount line but NOT a city/state/zip
+                                if amount_pattern.search(addr_line) and not city_state_zip_pattern.search(addr_line):
                                     break
                                 if self._is_header_line(addr_line):
                                     j += 1
@@ -325,8 +331,7 @@ class GrantExtractor:
                                 foundation_status=status,
                                 purpose=purpose_text,
                                 amount=amount,
-                                grant_bucket=grant_bucket,
-                                gl_relevant=self._is_gl_relevant(org_name + " " + purpose_text)
+                                grant_bucket=grant_bucket
                             )
                             grants.append(grant)
                             self.format_a_count += 1  # Track Format A
@@ -351,9 +356,6 @@ class GrantExtractor:
                         current_grant.foundation_status = status_match.group(1)
                         current_grant.purpose = line[status_match.end():amount_match.start()].strip()
                     current_grant.amount = amount
-                    current_grant.gl_relevant = self._is_gl_relevant(
-                        current_grant.recipient_name + " " + current_grant.purpose
-                    )
                     grants.append(current_grant)
                     self.format_b_count += 1  # Track Format B
                     
@@ -447,11 +449,6 @@ class GrantExtractor:
         if len(line) < 3:
             return False
         return True
-    
-    def _is_gl_relevant(self, text: str) -> bool:
-        """Check if grant is Great Lakes relevant."""
-        text_lower = text.lower()
-        return any(kw in text_lower for kw in self.GL_KEYWORDS)
     
     def _filter_valid_grants(self, grants: List[Grant]) -> List[Grant]:
         """Filter out invalid/artifact grants."""
@@ -713,17 +710,52 @@ class IRS990PFParser:
             if not grants:
                 diagnostics["warnings"].append("No grants extracted - check PDF format")
             
-            # Convert to DataFrames
-            grants_df = pd.DataFrame([{
-                'org_name': g.recipient_name,
-                'address': g.recipient_address,
-                'city_state_zip': g.recipient_city_state_zip,
-                'status': g.foundation_status,
-                'purpose': g.purpose,
-                'amount': g.amount,
-                'grant_bucket': g.grant_bucket,
-                'gl_relevant': g.gl_relevant
-            } for g in grants]) if grants else pd.DataFrame()
+            # Helper to parse city/state from city_state_zip
+            def parse_city_state(city_state_zip: str) -> tuple:
+                """Parse 'CITY,ST ZIP' or 'CITY, ST ZIP' into (city, state)."""
+                if not city_state_zip:
+                    return "", ""
+                text = city_state_zip.upper().strip()
+                
+                # Pattern: CITY,ST ZIP or CITY, ST ZIP (handle comma directly before state)
+                # Match: "DETROIT,MI 48201" or "CHICAGO, IL 60601"
+                match = re.search(r'^(.+?),\s*([A-Z]{2})\s+\d', text)
+                if match:
+                    return match.group(1).strip(), match.group(2)
+                
+                # Pattern: CITY ST ZIP (no comma)
+                match = re.search(r'^(.+?)\s+([A-Z]{2})\s+\d{5}', text)
+                if match:
+                    return match.group(1).strip(), match.group(2)
+                
+                # Try just state code anywhere
+                match = re.search(r'\b([A-Z]{2})\s+\d{5}', text)
+                if match:
+                    return "", match.group(1)
+                    
+                return "", ""
+            
+            # Convert to DataFrames with updated column names
+            grants_data = []
+            for g in grants:
+                city, state = parse_city_state(g.recipient_city_state_zip)
+                # Build raw address for fallback parsing
+                addr_parts = [g.recipient_address, g.recipient_city_state_zip]
+                raw_addr = ", ".join(p for p in addr_parts if p)
+                
+                grants_data.append({
+                    'grantee_name': g.recipient_name,
+                    'grantee_address': g.recipient_address,
+                    'grantee_city': city,
+                    'grantee_state': state,
+                    'grantee_address_raw': raw_addr,
+                    'status': g.foundation_status,
+                    'purpose': g.purpose,
+                    'grant_amount': g.amount,
+                    'grant_bucket': g.grant_bucket,
+                })
+            
+            grants_df = pd.DataFrame(grants_data) if grants_data else pd.DataFrame()
             
             people_df = pd.DataFrame([{
                 'name': b.name,
