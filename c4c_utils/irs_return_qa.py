@@ -115,21 +115,31 @@ def compute_confidence(diagnostics: Dict[str, Any]) -> ConfidenceResult:
     if ft in {"990pf", "990-pf"}:
         # Primary: 3a totals reconciliation
         rep_3a = diagnostics.get("reported_total_3a", None)
-        comp_3a = diagnostics.get("computed_total_3a", None)
+        # Support both computed_total_3a (contract) and grants_3a_total (current parser)
+        comp_3a = diagnostics.get("computed_total_3a") or diagnostics.get("grants_3a_total")
         grants_3a_count = diagnostics.get("grants_3a_count", None)
 
         # If we have reported total 3a, mismatch is a big deal
         if isinstance(rep_3a, (int, float)) and isinstance(comp_3a, (int, float)):
             diff = abs(int(rep_3a) - int(comp_3a))
-            if diff <= 100:
-                reasons.append("3a (paid during year) computed total matches reported total (within $100).")
+            pct = (diff / float(rep_3a) * 100) if rep_3a else 0
+            
+            # Percentage-based thresholds (more forgiving for large foundations)
+            if pct <= 0.5:
+                # Excellent match (within 0.5%)
+                reasons.append(f"3a computed total matches reported total ({100-pct:.1f}% match).")
+            elif pct <= 1.0:
+                # Good match (within 1%)
+                reasons.append(f"3a totals within 1% ({100-pct:.1f}% match).")
+            elif pct <= 2.0:
+                # Minor mismatch
+                penalize(f"3a totals mismatch: {pct:.1f}% variance (${diff:,}).", 15)
+            elif pct <= 5.0:
+                # Moderate mismatch
+                penalize(f"3a totals mismatch: {pct:.1f}% variance (${diff:,}).", 30)
             else:
-                penalize(f"3a totals mismatch (diff ${diff:,}).", 40)
-                # Additional penalty if mismatch is also >1%
-                if rep_3a:
-                    pct = diff / float(rep_3a)
-                    if pct > 0.01:
-                        penalize("3a mismatch exceeds 1% of reported total.", 20)
+                # Serious mismatch
+                penalize(f"3a totals mismatch: {pct:.1f}% variance (${diff:,}).", 50)
         else:
             # Missing reported 3a is less severe, but reduces QA certainty
             penalize("Reported 3a total not found; cannot reconcile computed totals.", 15)
@@ -141,11 +151,15 @@ def compute_confidence(diagnostics: Dict[str, Any]) -> ConfidenceResult:
 
         # Secondary: 3b mismatch is informative but less important
         rep_3b = diagnostics.get("reported_total_3b", None)
-        comp_3b = diagnostics.get("computed_total_3b", None)
+        # Support both computed_total_3b (contract) and grants_3b_total (current parser)
+        comp_3b = diagnostics.get("computed_total_3b") or diagnostics.get("grants_3b_total")
         if isinstance(rep_3b, (int, float)) and isinstance(comp_3b, (int, float)):
             diff_b = abs(int(rep_3b) - int(comp_3b))
-            if diff_b > 100:
-                penalize(f"3b totals mismatch (diff ${diff_b:,}) [secondary].", 10)
+            pct_b = (diff_b / float(rep_3b) * 100) if rep_3b else 0
+            
+            # 3b is secondary, so lighter penalties
+            if pct_b > 2.0:
+                penalize(f"3b totals mismatch: {pct_b:.1f}% variance [secondary].", 10)
 
     elif ft == "990":
         pages = diagnostics.get("schedule_i_pages_detected", None)
