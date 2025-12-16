@@ -21,7 +21,7 @@ from pathlib import Path
 from datetime import datetime
 # Add the project root to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from c4c_utils.irs990_parser import parse_990_pdf, PARSER_VERSION
+from c4c_utils.irs990_parser import PARSER_VERSION
 from c4c_utils.irs990pf_xml_parser import parse_990pf_xml
 from c4c_utils.irs990_xml_parser import parse_990_xml
 from c4c_utils.network_export import build_nodes_df, build_edges_df, NODE_COLUMNS, EDGE_COLUMNS, get_existing_foundations
@@ -30,165 +30,12 @@ from c4c_utils.project_store import list_projects, load_project_config, save_pro
 from c4c_utils.region_tagger import apply_region_tagging, get_region_summary
 from c4c_utils.board_extractor import BoardExtractor
 from c4c_utils.irs_return_qa import compute_confidence, render_return_qa_panel
-
-# =============================================================================
-# Return Dispatcher Helpers (PDF/XML) — v0.9.1 patch
-# =============================================================================
-
-ATTACHMENT_HINT_PATTERNS = [
-    r"see\s+attached\s+detail",
-    r"see\s+attached\s+schedule",
-    r"see\s+attached\s+statement",
-    r"see\s+attached\s+list",
-    r"see\s+attached",
-    r"attached\s+detail",
-]
-
-def _safe_int(x, default=0):
-    try:
-        return int(x)
-    except Exception:
-        return default
-
-def detect_pdf_form_type(page_texts: list[str]) -> str:
-    """
-    Best-effort detection: '990-PF', '990', or 'unknown'.
-    Looks at first few pages only (fast, robust).
-    """
-    head = "\n".join(page_texts[:3]).upper()
-    if "FORM 990-PF" in head or "FORM 990PF" in head:
-        return "990-PF"
-    # Be careful: 990-PF contains "990" too, so check after PF
-    if "FORM 990" in head:
-        return "990"
-    return "unknown"
-
-def detect_source_type(filename: str, page_texts: list[str]) -> str:
-    """
-    Best-effort detection: 'propublica', 'irs', or 'unknown'.
-    """
-    head = "\n".join(page_texts[:3])
-    if "ProPublica" in head or "Nonprofit Explorer" in head or "projects.propublica.org" in head:
-        return "propublica"
-    # IRS render artifacts sometimes appear in PDFs
-    if "IRS 990 e-File Render" in head or "efile Public Visual Render" in head:
-        return "irs"
-    # Fallback to filename
-    if "propublica" in filename.lower():
-        return "propublica"
-    if "irs" in filename.lower():
-        return "irs"
-    return "unknown"
-
-def extract_pdf_pages(file_bytes: bytes) -> tuple[list[str], int, int, float]:
-    """Extract per-page text (and basic extraction diagnostics)."""
-    reader = pypdf.PdfReader(BytesIO(file_bytes))
-    page_texts = []
-    empty_pages = 0
-    for p in reader.pages:
-        t = (p.extract_text() or "").strip()
-        page_texts.append(t)
-        if not t:
-            empty_pages += 1
-    page_count = len(page_texts)
-    empty_ratio = (empty_pages / page_count) if page_count else 1.0
-    return page_texts, page_count, empty_pages, empty_ratio
-
-def count_schedule_i_pages(page_texts: list[str]) -> int:
-    """Count pages where 'Schedule I' appears (990 grants/assistance schedule)."""
-    n = 0
-    for t in page_texts:
-        if not t:
-            continue
-        # 'Schedule I (Form 990)' is typical
-        if re.search(r"\bSchedule\s+I\b", t, re.IGNORECASE):
-            n += 1
-    return n
-
-def attachment_reference_detected(grants_df: pd.DataFrame, diagnostics: dict) -> bool:
-    """Detect 'See attached detail' style placeholders that indicate missing grant detail."""
-    try:
-        for col in ["grantee_name", "grant_purpose_raw"]:
-            if col in grants_df.columns:
-                joined = " ".join(grants_df[col].astype(str).fillna("").tolist()).lower()
-                for pat in ATTACHMENT_HINT_PATTERNS:
-                    if re.search(pat, joined, re.IGNORECASE):
-                        return True
-    except Exception:
-        pass
-    # Also consider parser-provided hint
-    if diagnostics.get("attached_detail_detected") is True:
-        return True
-    return False
-
-def parse_return_dispatch(file_bytes: bytes, filename: str, tax_year_override: str = "") -> dict:
-    """
-    Unified dispatcher for OrgGraph US upload flow.
-    Routes:
-      - XML: parse_xml_file(...)
-      - PDF 990-PF: parse_990_pdf(...)
-      - PDF 990: currently not supported (recommend XML / IRS TEOS); returns empty grants with diagnostics
-    Always returns a dict with keys: grants_df, people_df, foundation_meta, diagnostics
-    """
-    # XML path
-    if filename.lower().endswith(".xml"):
-        result = parse_xml_file(file_bytes, filename, tax_year_override)
-        # Best-effort: schedule I presence for XML 990 parser
-        diag = result.get("diagnostics", {})
-        if "schedule_i_pages_detected" not in diag:
-            diag["schedule_i_pages_detected"] = 1 if diag.get("form_type_detected") == "990" and diag.get("grants_total", 0) > 0 else 0
-        result["diagnostics"] = diag
-        return result
-
-    # PDF path
-    page_texts, page_count, empty_pages, empty_ratio = extract_pdf_pages(file_bytes)
-    form_type = detect_pdf_form_type(page_texts)
-    source_type = detect_source_type(filename, page_texts)
-    schedule_i_pages = count_schedule_i_pages(page_texts)
-
-    if form_type == "990-PF":
-        result = parse_990_pdf(file_bytes, filename, tax_year_override)
-        diag = result.get("diagnostics", {})
-        diag.setdefault("form_type_detected", "990-PF")
-        diag.setdefault("source_type_detected", source_type)
-        diag["page_count"] = page_count
-        diag["empty_page_count"] = empty_pages
-        diag["empty_page_ratio"] = empty_ratio
-        diag["schedule_i_pages_detected"] = schedule_i_pages  # mostly 0 for PF, but harmless
-        result["diagnostics"] = diag
-        return result
-
-    # PDF Form 990 (non-PF) — advise user
-    empty = {
-        "grants_df": pd.DataFrame(),
-        "people_df": pd.DataFrame(),
-        "foundation_meta": {
-            "foundation_name": "",
-            "foundation_ein": "",
-            "tax_year": tax_year_override or "",
-            "source_file": filename,
-        },
-        "diagnostics": {
-            "form_type_detected": "990",
-            "source_type_detected": source_type,
-            "page_count": page_count,
-            "empty_page_count": empty_pages,
-            "empty_page_ratio": empty_ratio,
-            "schedule_i_pages_detected": schedule_i_pages,
-            "grants_total": 0,
-            "warnings": [
-                "Form 990 PDF parsing is not yet supported in OrgGraph US.",
-                "If you have an XML version of this filing, upload the XML (preferred for 990).",
-                "If grant details are missing (e.g., 'See attached detail'), download the full filing from IRS TEOS with attachments.",
-            ],
-        },
-    }
-    return empty
+from c4c_utils.irs_return_dispatcher import parse_irs_return
 
 # =============================================================================
 # Constants
 # =============================================================================
-APP_VERSION = "0.10.3"  # Added region filtering for exports - only region-relevant grants included
+APP_VERSION = "0.11.0"  # Unified dispatcher integration
 MAX_FILES = 50
 C4C_LOGO_URL = "https://static.wixstatic.com/media/275a3f_25063966d6cd496eb2fe3f6ee5cde0fa~mv2.png"
 SOURCE_SYSTEM = "IRS_990"
@@ -197,6 +44,7 @@ JURISDICTION = "US"
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEMO_DATA_DIR = REPO_ROOT / "demo_data"
 DEMO_PROJECT_NAME = "_demo"  # Reserved name for demo dataset
+
 # =============================================================================
 # Page Configuration
 # =============================================================================
@@ -430,88 +278,12 @@ def extract_board_with_fallback(file_bytes: bytes, filename: str, meta: dict) ->
         return pd.DataFrame()
 
 
-def parse_xml_file(xml_bytes: bytes, filename: str, tax_year_override: str = "") -> dict:
-    """
-    Parse an IRS XML file, auto-detecting form type (990-PF or 990).
-    
-    Returns standardized result dict compatible with PDF parser output.
-    """
-    import xml.etree.ElementTree as ET
-    
-    IRS_NS = {"irs": "http://www.irs.gov/efile"}
-    
-    try:
-        # Handle BOM
-        if xml_bytes.startswith(b'\xef\xbb\xbf'):
-            xml_bytes = xml_bytes[3:]
-        
-        # Detect form type
-        root = ET.fromstring(xml_bytes)
-        return_type_el = root.find(".//irs:ReturnHeader/irs:ReturnTypeCd", IRS_NS)
-        
-        if return_type_el is not None and return_type_el.text:
-            return_type = return_type_el.text.strip().upper()
-        else:
-            # Fallback detection
-            if root.find(".//irs:IRS990PF", IRS_NS) is not None:
-                return_type = "990PF"
-            elif root.find(".//irs:IRS990", IRS_NS) is not None:
-                return_type = "990"
-            else:
-                return_type = "UNKNOWN"
-        
-        # Route to appropriate parser
-        if return_type in ("990PF", "990-PF"):
-            return parse_990pf_xml(xml_bytes, filename, tax_year_override)
-        elif return_type == "990":
-            return parse_990_xml(xml_bytes, filename, tax_year_override)
-        else:
-            return {
-                'foundation_meta': {},
-                'grants_df': pd.DataFrame(),
-                'people_df': pd.DataFrame(),
-                'diagnostics': {
-                    "parser_version": "xml-dispatcher",
-                    "source_file": filename,
-                    "form_type_detected": return_type,
-                    "warnings": [f"Unsupported form type: {return_type}. Expected 990-PF or 990."],
-                    "errors": [],
-                }
-            }
-    
-    except ET.ParseError as e:
-        return {
-            'foundation_meta': {},
-            'grants_df': pd.DataFrame(),
-            'people_df': pd.DataFrame(),
-            'diagnostics': {
-                "parser_version": "xml-dispatcher",
-                "source_file": filename,
-                "errors": [f"XML parse error: {str(e)}"],
-                "warnings": [],
-            }
-        }
-    except Exception as e:
-        return {
-            'foundation_meta': {},
-            'grants_df': pd.DataFrame(),
-            'people_df': pd.DataFrame(),
-            'diagnostics': {
-                "parser_version": "xml-dispatcher",
-                "source_file": filename,
-                "errors": [f"Error parsing XML: {str(e)}"],
-                "warnings": [],
-            }
-        }
-
-
-def process_uploaded_files(uploaded_files, tax_year_override: str = "") -> tuple:
+def process_uploaded_files(uploaded_files, tax_year_override: str = "", region_spec: dict = None) -> tuple:
     """
     Process uploaded 990-PF/990 files and return canonical outputs.
     
-    UPDATED for v0.9.0: Supports both PDF and XML files.
-    - PDF: Uses irs990_parser (990-PF only)
-    - XML: Uses irs990pf_xml_parser (990-PF) or irs990_xml_parser (990 Schedule I)
+    Uses unified dispatcher (parse_irs_return) for PDF/XML routing.
+    Region tagging is applied per-file inside the dispatcher if region_spec is provided.
     """
     all_grants = []
     all_people = []
@@ -523,10 +295,10 @@ def process_uploaded_files(uploaded_files, tax_year_override: str = "") -> tuple
             file_bytes = uploaded_file.read()
             filename = uploaded_file.name.lower()
             
-            # Route via unified dispatcher (PDF/XML)
-            result = parse_return_dispatch(file_bytes, uploaded_file.name, tax_year_override)
+            # Route via unified dispatcher (PDF/XML) with region tagging
+            result = parse_irs_return(file_bytes, uploaded_file.name, tax_year_override, region_spec=region_spec)
             
-            # Extract v2.5 diagnostics
+            # Extract diagnostics
             diagnostics = result.get('diagnostics', {})
             meta = result.get('foundation_meta', {})
             grants_df = result.get('grants_df', pd.DataFrame())
@@ -607,7 +379,7 @@ def process_uploaded_files(uploaded_files, tax_year_override: str = "") -> tuple
             else:
                 status = "no_grants"
             
-            # Build v2.5 parse result with full diagnostics
+            # Build parse result with full diagnostics
             parse_results.append({
                 "file": uploaded_file.name,
                 "status": status,
@@ -618,7 +390,7 @@ def process_uploaded_files(uploaded_files, tax_year_override: str = "") -> tuple
                 "grants_total": total_amount,
                 "board_count": people_count,
                 "foundation_meta": meta,
-                "diagnostics": diagnostics  # Full v2.5 diagnostics
+                "diagnostics": diagnostics
             })
             
         except Exception as e:
@@ -670,6 +442,14 @@ def get_confidence_badge(conf_dict: dict) -> str:
     color = get_confidence_color(confidence)
     
     return f"{color} {match_pct}% ({status})"
+
+def _safe_int(x, default=0):
+    """Safely convert to int."""
+    try:
+        return int(x)
+    except Exception:
+        return default
+
 def render_single_file_diagnostics(result: dict, expanded: bool = False):
     """Display diagnostics for a single parsed file with QA confidence scoring."""
     diag = result.get("diagnostics", {})
@@ -738,13 +518,19 @@ def render_single_file_diagnostics(result: dict, expanded: bool = False):
     if sched_i > 0:
         st.caption(f"Schedule coverage: **Schedule I pages detected:** {sched_i}")
 
-    if attachment_reference_detected(grants_df, diag):
+    # Use dispatcher's attachment detection from diagnostics
+    if diag.get("attachment_reference_detected"):
         st.warning(
-            "This return appears to reference an **attached grant detail** (e.g., 'See attached detail') "
+            "⚠️ This return references **attached grant detail** (e.g., 'See attached detail') "
             "that may not be included in the current PDF/XML source. "
             "For complete grant detail, download the full filing (with attachments) from **IRS TEOS**: "
-            "https://apps.irs.gov/app/eos/ ."
+            "https://apps.irs.gov/app/eos/"
         )
+        
+        # Show detected phrases if available
+        phrases = diag.get("attachment_reference_phrases", [])
+        if phrases:
+            st.caption(f"Detected: {', '.join(phrases[:3])}")
         
         # Totals reconciliation (QA check)
         rep_3a = diag.get('reported_total_3a')
@@ -1399,136 +1185,113 @@ def filter_data_to_region(nodes_df: pd.DataFrame, edges_df: pd.DataFrame,
     - Board membership edges (always included - people at funders)
     - Nodes referenced by the filtered edges
     
-    Args:
-        nodes_df: Full nodes DataFrame
-        edges_df: Full edges DataFrame  
-        grants_df: Grants DataFrame with region_relevant column
-        region_def: Region definition dict (or None for no filtering)
-    
     Returns:
-        (filtered_nodes, filtered_edges, filtered_grants, filter_stats)
+        (filtered_nodes_df, filtered_edges_df, filtered_grants_df)
     """
-    # No filtering if no region or region is "none"
     if not region_def or region_def.get("id") == "none":
-        return nodes_df, edges_df, grants_df, None
+        return nodes_df, edges_df, grants_df
     
-    # Check if grants_df has region_relevant column
-    if grants_df is None or grants_df.empty or "region_relevant" not in grants_df.columns:
-        return nodes_df, edges_df, grants_df, None
+    if grants_df is None or grants_df.empty:
+        return nodes_df, edges_df, grants_df
     
-    # Count before filtering
-    total_grants = len(grants_df)
-    total_edges = len(edges_df) if not edges_df.empty else 0
+    if "region_relevant" not in grants_df.columns:
+        return nodes_df, edges_df, grants_df
     
     # Filter grants to region-relevant only
     filtered_grants = grants_df[grants_df["region_relevant"] == True].copy()
-    region_grant_count = len(filtered_grants)
     
-    # Build set of (from_id, to_id, amount, fiscal_year) for region-relevant grants
-    # to match against edges
-    if not filtered_grants.empty:
-        # We need to identify which edges correspond to region-relevant grants
-        # Edges have edge_type, and GRANT edges should match our filtered grants
-        
-        # Get grantee node_ids from filtered grants
-        # This requires matching grantee_name to node labels
-        region_grantee_names = set(filtered_grants["grantee_name"].str.strip().str.upper())
-    else:
-        region_grantee_names = set()
+    if filtered_grants.empty:
+        # No region-relevant grants - return empty datasets
+        return pd.DataFrame(columns=nodes_df.columns), pd.DataFrame(columns=edges_df.columns), filtered_grants
+    
+    # Build set of grantee names that are region-relevant
+    region_grantees = set(filtered_grants["grantee_name"].dropna().unique())
+    
+    # Filter edges
+    # - Keep all BOARD_MEMBERSHIP edges
+    # - Keep only GRANT edges where target (grantee) is in region
     
     if edges_df.empty:
-        return nodes_df, edges_df, filtered_grants, {
-            "total_grants": total_grants,
-            "region_grants": region_grant_count,
-            "region_name": region_def.get("name", "Selected Region")
-        }
+        return nodes_df, edges_df, filtered_grants
     
-    # Build node label lookup (uppercase for matching)
-    node_labels = {}
+    # Get node_id → label mapping
     if not nodes_df.empty and "node_id" in nodes_df.columns and "label" in nodes_df.columns:
-        node_labels = dict(zip(nodes_df["node_id"], nodes_df["label"].str.strip().str.upper()))
+        id_to_label = dict(zip(nodes_df["node_id"], nodes_df["label"]))
+    else:
+        id_to_label = {}
     
-    # Filter edges:
-    # - Keep all BOARD_MEMBERSHIP edges
-    # - Keep GRANT edges only if to_id (grantee) is in region
     def is_region_relevant_edge(row):
         if row.get("edge_type") == "BOARD_MEMBERSHIP":
             return True
         if row.get("edge_type") == "GRANT":
-            to_id = row.get("to_id", "")
-            grantee_label = node_labels.get(to_id, "").upper()
-            return grantee_label in region_grantee_names
-        return True  # Keep other edge types
+            # Check if target (grantee) is in region
+            target_id = row.get("to_id", "")
+            target_label = id_to_label.get(target_id, target_id)
+            return target_label in region_grantees
+        return True  # Include other edge types
     
     filtered_edges = edges_df[edges_df.apply(is_region_relevant_edge, axis=1)].copy()
     
-    # Get all node_ids referenced in filtered edges
-    referenced_ids = set()
+    # Filter nodes to only those referenced by filtered edges
     if not filtered_edges.empty:
-        referenced_ids.update(filtered_edges["from_id"].dropna())
-        referenced_ids.update(filtered_edges["to_id"].dropna())
-    
-    # Filter nodes to only those referenced
-    if not nodes_df.empty and referenced_ids:
+        referenced_ids = set(filtered_edges["from_id"].dropna()) | set(filtered_edges["to_id"].dropna())
         filtered_nodes = nodes_df[nodes_df["node_id"].isin(referenced_ids)].copy()
     else:
-        filtered_nodes = nodes_df
+        filtered_nodes = pd.DataFrame(columns=nodes_df.columns)
     
-    filter_stats = {
-        "total_grants": total_grants,
-        "region_grants": region_grant_count,
-        "total_edges": total_edges,
-        "filtered_edges": len(filtered_edges),
-        "total_nodes": len(nodes_df),
-        "filtered_nodes": len(filtered_nodes),
-        "region_name": region_def.get("name", "Selected Region")
-    }
-    
-    return filtered_nodes, filtered_edges, filtered_grants, filter_stats
+    return filtered_nodes, filtered_edges, filtered_grants
 
 
 def render_downloads(nodes_df: pd.DataFrame, edges_df: pd.DataFrame, 
                     grants_df: pd.DataFrame = None, parse_results: list = None,
                     project_name: str = None, region_def: dict = None):
-    """Render download buttons with region filtering applied."""
-    st.subheader("💾 Download")
+    """Render download buttons with region filtering option."""
+    st.subheader("📥 Download Data")
     
-    display_name = get_project_display_name(project_name) if project_name else "project"
-    
-    # Apply region filtering if a region is selected
-    export_nodes = nodes_df
-    export_edges = edges_df
-    export_grants = grants_df
-    filter_stats = None
-    
-    if region_def and region_def.get("id") != "none":
-        export_nodes, export_edges, export_grants, filter_stats = filter_data_to_region(
-            nodes_df, edges_df, grants_df, region_def
+    # Region filtering option
+    if region_def and region_def.get("id") != "none" and grants_df is not None and "region_relevant" in grants_df.columns:
+        filter_to_region = st.checkbox(
+            f"🗺️ Export only {region_def.get('name', 'region')}-relevant grants",
+            value=True,
+            help="When checked, exports will only include grants to organizations in the selected region"
         )
         
-        if filter_stats:
-            region_name = filter_stats.get("region_name", "Selected Region")
-            st.success(f"🗺️ **Filtered to {region_name}:** {filter_stats['region_grants']:,} of {filter_stats['total_grants']:,} grants in region")
+        if filter_to_region:
+            export_nodes, export_edges, export_grants = filter_data_to_region(
+                nodes_df, edges_df, grants_df, region_def
+            )
             
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.metric("Grants", f"{filter_stats['region_grants']:,}", 
-                         delta=f"-{filter_stats['total_grants'] - filter_stats['region_grants']:,} outside region",
-                         delta_color="off")
-            with col2:
-                st.metric("Edges", f"{filter_stats['filtered_edges']:,}")
-            with col3:
-                st.metric("Nodes", f"{filter_stats['filtered_nodes']:,}")
+            # Show filtering stats
+            original_grants = len(edges_df[edges_df["edge_type"] == "GRANT"]) if not edges_df.empty and "edge_type" in edges_df.columns else 0
+            filtered_grants = len(export_edges[export_edges["edge_type"] == "GRANT"]) if not export_edges.empty and "edge_type" in export_edges.columns else 0
+            
+            st.caption(f"Exporting {filtered_grants:,} of {original_grants:,} grants ({region_def.get('name', 'region')}-relevant only)")
+        else:
+            export_nodes, export_edges, export_grants = nodes_df, edges_df, grants_df
+    else:
+        export_nodes, export_edges, export_grants = nodes_df, edges_df, grants_df
     
-    # Instruction for saving to project
+    # Save to project folder
     if project_name and project_name != DEMO_PROJECT_NAME:
-        st.info(f"⬇️ **Download these files and upload to `demo_data/{project_name}/` on GitHub** (replace existing files)")
+        save_col1, save_col2 = st.columns([2, 1])
+        with save_col1:
+            if st.button("💾 Save to Project", type="primary"):
+                project_path = get_project_path(project_name)
+                try:
+                    export_nodes.to_csv(project_path / "nodes.csv", index=False)
+                    export_edges.to_csv(project_path / "edges.csv", index=False)
+                    st.success(f"✅ Saved to `{project_path}/`")
+                except Exception as e:
+                    st.error(f"Error saving: {e}")
+        with save_col2:
+            st.caption("Saves nodes.csv and edges.csv to the project folder")
     
-    # Generate Polinode format from filtered data
+    st.divider()
+    
+    # Convert to Polinode format
     poli_nodes, poli_edges = convert_to_polinode_format(export_nodes, export_edges)
     
-    # Individual file downloads
-    st.markdown("**Individual files:**")
+    # Download buttons in columns
     col1, col2, col3, col4 = st.columns(4)
     
     with col1:
@@ -1761,6 +1524,11 @@ def render_upload_interface(project_name: str):
         # Region selector (after upload, before processing)
         region_def = region_selector_ui(project_id=project_name)
         
+        # Build region_spec for dispatcher (convert from UI format if needed)
+        region_spec = None
+        if region_def and region_def.get("id") != "none":
+            region_spec = region_def
+        
         st.divider()
         
         parse_button = st.button("🔍 Parse 990 Filings", type="primary", disabled=not uploaded_files)
@@ -1770,16 +1538,14 @@ def render_upload_interface(project_name: str):
             st.stop()
         
         if parse_button:
-            # Process files
+            # Process files with region_spec passed to dispatcher
             with st.spinner("Parsing filings..."):
                 new_nodes, new_edges, grants_df, foundations_meta, parse_results = process_uploaded_files(
-                    uploaded_files, tax_year_override
+                    uploaded_files, tax_year_override, region_spec=region_spec
                 )
             
-            # Apply region tagging (post-processing)
-            if grants_df is not None and not grants_df.empty and region_def and region_def.get("id") != "none":
-                with st.spinner("Applying region tagging..."):
-                    grants_df = apply_region_tagging(grants_df, region_def)
+            # Note: Region tagging is now done inside the dispatcher per-file
+            # No need for post-processing region tagging here
             
             if new_nodes.empty:
                 st.warning("No data extracted from uploaded files.")
