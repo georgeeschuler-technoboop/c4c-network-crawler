@@ -56,6 +56,16 @@ def slugify_loose(text: str) -> str:
     if not text:
         return ""
     
+    # Handle NaN/None values
+    if not isinstance(text, str):
+        try:
+            import pandas as pd
+            if pd.isna(text):
+                return ""
+        except:
+            pass
+        text = str(text)
+    
     text = text.strip().lower()
     text = re.sub(r"&|\+", " and ", text)
     text = re.sub(r"[^a-z0-9]+", "-", text)
@@ -163,13 +173,34 @@ def build_nodes_df(
     if not people_df.empty:
         for _, row in people_df.iterrows():
             person_name = row.get('person_name', '')
+            
+            # Handle NaN/None values
+            if not person_name or (isinstance(person_name, float) and pd.isna(person_name)):
+                continue
+            
+            # Ensure it's a string
+            person_name = str(person_name).strip()
             if not person_name:
                 continue
             
-            org_ein = row.get('org_ein', '').replace('-', '')
+            org_ein = row.get('org_ein', '')
+            # Handle NaN for org_ein
+            if isinstance(org_ein, float) and pd.isna(org_ein):
+                org_ein = ''
+            else:
+                org_ein = str(org_ein).replace('-', '')
+            
             org_name = row.get('org_name', '')
+            # Handle NaN for org_name
+            if isinstance(org_name, float) and pd.isna(org_name):
+                org_name = ''
+            
             org_slug = slugify_loose(org_name) if org_name else f"ein-{org_ein}"
+            
             tax_year = row.get('tax_year', '')
+            # Handle NaN for tax_year
+            if isinstance(tax_year, float) and pd.isna(tax_year):
+                tax_year = ''
             
             # Contextual person ID (same pattern as CA adapter)
             # person:<context_org_slug>:<name_slug>|<year>
@@ -315,15 +346,35 @@ def build_edges_df(
     if not people_df.empty:
         for _, row in people_df.iterrows():
             person_name = row.get('person_name', '')
-            org_ein = row.get('org_ein', '').replace('-', '')
             
-            if not person_name or not org_ein:
+            # Handle NaN/None values
+            if not person_name or (isinstance(person_name, float) and pd.isna(person_name)):
                 continue
+            
+            # Ensure it's a string
+            person_name = str(person_name).strip()
+            if not person_name:
+                continue
+            
+            org_ein = row.get('org_ein', '')
+            # Handle NaN for org_ein too
+            if not org_ein or (isinstance(org_ein, float) and pd.isna(org_ein)):
+                continue
+            org_ein = str(org_ein).replace('-', '')
             
             # Person node_id
             org_name = row.get('org_name', '')
+            # Handle NaN for org_name
+            if isinstance(org_name, float) and pd.isna(org_name):
+                org_name = ''
+            
             org_slug = slugify_loose(org_name) if org_name else f"ein-{org_ein}"
+            
             tax_year = row.get('tax_year', '')
+            # Handle NaN for tax_year
+            if isinstance(tax_year, float) and pd.isna(tax_year):
+                tax_year = ''
+            
             name_slug = slugify_loose(person_name)
             person_key = f"{org_slug}:{name_slug}|{tax_year}"
             from_id = f"person:{person_key}"
