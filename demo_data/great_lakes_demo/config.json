@@ -1,0 +1,10 @@
+{
+  "project_id": "great_lakes_demo",
+  "display_name": "Great Lakes Funder Network",
+  "region_filter": {
+    "mode": "custom",
+    "preset_key": "",
+    "custom_admin1_codes": ["MI","OH","MN","WI","IN","IL","NY","ON","QC"],
+    "custom_country_codes": ["US","CA"]
+  }
+}
