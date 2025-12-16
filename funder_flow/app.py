@@ -33,7 +33,7 @@ from c4c_utils.irs_return_qa import compute_confidence, render_return_qa_panel
 # =============================================================================
 # Constants
 # =============================================================================
-APP_VERSION = "0.10.2"  # Added Polinode-compatible export format
+APP_VERSION = "0.10.3"  # Added region filtering for exports - only region-relevant grants included
 MAX_FILES = 50
 C4C_LOGO_URL = "https://static.wixstatic.com/media/275a3f_25063966d6cd496eb2fe3f6ee5cde0fa~mv2.png"
 SOURCE_SYSTEM = "IRS_990"
@@ -1211,30 +1211,153 @@ def convert_to_polinode_format(nodes_df: pd.DataFrame, edges_df: pd.DataFrame) -
     return poli_nodes, poli_edges
 
 
+def filter_data_to_region(nodes_df: pd.DataFrame, edges_df: pd.DataFrame, 
+                          grants_df: pd.DataFrame, region_def: dict) -> tuple:
+    """
+    Filter nodes and edges to only include region-relevant grants.
+    
+    This ensures exports only contain:
+    - Grant edges where grantee is in the selected region
+    - Board membership edges (always included - people at funders)
+    - Nodes referenced by the filtered edges
+    
+    Args:
+        nodes_df: Full nodes DataFrame
+        edges_df: Full edges DataFrame  
+        grants_df: Grants DataFrame with region_relevant column
+        region_def: Region definition dict (or None for no filtering)
+    
+    Returns:
+        (filtered_nodes, filtered_edges, filtered_grants, filter_stats)
+    """
+    # No filtering if no region or region is "none"
+    if not region_def or region_def.get("id") == "none":
+        return nodes_df, edges_df, grants_df, None
+    
+    # Check if grants_df has region_relevant column
+    if grants_df is None or grants_df.empty or "region_relevant" not in grants_df.columns:
+        return nodes_df, edges_df, grants_df, None
+    
+    # Count before filtering
+    total_grants = len(grants_df)
+    total_edges = len(edges_df) if not edges_df.empty else 0
+    
+    # Filter grants to region-relevant only
+    filtered_grants = grants_df[grants_df["region_relevant"] == True].copy()
+    region_grant_count = len(filtered_grants)
+    
+    # Build set of (from_id, to_id, amount, fiscal_year) for region-relevant grants
+    # to match against edges
+    if not filtered_grants.empty:
+        # We need to identify which edges correspond to region-relevant grants
+        # Edges have edge_type, and GRANT edges should match our filtered grants
+        
+        # Get grantee node_ids from filtered grants
+        # This requires matching grantee_name to node labels
+        region_grantee_names = set(filtered_grants["grantee_name"].str.strip().str.upper())
+    else:
+        region_grantee_names = set()
+    
+    if edges_df.empty:
+        return nodes_df, edges_df, filtered_grants, {
+            "total_grants": total_grants,
+            "region_grants": region_grant_count,
+            "region_name": region_def.get("name", "Selected Region")
+        }
+    
+    # Build node label lookup (uppercase for matching)
+    node_labels = {}
+    if not nodes_df.empty and "node_id" in nodes_df.columns and "label" in nodes_df.columns:
+        node_labels = dict(zip(nodes_df["node_id"], nodes_df["label"].str.strip().str.upper()))
+    
+    # Filter edges:
+    # - Keep all BOARD_MEMBERSHIP edges
+    # - Keep GRANT edges only if to_id (grantee) is in region
+    def is_region_relevant_edge(row):
+        if row.get("edge_type") == "BOARD_MEMBERSHIP":
+            return True
+        if row.get("edge_type") == "GRANT":
+            to_id = row.get("to_id", "")
+            grantee_label = node_labels.get(to_id, "").upper()
+            return grantee_label in region_grantee_names
+        return True  # Keep other edge types
+    
+    filtered_edges = edges_df[edges_df.apply(is_region_relevant_edge, axis=1)].copy()
+    
+    # Get all node_ids referenced in filtered edges
+    referenced_ids = set()
+    if not filtered_edges.empty:
+        referenced_ids.update(filtered_edges["from_id"].dropna())
+        referenced_ids.update(filtered_edges["to_id"].dropna())
+    
+    # Filter nodes to only those referenced
+    if not nodes_df.empty and referenced_ids:
+        filtered_nodes = nodes_df[nodes_df["node_id"].isin(referenced_ids)].copy()
+    else:
+        filtered_nodes = nodes_df
+    
+    filter_stats = {
+        "total_grants": total_grants,
+        "region_grants": region_grant_count,
+        "total_edges": total_edges,
+        "filtered_edges": len(filtered_edges),
+        "total_nodes": len(nodes_df),
+        "filtered_nodes": len(filtered_nodes),
+        "region_name": region_def.get("name", "Selected Region")
+    }
+    
+    return filtered_nodes, filtered_edges, filtered_grants, filter_stats
+
+
 def render_downloads(nodes_df: pd.DataFrame, edges_df: pd.DataFrame, 
                     grants_df: pd.DataFrame = None, parse_results: list = None,
-                    project_name: str = None):
-    """Render download buttons."""
+                    project_name: str = None, region_def: dict = None):
+    """Render download buttons with region filtering applied."""
     st.subheader("💾 Download")
     
     display_name = get_project_display_name(project_name) if project_name else "project"
+    
+    # Apply region filtering if a region is selected
+    export_nodes = nodes_df
+    export_edges = edges_df
+    export_grants = grants_df
+    filter_stats = None
+    
+    if region_def and region_def.get("id") != "none":
+        export_nodes, export_edges, export_grants, filter_stats = filter_data_to_region(
+            nodes_df, edges_df, grants_df, region_def
+        )
+        
+        if filter_stats:
+            region_name = filter_stats.get("region_name", "Selected Region")
+            st.success(f"🗺️ **Filtered to {region_name}:** {filter_stats['region_grants']:,} of {filter_stats['total_grants']:,} grants in region")
+            
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("Grants", f"{filter_stats['region_grants']:,}", 
+                         delta=f"-{filter_stats['total_grants'] - filter_stats['region_grants']:,} outside region",
+                         delta_color="off")
+            with col2:
+                st.metric("Edges", f"{filter_stats['filtered_edges']:,}")
+            with col3:
+                st.metric("Nodes", f"{filter_stats['filtered_nodes']:,}")
     
     # Instruction for saving to project
     if project_name and project_name != DEMO_PROJECT_NAME:
         st.info(f"⬇️ **Download these files and upload to `demo_data/{project_name}/` on GitHub** (replace existing files)")
     
-    # Generate Polinode format
-    poli_nodes, poli_edges = convert_to_polinode_format(nodes_df, edges_df)
+    # Generate Polinode format from filtered data
+    poli_nodes, poli_edges = convert_to_polinode_format(export_nodes, export_edges)
     
     # Individual file downloads
     st.markdown("**Individual files:**")
     col1, col2, col3, col4 = st.columns(4)
     
     with col1:
-        if not nodes_df.empty:
+        if not export_nodes.empty:
             st.download_button(
                 "📥 nodes.csv",
-                data=nodes_df.to_csv(index=False),
+                data=export_nodes.to_csv(index=False),
                 file_name="nodes.csv",
                 mime="text/csv",
                 use_container_width=True,
@@ -1242,10 +1365,10 @@ def render_downloads(nodes_df: pd.DataFrame, edges_df: pd.DataFrame,
             )
     
     with col2:
-        if not edges_df.empty:
+        if not export_edges.empty:
             st.download_button(
                 "📥 edges.csv",
-                data=edges_df.to_csv(index=False),
+                data=export_edges.to_csv(index=False),
                 file_name="edges.csv",
                 mime="text/csv",
                 use_container_width=True,
@@ -1275,14 +1398,14 @@ def render_downloads(nodes_df: pd.DataFrame, edges_df: pd.DataFrame,
             )
     
     # ZIP download with everything
-    if not nodes_df.empty or not edges_df.empty:
+    if not export_nodes.empty or not export_edges.empty:
         zip_buffer = BytesIO()
         with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
             # C4C schema files
-            if not nodes_df.empty:
-                zip_file.writestr('nodes.csv', nodes_df.to_csv(index=False))
-            if not edges_df.empty:
-                zip_file.writestr('edges.csv', edges_df.to_csv(index=False))
+            if not export_nodes.empty:
+                zip_file.writestr('nodes.csv', export_nodes.to_csv(index=False))
+            if not export_edges.empty:
+                zip_file.writestr('edges.csv', export_edges.to_csv(index=False))
             
             # Polinode-compatible files
             if not poli_nodes.empty:
@@ -1291,8 +1414,8 @@ def render_downloads(nodes_df: pd.DataFrame, edges_df: pd.DataFrame,
                 zip_file.writestr('edges_polinode.csv', poli_edges.to_csv(index=False))
             
             # Detail files
-            if grants_df is not None and not grants_df.empty:
-                zip_file.writestr('grants_detail.csv', grants_df.to_csv(index=False))
+            if export_grants is not None and not export_grants.empty:
+                zip_file.writestr('grants_detail.csv', export_grants.to_csv(index=False))
             if parse_results:
                 zip_file.writestr('parse_log.json', json.dumps(parse_results, indent=2, default=str))
         
@@ -1406,7 +1529,7 @@ def render_upload_interface(project_name: str):
         render_data_preview(st.session_state.nodes_df, st.session_state.edges_df)
         render_downloads(st.session_state.nodes_df, st.session_state.edges_df, 
                        st.session_state.grants_df, st.session_state.parse_results,
-                       project_name)
+                       project_name, st.session_state.region_def)
         
     else:
         # Show upload interface
