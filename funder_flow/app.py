@@ -330,6 +330,15 @@ def process_uploaded_files(uploaded_files, tax_year_override: str = "") -> tuple
             
             if not people_df.empty:
                 people_df = people_df.copy()
+                
+                # Rename columns from parser format to network_export format
+                # Parser outputs: name, title, hours, compensation, benefits
+                # network_export expects: person_name, role, org_name, org_ein, tax_year
+                if 'name' in people_df.columns and 'person_name' not in people_df.columns:
+                    people_df['person_name'] = people_df['name']
+                if 'title' in people_df.columns and 'role' not in people_df.columns:
+                    people_df['role'] = people_df['title']
+                
                 people_df['org_name'] = org_name              # network_export expects org_name
                 people_df['org_ein'] = meta.get('foundation_ein', '').replace('-', '')  # network_export expects org_ein
                 people_df['tax_year'] = meta.get('tax_year', '')
