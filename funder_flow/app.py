@@ -624,8 +624,18 @@ def render_single_file_diagnostics(result: dict, expanded: bool = False):
         if errors:
             st.error("**Errors:**\n" + "\n".join(f"• {e}" for e in errors))
         
-        # Parser version and pages
-        st.caption(f"Parser v{diag.get('parser_version', 'unknown')} • {diag.get('pages_processed', 0)} pages • File: {result.get('file', 'unknown')}")
+        # Source type and parser info
+        source_type = diag.get("source_type", "pdf")
+        form_type = diag.get("form_type_detected", "990-PF")
+        pages = diag.get("pages_processed", 0)
+        
+        # Source badge
+        if source_type == "xml":
+            source_badge = "📄 XML (high accuracy)"
+        else:
+            source_badge = f"📑 PDF ({pages} pages) — beta"
+        
+        st.caption(f"{source_badge} • {form_type} • Parser v{diag.get('parser_version', 'unknown')} • {result.get('file', 'unknown')}")
 def render_parse_status(parse_results: list):
     """
     Render the parsing status for each file.
@@ -1117,13 +1127,31 @@ def render_upload_interface(project_name: str):
         
         st.markdown(f"""
         Upload up to **{MAX_FILES} IRS 990 filings** (PDF or XML).
-        
-        **Supported formats:**
-        - **990-PF** (private foundations) - PDF or XML
-        - **990** (public charities with Schedule I) - XML only
-        
-        *💡 Tip: XML files from ProPublica give 100% accurate data with grantee EINs!*
         """)
+        
+        # Data source guidance
+        with st.expander("📚 Data source guide (recommended reading)", expanded=False):
+            st.markdown("""
+            **Which file format should I use?**
+            
+            | Source | Format | Accuracy | Recommendation |
+            |--------|--------|----------|----------------|
+            | **ProPublica XML** | `.xml` | ⭐⭐⭐ Excellent | **Best choice** - 100% accurate, includes grantee EINs |
+            | **ProPublica PDF** | `.pdf` | ⭐⭐ Good | Beta - works well but may have minor parsing variance |
+            | **IRS direct PDF** | `.pdf` | ⭐⭐ Good | Coming soon - not yet optimized |
+            
+            **How to get XML files (recommended):**
+            1. Go to [ProPublica Nonprofit Explorer](https://projects.propublica.org/nonprofits/)
+            2. Search for the foundation by name or EIN
+            3. Click on a tax filing year
+            4. Look for **"XML"** download link (not PDF)
+            
+            **Supported form types:**
+            - **990-PF** (private foundations) — PDF or XML
+            - **990 with Schedule I** (public charities making grants) — XML only
+            
+            *PDF parsing is in beta. XML is preferred for production use.*
+            """)
         
         uploaded_files = st.file_uploader(
             f"Upload 990 files (max {MAX_FILES})",
@@ -1238,6 +1266,11 @@ def main():
     # ==========================================================================
     if project_mode == "➕ New Project":
         st.markdown("### Create New Project")
+        
+        st.caption("""
+        **Naming tips:** Use a descriptive name like "Great Lakes Funders 2024" or "Water Stewardship Network". 
+        Avoid special characters. The name becomes a folder, so "Great Lakes Funders" → `great_lakes_funders/`
+        """)
         
         col1, col2 = st.columns([3, 1])
         with col1:
