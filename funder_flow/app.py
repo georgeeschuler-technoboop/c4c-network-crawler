@@ -33,7 +33,7 @@ from c4c_utils.irs_return_qa import compute_confidence, render_return_qa_panel
 # =============================================================================
 # Constants
 # =============================================================================
-APP_VERSION = "0.10.0"  # Unified per-project config storage
+APP_VERSION = "0.10.1"  # Added help system with quick start guide and support request
 MAX_FILES = 50
 C4C_LOGO_URL = "https://static.wixstatic.com/media/275a3f_25063966d6cd496eb2fe3f6ee5cde0fa~mv2.png"
 SOURCE_SYSTEM = "IRS_990"
@@ -703,6 +703,181 @@ def render_parse_status(parse_results: list):
     
     for result in sorted_results:
         render_single_file_diagnostics(result, expanded=False)
+
+
+# =============================================================================
+# Help System
+# =============================================================================
+
+QUICK_START_GUIDE = """
+## Quick Start Guide
+
+### 1. Create a Project
+- Click **"➕ New Project"** and give it a descriptive name
+- Example: "Great Lakes Funders 2024" or "Water Stewardship Network"
+
+### 2. Upload 990 Filings
+- **Best option:** Download XML files from [ProPublica Nonprofit Explorer](https://projects.propublica.org/nonprofits/)
+- Upload multiple files at once (up to 50)
+- Supported: **990-PF** (private foundations) and **990 Schedule I** (public charities)
+
+### 3. Configure Region (Optional)
+- Apply regional tagging to identify grants in specific geographic areas
+- Choose a preset (Great Lakes, New England, etc.) or build a custom region
+
+### 4. Download Results
+- **nodes.csv** — Organizations and people
+- **edges.csv** — Grant and board relationships
+- **ZIP** — Complete export with grant details and diagnostics
+
+### Data Source Tips
+
+| Source | Accuracy | Notes |
+|--------|----------|-------|
+| ProPublica XML | ⭐⭐⭐ Excellent | Best choice - 100% accurate |
+| ProPublica PDF | ⭐⭐ Good | Beta - may have minor variance |
+
+### Need More Help?
+Click **"Request Support"** below to send us a message.
+"""
+
+
+def log_support_request(email: str, message: str, context: dict = None) -> bool:
+    """
+    Log a support request to a JSON file.
+    
+    Creates/appends to demo_data/_support_requests.json
+    """
+    from datetime import datetime
+    import json
+    
+    log_file = DEMO_DATA_DIR / "_support_requests.json"
+    
+    try:
+        # Load existing requests
+        if log_file.exists():
+            requests = json.loads(log_file.read_text(encoding="utf-8"))
+        else:
+            requests = []
+        
+        # Add new request
+        requests.append({
+            "timestamp": datetime.now().isoformat(),
+            "email": email,
+            "message": message,
+            "app_version": APP_VERSION,
+            "context": context or {},
+        })
+        
+        # Save
+        DEMO_DATA_DIR.mkdir(parents=True, exist_ok=True)
+        log_file.write_text(json.dumps(requests, indent=2), encoding="utf-8")
+        return True
+    except Exception as e:
+        return False
+
+
+def render_help_button():
+    """Render help button with popover menu."""
+    
+    # Use popover if available (Streamlit 1.33+), otherwise dialog
+    try:
+        with st.popover("❓", help="Help & Support"):
+            render_help_content()
+    except AttributeError:
+        # Fallback for older Streamlit versions
+        if st.button("❓ Help", key="help_btn"):
+            st.session_state.show_help = True
+        
+        if st.session_state.get("show_help", False):
+            render_help_dialog()
+
+
+def render_help_content():
+    """Render help menu content (used inside popover or dialog)."""
+    
+    tab1, tab2 = st.tabs(["📖 Quick Start", "💬 Request Support"])
+    
+    with tab1:
+        st.markdown(QUICK_START_GUIDE)
+    
+    with tab2:
+        render_support_form()
+
+
+def render_support_form():
+    """Render the support request form."""
+    
+    st.markdown("### Request Support")
+    st.markdown("Have a question, found a bug, or need help? Let us know!")
+    
+    email = st.text_input(
+        "Your email",
+        placeholder="you@example.com",
+        key="support_email"
+    )
+    
+    message = st.text_area(
+        "How can we help?",
+        placeholder="Describe your question, issue, or feedback...",
+        height=150,
+        key="support_message"
+    )
+    
+    # Optional: include context
+    include_context = st.checkbox(
+        "Include app state (helps with debugging)",
+        value=True,
+        key="support_include_context"
+    )
+    
+    col1, col2 = st.columns([1, 2])
+    with col1:
+        if st.button("Send", type="primary", key="support_send"):
+            if not email or "@" not in email:
+                st.error("Please enter a valid email address.")
+            elif not message.strip():
+                st.error("Please describe your question or issue.")
+            else:
+                # Build context
+                context = {}
+                if include_context:
+                    context = {
+                        "current_project": st.session_state.get("current_project", ""),
+                        "processed": st.session_state.get("processed", False),
+                    }
+                
+                # Log the request
+                success = log_support_request(email, message.strip(), context)
+                
+                if success:
+                    st.success("✅ Support request submitted! We'll get back to you soon.")
+                    # Also show mailto link as backup
+                    st.caption(f"You can also email us directly at info@connectingforchangellc.com")
+                else:
+                    # Fallback to mailto
+                    st.warning("Could not save request. Please email us directly:")
+                    mailto = f"mailto:info@connectingforchangellc.com?subject=OrgGraph Support&body={message[:500]}"
+                    st.markdown(f"[📧 Email info@connectingforchangellc.com]({mailto})")
+    
+    with col2:
+        st.caption("Or email us directly at info@connectingforchangellc.com")
+
+
+def render_help_dialog():
+    """Render help as a dialog (fallback for older Streamlit)."""
+    
+    with st.container():
+        st.markdown("---")
+        st.markdown("## ❓ Help & Support")
+        
+        render_help_content()
+        
+        if st.button("Close Help", key="close_help"):
+            st.session_state.show_help = False
+            st.rerun()
+
+
 # =============================================================================
 # Region Selector UI
 # =============================================================================
@@ -1222,11 +1397,15 @@ def main():
     init_session_state()
     
     # Header
-    col1, col2 = st.columns([1, 9])
+    # Header with logo, title, and help button
+    col1, col2, col3 = st.columns([1, 8, 1])
     with col1:
         st.image(C4C_LOGO_URL, width=80)
     with col2:
         st.title("OrgGraph (US)")
+    with col3:
+        st.markdown("<br>", unsafe_allow_html=True)  # Spacing
+        render_help_button()
     
     st.markdown("""
     OrgGraph currently supports US and Canadian nonprofit registries; additional sources will be added in the future.
