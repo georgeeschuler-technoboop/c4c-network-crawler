@@ -225,12 +225,13 @@ def merge_graph_data(existing_nodes: pd.DataFrame, existing_edges: pd.DataFrame,
         merged_edges = pd.concat([existing_edges, edges_to_add], ignore_index=True)
     
     return merged_nodes, merged_edges, stats
-def extract_board_with_fallback(file_bytes: bytes, filename: str) -> pd.DataFrame:
+def extract_board_with_fallback(file_bytes: bytes, filename: str, meta: dict) -> pd.DataFrame:
     """
     Extract board members using BoardExtractor.
     
     Writes bytes to temp file since BoardExtractor needs a file path.
-    Returns DataFrame with columns matching expected people_df format.
+    Returns DataFrame with columns matching network_export.py expected format:
+    - person_name, org_ein, org_name, role, tax_year
     """
     try:
         with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as tmp:
@@ -243,12 +244,20 @@ def extract_board_with_fallback(file_bytes: bytes, filename: str) -> pd.DataFram
         os.unlink(tmp_path)  # Clean up temp file
         
         if members:
-            # Convert to DataFrame with expected columns
+            # Get foundation info from meta
+            org_name = meta.get('foundation_name', '')
+            org_ein = meta.get('foundation_ein', '').replace('-', '')
+            tax_year = meta.get('tax_year', '')
+            
+            # Convert to DataFrame with columns matching network_export.py
             people_data = []
             for m in members:
                 people_data.append({
-                    'name': m.name,
-                    'title': m.title,
+                    'person_name': m.name,           # network_export expects person_name
+                    'role': m.title,                 # network_export expects role
+                    'org_name': org_name,            # network_export expects org_name
+                    'org_ein': org_ein,              # network_export expects org_ein
+                    'tax_year': tax_year,            # needed for node/edge IDs
                     'compensation': m.compensation or 0,
                     'hours_per_week': m.hours_per_week,
                     'benefits': m.benefits or 0,
@@ -288,7 +297,7 @@ def process_uploaded_files(uploaded_files, tax_year_override: str = "") -> tuple
             
             # Use BoardExtractor if parser didn't find people or found few
             if people_df.empty or len(people_df) < 3:
-                board_df = extract_board_with_fallback(file_bytes, uploaded_file.name)
+                board_df = extract_board_with_fallback(file_bytes, uploaded_file.name, meta)
                 if not board_df.empty and len(board_df) > len(people_df):
                     people_df = board_df
                     diagnostics['board_extraction'] = 'BoardExtractor'
@@ -321,8 +330,9 @@ def process_uploaded_files(uploaded_files, tax_year_override: str = "") -> tuple
             
             if not people_df.empty:
                 people_df = people_df.copy()
-                people_df['foundation_name'] = org_name
-                people_df['foundation_ein'] = meta.get('foundation_ein', '')
+                people_df['org_name'] = org_name              # network_export expects org_name
+                people_df['org_ein'] = meta.get('foundation_ein', '').replace('-', '')  # network_export expects org_ein
+                people_df['tax_year'] = meta.get('tax_year', '')
                 all_people.append(people_df)
             
             # Determine status
