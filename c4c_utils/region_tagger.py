@@ -152,21 +152,30 @@ def get_region_summary(df: pd.DataFrame) -> Dict[str, Any]:
     Returns:
         Dict with summary stats
     """
-    if df is None or df.empty or "region_relevant" not in df.columns:
+    if df is None or df.empty:
         return {
             "total_grants": 0,
             "region_relevant_count": 0,
             "region_relevant_pct": 0,
             "region_relevant_amount": 0,
             "total_amount": 0,
+            "region_name": "",
+            "region_id": "",
         }
     
+    # Check if region tagging was applied
+    has_region = "region_relevant" in df.columns
+    
     total = len(df)
-    relevant = df["region_relevant"].sum()
+    relevant = df["region_relevant"].sum() if has_region else 0
     
     amount_col = "grant_amount" if "grant_amount" in df.columns else "amount"
     total_amount = df[amount_col].sum() if amount_col in df.columns else 0
-    relevant_amount = df.loc[df["region_relevant"], amount_col].sum() if amount_col in df.columns else 0
+    relevant_amount = df.loc[df["region_relevant"], amount_col].sum() if has_region and amount_col in df.columns else 0
+    
+    # Get region name/id from first row (all rows should have same region)
+    region_name = df["region_name"].iloc[0] if "region_name" in df.columns and not df.empty else ""
+    region_id = df["region_id"].iloc[0] if "region_id" in df.columns and not df.empty else ""
     
     return {
         "total_grants": total,
@@ -174,6 +183,8 @@ def get_region_summary(df: pd.DataFrame) -> Dict[str, Any]:
         "region_relevant_pct": round(relevant / total * 100, 1) if total > 0 else 0,
         "region_relevant_amount": int(relevant_amount),
         "total_amount": int(total_amount),
+        "region_name": region_name,
+        "region_id": region_id,
     }
 
 
