@@ -33,7 +33,7 @@ from c4c_utils.irs_return_qa import compute_confidence, render_return_qa_panel
 # =============================================================================
 # Constants
 # =============================================================================
-APP_VERSION = "0.10.1"  # Added help system with quick start guide and support request
+APP_VERSION = "0.10.2"  # Added Polinode-compatible export format
 MAX_FILES = 50
 C4C_LOGO_URL = "https://static.wixstatic.com/media/275a3f_25063966d6cd496eb2fe3f6ee5cde0fa~mv2.png"
 SOURCE_SYSTEM = "IRS_990"
@@ -1141,6 +1141,76 @@ def render_data_preview(nodes_df: pd.DataFrame, edges_df: pd.DataFrame):
             st.dataframe(edges_df, use_container_width=True)
         else:
             st.info("No edges to display")
+def convert_to_polinode_format(nodes_df: pd.DataFrame, edges_df: pd.DataFrame) -> tuple:
+    """
+    Convert internal node/edge format to Polinode-compatible format.
+    
+    Polinode requires:
+    - Nodes: 'Name' column (unique identifier)
+    - Edges: 'Source' and 'Target' columns matching Name values
+    
+    Returns:
+        (polinode_nodes_df, polinode_edges_df)
+    """
+    if nodes_df.empty:
+        return pd.DataFrame(), pd.DataFrame()
+    
+    # Build node_id → label mapping
+    id_to_label = dict(zip(nodes_df['node_id'], nodes_df['label']))
+    
+    # --- Nodes ---
+    # Create Name column from label, keep useful attributes
+    poli_nodes = pd.DataFrame()
+    poli_nodes['Name'] = nodes_df['label']
+    poli_nodes['Type'] = nodes_df['node_type']  # ORG or PERSON
+    
+    # Add optional attributes that Polinode can use
+    if 'city' in nodes_df.columns:
+        poli_nodes['City'] = nodes_df['city']
+    if 'region' in nodes_df.columns:
+        poli_nodes['Region'] = nodes_df['region']
+    if 'jurisdiction' in nodes_df.columns:
+        poli_nodes['Jurisdiction'] = nodes_df['jurisdiction']
+    if 'tax_id' in nodes_df.columns:
+        poli_nodes['Tax ID'] = nodes_df['tax_id']
+    if 'assets_latest' in nodes_df.columns:
+        poli_nodes['Assets'] = nodes_df['assets_latest']
+    
+    # Keep internal ID for reference (prefixed with ! so Polinode doesn't parse it)
+    poli_nodes['!Internal ID'] = nodes_df['node_id']
+    
+    # --- Edges ---
+    if edges_df.empty:
+        return poli_nodes, pd.DataFrame()
+    
+    poli_edges = pd.DataFrame()
+    
+    # Convert from_id/to_id to Source/Target using labels
+    poli_edges['Source'] = edges_df['from_id'].map(id_to_label)
+    poli_edges['Target'] = edges_df['to_id'].map(id_to_label)
+    
+    # Add edge attributes
+    if 'edge_type' in edges_df.columns:
+        poli_edges['Type'] = edges_df['edge_type']  # GRANT or BOARD_MEMBERSHIP
+    if 'amount' in edges_df.columns:
+        poli_edges['Amount'] = edges_df['amount']
+    if 'fiscal_year' in edges_df.columns:
+        poli_edges['Fiscal Year'] = edges_df['fiscal_year']
+    if 'purpose' in edges_df.columns:
+        poli_edges['Purpose'] = edges_df['purpose']
+    if 'role' in edges_df.columns:
+        poli_edges['Role'] = edges_df['role']
+    if 'city' in edges_df.columns:
+        poli_edges['City'] = edges_df['city']
+    if 'region' in edges_df.columns:
+        poli_edges['Region'] = edges_df['region']
+    
+    # Drop rows where Source or Target couldn't be mapped (shouldn't happen, but safety)
+    poli_edges = poli_edges.dropna(subset=['Source', 'Target'])
+    
+    return poli_nodes, poli_edges
+
+
 def render_downloads(nodes_df: pd.DataFrame, edges_df: pd.DataFrame, 
                     grants_df: pd.DataFrame = None, parse_results: list = None,
                     project_name: str = None):
@@ -1153,38 +1223,55 @@ def render_downloads(nodes_df: pd.DataFrame, edges_df: pd.DataFrame,
     if project_name and project_name != DEMO_PROJECT_NAME:
         st.info(f"⬇️ **Download these files and upload to `demo_data/{project_name}/` on GitHub** (replace existing files)")
     
+    # Format selector
+    export_format = st.radio(
+        "Export format",
+        ["Standard (C4C Schema)", "Polinode Compatible"],
+        horizontal=True,
+        help="Polinode format uses 'Name', 'Source', 'Target' columns for direct import"
+    )
+    
+    # Convert if Polinode format selected
+    if export_format == "Polinode Compatible":
+        export_nodes, export_edges = convert_to_polinode_format(nodes_df, edges_df)
+        format_suffix = "_polinode"
+        st.caption("📊 **Polinode format:** Upload directly to [app.polinode.com](https://app.polinode.com) → New Network → Excel/CSV")
+    else:
+        export_nodes, export_edges = nodes_df, edges_df
+        format_suffix = ""
+    
     col1, col2 = st.columns(2)
     
     with col1:
-        if not nodes_df.empty:
-            nodes_csv = nodes_df.to_csv(index=False)
+        if not export_nodes.empty:
+            nodes_csv = export_nodes.to_csv(index=False)
             st.download_button(
                 "📥 Download nodes.csv",
                 data=nodes_csv,
-                file_name="nodes.csv",
+                file_name=f"nodes{format_suffix}.csv",
                 mime="text/csv",
                 use_container_width=True
             )
     
     with col2:
-        if not edges_df.empty:
-            edges_csv = edges_df.to_csv(index=False)
+        if not export_edges.empty:
+            edges_csv = export_edges.to_csv(index=False)
             st.download_button(
                 "📥 Download edges.csv",
                 data=edges_csv,
-                file_name="edges.csv",
+                file_name=f"edges{format_suffix}.csv",
                 mime="text/csv",
                 use_container_width=True
             )
     
     # ZIP download with context
-    if not nodes_df.empty or not edges_df.empty:
+    if not export_nodes.empty or not export_edges.empty:
         zip_buffer = BytesIO()
         with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
-            if not nodes_df.empty:
-                zip_file.writestr('nodes.csv', nodes_df.to_csv(index=False))
-            if not edges_df.empty:
-                zip_file.writestr('edges.csv', edges_df.to_csv(index=False))
+            if not export_nodes.empty:
+                zip_file.writestr('nodes.csv', export_nodes.to_csv(index=False))
+            if not export_edges.empty:
+                zip_file.writestr('edges.csv', export_edges.to_csv(index=False))
             if grants_df is not None and not grants_df.empty:
                 zip_file.writestr('grants_detail.csv', grants_df.to_csv(index=False))
             if parse_results:
@@ -1200,7 +1287,7 @@ def render_downloads(nodes_df: pd.DataFrame, edges_df: pd.DataFrame,
         st.download_button(
             "📦 Download All (ZIP)",
             data=zip_buffer.getvalue(),
-            file_name=f"{file_prefix}_export.zip",
+            file_name=f"{file_prefix}{format_suffix}_export.zip",
             mime="application/zip",
             type="primary",
             use_container_width=True
