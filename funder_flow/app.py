@@ -27,10 +27,11 @@ from c4c_utils.regions_presets import REGION_PRESETS, US_STATES, CA_PROVINCES
 from c4c_utils.regions_catalog import load_project_regions, save_project_regions
 from c4c_utils.region_tagger import apply_region_tagging, get_region_summary
 from c4c_utils.board_extractor import BoardExtractor
+from c4c_utils.irs_return_qa import compute_confidence, render_return_qa_panel
 # =============================================================================
 # Constants
 # =============================================================================
-APP_VERSION = "0.7.0"  # Updated for BoardExtractor integration
+APP_VERSION = "0.8.0"  # Added QA confidence scoring panel
 MAX_FILES = 50
 C4C_LOGO_URL = "https://static.wixstatic.com/media/275a3f_25063966d6cd496eb2fe3f6ee5cde0fa~mv2.png"
 SOURCE_SYSTEM = "IRS_990"
@@ -414,23 +415,29 @@ def get_confidence_badge(conf_dict: dict) -> str:
     
     return f"{color} {match_pct}% ({status})"
 def render_single_file_diagnostics(result: dict, expanded: bool = False):
-    """Display diagnostics for a single parsed file."""
+    """Display diagnostics for a single parsed file with QA confidence scoring."""
     diag = result.get("diagnostics", {})
     meta = result.get("foundation_meta", {})
     
-    # Determine overall status icon
-    has_grants = result.get("grants_count", 0) > 0
-    has_warnings = len(diag.get("warnings", [])) > 0
-    has_errors = len(diag.get("errors", [])) > 0
+    # Add form_type for confidence scoring (990-PF is our current parser)
+    if "form_type_detected" not in diag:
+        diag["form_type_detected"] = "990-PF"
     
-    if has_errors:
+    # Compute unified confidence score
+    conf = compute_confidence(diag)
+    
+    # Determine overall status icon based on confidence grade
+    grade_icons = {
+        "high": "✅",
+        "medium": "🟡",
+        "low": "🟠",
+        "failed": "❌"
+    }
+    status_icon = grade_icons.get(conf.grade, "❓")
+    
+    # Override with error icon if actual errors present
+    if diag.get("errors"):
         status_icon = "❌"
-    elif has_warnings:
-        status_icon = "⚠️"
-    elif has_grants:
-        status_icon = "✅"
-    else:
-        status_icon = "❓"
     
     # Foundation name for display
     foundation_name = result.get("org_name", "Unknown")
@@ -438,6 +445,22 @@ def render_single_file_diagnostics(result: dict, expanded: bool = False):
         foundation_name = foundation_name[:42] + "..."
     
     with st.expander(f"{status_icon} {foundation_name}", expanded=expanded):
+        # Confidence score header
+        st.markdown(f"### 📊 Parser Confidence: `{conf.grade.upper()}` ({conf.score}/100)")
+        
+        # Show confidence reasons
+        if conf.reasons:
+            for reason in conf.reasons[:3]:
+                st.markdown(f"- {reason}")
+        
+        # Show penalties if any (collapsed by default)
+        if conf.penalties:
+            with st.expander("⚠️ Penalties", expanded=False):
+                for reason, points in conf.penalties:
+                    st.markdown(f"- {reason} ({points})")
+        
+        st.divider()
+        
         # Basic metrics
         col1, col2, col3 = st.columns(3)
         with col1:
@@ -453,13 +476,22 @@ def render_single_file_diagnostics(result: dict, expanded: bool = False):
                 board_label = "Board Members ✨"  # Indicate enhanced extraction
             st.metric(board_label, diag.get("board_count", 0))
         
-        # Confidence scores
-        st.markdown("**Parsing Confidence**")
-        conf_col1, conf_col2 = st.columns(2)
-        with conf_col1:
-            st.markdown(f"3a: {get_confidence_badge(diag.get('confidence_3a', {}))}")
-        with conf_col2:
-            st.markdown(f"3b: {get_confidence_badge(diag.get('confidence_3b', {}))}")
+        # Totals reconciliation (QA check)
+        rep_3a = diag.get('reported_total_3a')
+        comp_3a = diag.get('grants_3a_total', 0)
+        if rep_3a is not None:
+            diff = abs(int(rep_3a) - int(comp_3a))
+            pct = (diff / float(rep_3a) * 100) if rep_3a else 0
+            match_icon = "✅" if pct <= 1.0 else "⚠️"
+            st.markdown(f"**3a Totals Check:** Reported ${rep_3a:,} vs Computed ${comp_3a:,} → {match_icon} {100-pct:.1f}% match")
+        
+        rep_3b = diag.get('reported_total_3b')
+        comp_3b = diag.get('grants_3b_total', 0)
+        if rep_3b is not None:
+            diff_b = abs(int(rep_3b) - int(comp_3b))
+            pct_b = (diff_b / float(rep_3b) * 100) if rep_3b else 0
+            match_icon_b = "✅" if pct_b <= 1.0 else "⚠️"
+            st.markdown(f"**3b Totals Check:** Reported ${rep_3b:,} vs Computed ${comp_3b:,} → {match_icon_b} {100-pct_b:.1f}% match")
         
         # Format detection
         fmt = diag.get("extraction_format", {})
