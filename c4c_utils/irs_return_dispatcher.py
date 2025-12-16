@@ -234,16 +234,44 @@ def parse_irs_return(
         diag["schedule_i_pages_detected"] = schedule_i_count
 
         # Attachment sentinel fields
-        diag["attachment_reference_detected"] = attach_detected
+        # But suppress if totals match well (>98%) — means we got the grants despite the phrase
+        suppress_attachment_warning = False
+        if attach_detected:
+            # Check totals reconciliation
+            rep_3a = diag.get("reported_total_3a")
+            comp_3a = diag.get("grants_3a_total", 0)
+            rep_3b = diag.get("reported_total_3b")
+            comp_3b = diag.get("grants_3b_total", 0)
+            
+            # Calculate match percentages
+            match_3a = None
+            match_3b = None
+            
+            if rep_3a and rep_3a > 0:
+                match_3a = (comp_3a / rep_3a) * 100
+            if rep_3b and rep_3b > 0:
+                match_3b = (comp_3b / rep_3b) * 100
+            
+            # Suppress warning if either total matches >98%
+            # (means we successfully extracted grants despite "see statement" phrase)
+            if match_3a is not None and match_3a >= 98:
+                suppress_attachment_warning = True
+            elif match_3b is not None and match_3b >= 98:
+                suppress_attachment_warning = True
+        
         diag["attachment_reference_phrases"] = attach_hits
         diag["attachment_reference_amount"] = attach_amt
-        if attach_detected:
+        
+        if attach_detected and not suppress_attachment_warning:
+            diag["attachment_reference_detected"] = True
             diag.setdefault("warnings", [])
             diag["warnings"].append(
                 "Return references attached grant detail / statement. "
                 "Source file may be missing attachments. Consider IRS TEOS for full filing."
             )
             diag["grants_table_incomplete"] = True
+        else:
+            diag["attachment_reference_detected"] = False
 
         # Region tagging
         if region_spec and isinstance(out.get("grants_df"), pd.DataFrame) and not out["grants_df"].empty:
