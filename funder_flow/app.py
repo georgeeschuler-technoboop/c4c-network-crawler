@@ -863,7 +863,7 @@ def render_downloads(nodes_df: pd.DataFrame, edges_df: pd.DataFrame,
                 use_container_width=True
             )
     
-    # ZIP download
+    # ZIP download with context
     if not nodes_df.empty or not edges_df.empty:
         zip_buffer = BytesIO()
         with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
@@ -879,6 +879,10 @@ def render_downloads(nodes_df: pd.DataFrame, edges_df: pd.DataFrame,
         zip_buffer.seek(0)
         
         file_prefix = project_name if project_name else "orggraph"
+        
+        # Explain what's in the ZIP
+        st.caption("**Complete export** includes: `nodes.csv`, `edges.csv`, `grants_detail.csv` (full grant data), and `parse_log.json` (diagnostics)")
+        
         st.download_button(
             "📦 Download All (ZIP)",
             data=zip_buffer.getvalue(),
