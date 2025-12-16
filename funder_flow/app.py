@@ -682,23 +682,28 @@ def render_region_summary(grants_df: pd.DataFrame):
     
     summary = get_region_summary(grants_df)
     
-    if summary["region_name"] and summary["region_name"] != "(no region tagging)":
-        st.subheader(f"🗺️ {summary['region_name']} Relevance")
+    region_name = summary.get("region_name", "")
+    if region_name and region_name != "(no region tagging)":
+        st.subheader(f"🗺️ {region_name} Relevance")
         
         col1, col2, col3 = st.columns(3)
         
+        total_grants = summary.get('total_grants', 0)
+        region_count = summary.get('region_relevant_count', 0)
+        region_amount = summary.get('region_relevant_amount', 0)
+        
         with col1:
-            st.metric("Total Grants", f"{summary['total_grants']:,}")
+            st.metric("Total Grants", f"{total_grants:,}")
         with col2:
             st.metric(
                 "Region-Relevant",
-                f"{summary['region_relevant_count']:,}",
-                delta=f"{summary['region_relevant_count']/summary['total_grants']*100:.1f}%" if summary['total_grants'] > 0 else None
+                f"{region_count:,}",
+                delta=f"{region_count/total_grants*100:.1f}%" if total_grants > 0 else None
             )
         with col3:
             st.metric(
                 "Region Amount",
-                f"${summary['region_relevant_amount']:,.0f}"
+                f"${region_amount:,.0f}"
             )
 
 
