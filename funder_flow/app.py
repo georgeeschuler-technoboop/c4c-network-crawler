@@ -1,16 +1,13 @@
 """
 OrgGraph (US) — US Nonprofit Registry Ingestion
-
 Multi-project Streamlit app:
 - New Project: Create a new project and upload initial data
 - Add to Existing: Select existing project and merge new data
 - View Demo: Read-only view of sample demo data
-
 Outputs conform to C4C Network Schema v1 (MVP):
 - nodes.csv: ORG and PERSON nodes
 - edges.csv: GRANT and BOARD_MEMBERSHIP edges
 """
-
 import streamlit as st
 import pandas as pd
 import json
@@ -19,50 +16,40 @@ import zipfile
 import sys
 import os
 import re
+import tempfile
 from pathlib import Path
 from datetime import datetime
-
 # Add the project root to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
 from c4c_utils.irs990_parser import parse_990_pdf, PARSER_VERSION
 from c4c_utils.network_export import build_nodes_df, build_edges_df, NODE_COLUMNS, EDGE_COLUMNS, get_existing_foundations
 from c4c_utils.regions_presets import REGION_PRESETS, US_STATES, CA_PROVINCES
 from c4c_utils.regions_catalog import load_project_regions, save_project_regions
 from c4c_utils.region_tagger import apply_region_tagging, get_region_summary
-
-
+from c4c_utils.board_extractor import BoardExtractor
 # =============================================================================
 # Constants
 # =============================================================================
-
-APP_VERSION = "0.6.0"  # Updated for v2.6 parser + region tagging
+APP_VERSION = "0.7.0"  # Updated for BoardExtractor integration
 MAX_FILES = 50
 C4C_LOGO_URL = "https://static.wixstatic.com/media/275a3f_25063966d6cd496eb2fe3f6ee5cde0fa~mv2.png"
 SOURCE_SYSTEM = "IRS_990"
 JURISDICTION = "US"
-
 # Demo data paths
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEMO_DATA_DIR = REPO_ROOT / "demo_data"
 DEMO_PROJECT_NAME = "_demo"  # Reserved name for demo dataset
-
-
 # =============================================================================
 # Page Configuration
 # =============================================================================
-
 st.set_page_config(
     page_title="OrgGraph (US)",
     page_icon=C4C_LOGO_URL,
     layout="wide"
 )
-
-
 # =============================================================================
 # Project Management Functions
 # =============================================================================
-
 def get_projects() -> list:
     """Get list of existing projects from demo_data folder."""
     if not DEMO_DATA_DIR.exists():
@@ -83,16 +70,12 @@ def get_projects() -> list:
     # Sort: demo first (if exists), then alphabetically
     projects.sort(key=lambda x: (not x["is_demo"], x["name"].lower()))
     return projects
-
-
 def get_project_display_name(project_name: str) -> str:
     """Convert folder name to display name."""
     if project_name == DEMO_PROJECT_NAME:
         return "Demo Dataset"
     # Convert snake_case or kebab-case to Title Case
     return project_name.replace("_", " ").replace("-", " ").title()
-
-
 def get_folder_name(display_name: str) -> str:
     """Convert display name to folder name."""
     # Convert to lowercase, replace spaces with underscores
@@ -100,8 +83,6 @@ def get_folder_name(display_name: str) -> str:
     folder = re.sub(r'[^a-z0-9\s]', '', folder)  # Remove special chars
     folder = re.sub(r'\s+', '_', folder)  # Spaces to underscores
     return folder
-
-
 def create_project(project_name: str) -> tuple:
     """Create a new project folder. Returns (success, message)."""
     folder_name = get_folder_name(project_name)
@@ -122,8 +103,6 @@ def create_project(project_name: str) -> tuple:
         return True, f"Created project: {project_name}"
     except Exception as e:
         return False, f"Failed to create project: {str(e)}"
-
-
 def load_project_data(project_name: str) -> tuple:
     """Load existing data from a project folder."""
     project_path = DEMO_DATA_DIR / project_name
@@ -150,17 +129,12 @@ def load_project_data(project_name: str) -> tuple:
             pass
     
     return nodes_df, edges_df
-
-
 def get_project_path(project_name: str) -> Path:
     """Get the path for a project folder."""
     return DEMO_DATA_DIR / project_name
-
-
 # =============================================================================
 # Session State Initialization
 # =============================================================================
-
 def init_session_state():
     """Initialize session state variables for persistent results."""
     if "processed" not in st.session_state:
@@ -181,8 +155,6 @@ def init_session_state():
         st.session_state.current_project = None
     if "region_def" not in st.session_state:
         st.session_state.region_def = None
-
-
 def clear_session_state():
     """Clear all processing results from session state."""
     st.session_state.processed = False
@@ -193,8 +165,6 @@ def clear_session_state():
     st.session_state.merge_stats = {}
     st.session_state.processed_orgs = []
     st.session_state.region_def = None
-
-
 def store_results(nodes_df, edges_df, grants_df, parse_results, merge_stats, processed_orgs, region_def=None):
     """Store processing results in session state."""
     st.session_state.processed = True
@@ -205,12 +175,9 @@ def store_results(nodes_df, edges_df, grants_df, parse_results, merge_stats, pro
     st.session_state.merge_stats = merge_stats
     st.session_state.processed_orgs = processed_orgs
     st.session_state.region_def = region_def
-
-
 # =============================================================================
 # Data Merging Functions
 # =============================================================================
-
 def merge_graph_data(existing_nodes: pd.DataFrame, existing_edges: pd.DataFrame,
                      new_nodes: pd.DataFrame, new_edges: pd.DataFrame) -> tuple:
     """Merge new graph data with existing, deduplicating by ID."""
@@ -258,13 +225,47 @@ def merge_graph_data(existing_nodes: pd.DataFrame, existing_edges: pd.DataFrame,
         merged_edges = pd.concat([existing_edges, edges_to_add], ignore_index=True)
     
     return merged_nodes, merged_edges, stats
-
-
+def extract_board_with_fallback(file_bytes: bytes, filename: str) -> pd.DataFrame:
+    """
+    Extract board members using BoardExtractor.
+    
+    Writes bytes to temp file since BoardExtractor needs a file path.
+    Returns DataFrame with columns matching expected people_df format.
+    """
+    try:
+        with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as tmp:
+            tmp.write(file_bytes)
+            tmp_path = tmp.name
+        
+        extractor = BoardExtractor(tmp_path)
+        members = extractor.extract()
+        
+        os.unlink(tmp_path)  # Clean up temp file
+        
+        if members:
+            # Convert to DataFrame with expected columns
+            people_data = []
+            for m in members:
+                people_data.append({
+                    'name': m.name,
+                    'title': m.title,
+                    'compensation': m.compensation or 0,
+                    'hours_per_week': m.hours_per_week,
+                    'benefits': m.benefits or 0,
+                    'expense_allowance': m.expense_allowance or 0,
+                })
+            return pd.DataFrame(people_data)
+        
+        return pd.DataFrame()
+    
+    except Exception as e:
+        # Log but don't fail - return empty DataFrame
+        return pd.DataFrame()
 def process_uploaded_files(uploaded_files, tax_year_override: str = "") -> tuple:
     """
     Process uploaded 990-PF files and return canonical outputs.
     
-    UPDATED for v2.5 parser with enhanced diagnostics.
+    UPDATED for v0.7.0: Uses BoardExtractor for enhanced board member extraction.
     """
     all_grants = []
     all_people = []
@@ -284,6 +285,18 @@ def process_uploaded_files(uploaded_files, tax_year_override: str = "") -> tuple
             
             org_name = meta.get('foundation_name', 'Unknown')
             grants_count = len(grants_df)
+            
+            # Use BoardExtractor if parser didn't find people or found few
+            if people_df.empty or len(people_df) < 3:
+                board_df = extract_board_with_fallback(file_bytes, uploaded_file.name)
+                if not board_df.empty and len(board_df) > len(people_df):
+                    people_df = board_df
+                    diagnostics['board_extraction'] = 'BoardExtractor'
+                else:
+                    diagnostics['board_extraction'] = 'parser'
+            else:
+                diagnostics['board_extraction'] = 'parser'
+            
             people_count = len(people_df)
             
             # Get amounts from diagnostics (more reliable)
@@ -357,12 +370,9 @@ def process_uploaded_files(uploaded_files, tax_year_override: str = "") -> tuple
     edges_df = build_edges_df(combined_grants, combined_people, foundations_meta)
     
     return nodes_df, edges_df, combined_grants, foundations_meta, parse_results
-
-
 # =============================================================================
 # v2.5 Diagnostic Display Functions
 # =============================================================================
-
 def get_confidence_color(confidence: str) -> str:
     """Return emoji color code for confidence level."""
     colors = {
@@ -373,8 +383,6 @@ def get_confidence_color(confidence: str) -> str:
         "very_low": "⛔"
     }
     return colors.get(confidence, "⚪")
-
-
 def get_confidence_badge(conf_dict: dict) -> str:
     """Create a formatted confidence badge."""
     if not conf_dict:
@@ -386,8 +394,6 @@ def get_confidence_badge(conf_dict: dict) -> str:
     color = get_confidence_color(confidence)
     
     return f"{color} {match_pct}% ({status})"
-
-
 def render_single_file_diagnostics(result: dict, expanded: bool = False):
     """Display diagnostics for a single parsed file."""
     diag = result.get("diagnostics", {})
@@ -422,7 +428,11 @@ def render_single_file_diagnostics(result: dict, expanded: bool = False):
             st.metric("Grants (3b)", f"{diag.get('grants_3b_count', 0):,}")
             st.caption(f"${diag.get('grants_3b_total', 0):,}")
         with col3:
-            st.metric("Board Members", diag.get("board_count", 0))
+            board_method = diag.get('board_extraction', 'parser')
+            board_label = "Board Members"
+            if board_method == 'BoardExtractor':
+                board_label = "Board Members ✨"  # Indicate enhanced extraction
+            st.metric(board_label, diag.get("board_count", 0))
         
         # Confidence scores
         st.markdown("**Parsing Confidence**")
@@ -473,8 +483,6 @@ def render_single_file_diagnostics(result: dict, expanded: bool = False):
         
         # Parser version and pages
         st.caption(f"Parser v{diag.get('parser_version', 'unknown')} • {diag.get('pages_processed', 0)} pages • File: {result.get('file', 'unknown')}")
-
-
 def render_parse_status(parse_results: list):
     """
     Render the parsing status for each file.
@@ -498,6 +506,7 @@ def render_parse_status(parse_results: list):
     total_3b_grants = sum(r.get("diagnostics", {}).get("grants_3b_count", 0) for r in parse_results)
     total_3a_amount = sum(r.get("diagnostics", {}).get("grants_3a_total", 0) for r in parse_results)
     total_3b_amount = sum(r.get("diagnostics", {}).get("grants_3b_total", 0) for r in parse_results)
+    total_board = sum(r.get("board_count", 0) for r in parse_results)
     
     st.subheader("📋 Processing Summary")
     st.caption(f"Parser v{parser_version}")
@@ -511,7 +520,7 @@ def render_parse_status(parse_results: list):
     
     # Grant totals
     st.markdown("**Grant Totals**")
-    gcol1, gcol2, gcol3 = st.columns(3)
+    gcol1, gcol2, gcol3, gcol4 = st.columns(4)
     with gcol1:
         st.metric("3a (Paid)", f"{total_3a_grants:,} grants")
         st.caption(f"${total_3a_amount:,}")
@@ -521,6 +530,8 @@ def render_parse_status(parse_results: list):
     with gcol3:
         st.metric("Combined", f"{total_3a_grants + total_3b_grants:,} grants")
         st.caption(f"${total_3a_amount + total_3b_amount:,}")
+    with gcol4:
+        st.metric("👤 Board Members", f"{total_board:,}")
     
     # Individual file results
     st.markdown("**Individual Results**")
@@ -539,12 +550,9 @@ def render_parse_status(parse_results: list):
     
     for result in sorted_results:
         render_single_file_diagnostics(result, expanded=False)
-
-
 # =============================================================================
 # Region Selector UI
 # =============================================================================
-
 def region_selector_ui() -> dict:
     """
     Render region selector UI and return selected region definition.
@@ -670,8 +678,6 @@ def region_selector_ui() -> dict:
                 st.success(f"✅ Saved project region: {region_to_save['name']} ({pid})")
     
     return region_def
-
-
 def render_region_summary(grants_df: pd.DataFrame):
     """Render region tagging summary if region columns exist."""
     if grants_df is None or grants_df.empty:
@@ -705,12 +711,9 @@ def render_region_summary(grants_df: pd.DataFrame):
                 "Region Amount",
                 f"${region_amount:,.0f}"
             )
-
-
 # =============================================================================
 # Other Rendering Functions
 # =============================================================================
-
 def render_graph_summary(nodes_df: pd.DataFrame, edges_df: pd.DataFrame, grants_df: pd.DataFrame = None):
     """Render summary metrics for the graph."""
     st.subheader("📊 Graph Summary")
@@ -734,8 +737,6 @@ def render_graph_summary(nodes_df: pd.DataFrame, edges_df: pd.DataFrame, grants_
     if grants_df is not None and not grants_df.empty and "grant_amount" in grants_df.columns:
         total_funding = grants_df["grant_amount"].sum()
         st.metric("💵 Total Grant Funding", f"${total_funding:,.0f}")
-
-
 def render_analytics(grants_df: pd.DataFrame):
     """Render grant analytics."""
     if grants_df is None or grants_df.empty:
@@ -762,8 +763,6 @@ def render_analytics(grants_df: pd.DataFrame):
             st.markdown("**Multi-Funder Grantees:**")
             for grantee, count in multi_funded.head(10).items():
                 st.write(f"- **{grantee}**: {count} funders")
-
-
 def render_data_preview(nodes_df: pd.DataFrame, edges_df: pd.DataFrame):
     """Render data preview expanders."""
     with st.expander("👀 Preview Nodes", expanded=False):
@@ -777,8 +776,6 @@ def render_data_preview(nodes_df: pd.DataFrame, edges_df: pd.DataFrame):
             st.dataframe(edges_df, use_container_width=True)
         else:
             st.info("No edges to display")
-
-
 def render_downloads(nodes_df: pd.DataFrame, edges_df: pd.DataFrame, 
                     grants_df: pd.DataFrame = None, parse_results: list = None,
                     project_name: str = None):
@@ -839,12 +836,9 @@ def render_downloads(nodes_df: pd.DataFrame, edges_df: pd.DataFrame,
             type="primary",
             use_container_width=True
         )
-
-
 # =============================================================================
 # Upload Interface
 # =============================================================================
-
 def render_upload_interface(project_name: str):
     """Render the upload and processing interface for a project."""
     display_name = get_project_display_name(project_name)
@@ -1006,12 +1000,9 @@ def render_upload_interface(project_name: str):
             
             # Rerun to show results
             st.rerun()
-
-
 # =============================================================================
 # Main Application
 # =============================================================================
-
 def main():
     init_session_state()
     
@@ -1181,7 +1172,5 @@ def main():
         
         render_data_preview(nodes_df, edges_df)
         render_downloads(nodes_df, edges_df, grants_df, None, DEMO_PROJECT_NAME)
-
-
 if __name__ == "__main__":
     main()
