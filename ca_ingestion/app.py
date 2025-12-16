@@ -24,11 +24,12 @@ from io import BytesIO, StringIO
 # Config
 # =============================================================================
 
-APP_VERSION = "0.4.0"
+APP_VERSION = "0.5.0"  # Added help system, Polinode export, project naming guidance
 C4C_LOGO_URL = "https://static.wixstatic.com/media/275a3f_bcf888c01ebe499ca978b82f5291947b~mv2.png"
 SOURCE_SYSTEM = "CHARITYDATA_CA"
 JURISDICTION = "CA"
 CURRENCY = "CAD"
+SUPPORT_EMAIL = "info@connectingforchangellc.com"
 
 # Demo data paths
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -615,8 +616,221 @@ def render_graph_summary(nodes_df: pd.DataFrame, edges_df: pd.DataFrame) -> None
             st.info("No edges found.")
 
 
+# =============================================================================
+# Help System
+# =============================================================================
+
+QUICK_START_GUIDE = """
+## Quick Start Guide
+
+### 1. Create a Project
+- Click **"➕ New Project"** and give it a descriptive name
+- Example: "BC Foundations Network" or "Ontario Grantmakers 2024"
+
+### 2. Get Data from charitydata.ca
+1. Go to [charitydata.ca](https://www.charitydata.ca/)
+2. Search for a Canadian charity by name or BN
+3. Download the CSV files:
+   - **assets.csv** — Financial information
+   - **directors-trustees.csv** — Board members
+   - **grants.csv** — Grants made (for foundations)
+
+### 3. Upload Files
+- Upload one or more CSV files for an organization
+- The app will extract and merge the data automatically
+
+### 4. Download Results
+- **nodes.csv** — Organizations and people
+- **edges.csv** — Grant and board relationships
+- **Polinode format** — Ready to import into Polinode for visualization
+
+### Data Quality
+charitydata.ca provides clean, structured data from CRA filings. No parsing variance — what you see is what's reported.
+
+### Need More Help?
+Click **"Request Support"** below to send us a message.
+"""
+
+
+def log_support_request(email: str, message: str, context: dict = None) -> bool:
+    """Log a support request to a JSON file."""
+    from datetime import datetime
+    
+    log_file = DEMO_DATA_DIR / "_support_requests.json"
+    
+    try:
+        if log_file.exists():
+            requests = json.loads(log_file.read_text(encoding="utf-8"))
+        else:
+            requests = []
+        
+        requests.append({
+            "timestamp": datetime.now().isoformat(),
+            "email": email,
+            "message": message,
+            "app_version": APP_VERSION,
+            "app": "CA",
+            "context": context or {},
+        })
+        
+        DEMO_DATA_DIR.mkdir(parents=True, exist_ok=True)
+        log_file.write_text(json.dumps(requests, indent=2), encoding="utf-8")
+        return True
+    except Exception:
+        return False
+
+
+def render_help_button():
+    """Render help button with popover menu."""
+    try:
+        with st.popover("❓", help="Help & Support"):
+            render_help_content()
+    except AttributeError:
+        if st.button("❓ Help", key="help_btn"):
+            st.session_state.show_help = True
+        
+        if st.session_state.get("show_help", False):
+            render_help_dialog()
+
+
+def render_help_content():
+    """Render help menu content."""
+    tab1, tab2 = st.tabs(["📖 Quick Start", "💬 Request Support"])
+    
+    with tab1:
+        st.markdown(QUICK_START_GUIDE)
+    
+    with tab2:
+        render_support_form()
+
+
+def render_support_form():
+    """Render the support request form."""
+    st.markdown("### Request Support")
+    st.markdown("Have a question, found a bug, or need help? Let us know!")
+    
+    email = st.text_input(
+        "Your email",
+        placeholder="you@example.com",
+        key="support_email"
+    )
+    
+    message = st.text_area(
+        "How can we help?",
+        placeholder="Describe your question, issue, or feedback...",
+        height=150,
+        key="support_message"
+    )
+    
+    include_context = st.checkbox(
+        "Include app state (helps with debugging)",
+        value=True,
+        key="support_include_context"
+    )
+    
+    col1, col2 = st.columns([1, 2])
+    with col1:
+        if st.button("Send", type="primary", key="support_send"):
+            if not email or "@" not in email:
+                st.error("Please enter a valid email address.")
+            elif not message.strip():
+                st.error("Please describe your question or issue.")
+            else:
+                context = {}
+                if include_context:
+                    context = {
+                        "current_project": st.session_state.get("current_project", ""),
+                    }
+                
+                success = log_support_request(email, message.strip(), context)
+                
+                if success:
+                    st.success("✅ Support request submitted! We'll get back to you soon.")
+                    st.caption(f"You can also email us directly at {SUPPORT_EMAIL}")
+                else:
+                    st.warning("Could not save request. Please email us directly:")
+                    st.markdown(f"[📧 Email {SUPPORT_EMAIL}](mailto:{SUPPORT_EMAIL}?subject=OrgGraph%20CA%20Support)")
+    
+    with col2:
+        st.caption(f"Or email us directly at {SUPPORT_EMAIL}")
+
+
+def render_help_dialog():
+    """Render help as a dialog (fallback for older Streamlit)."""
+    with st.container():
+        st.markdown("---")
+        st.markdown("## ❓ Help & Support")
+        render_help_content()
+        if st.button("Close Help", key="close_help"):
+            st.session_state.show_help = False
+            st.rerun()
+
+
+# =============================================================================
+# Export Formats
+# =============================================================================
+
+def convert_to_polinode_format(nodes_df: pd.DataFrame, edges_df: pd.DataFrame) -> tuple:
+    """
+    Convert internal node/edge format to Polinode-compatible format.
+    
+    Polinode requires:
+    - Nodes: 'Name' column (unique identifier)
+    - Edges: 'Source' and 'Target' columns matching Name values
+    """
+    if nodes_df.empty:
+        return pd.DataFrame(), pd.DataFrame()
+    
+    id_to_label = dict(zip(nodes_df['node_id'], nodes_df['label']))
+    
+    # Nodes
+    poli_nodes = pd.DataFrame()
+    poli_nodes['Name'] = nodes_df['label']
+    poli_nodes['Type'] = nodes_df['node_type']
+    
+    if 'city' in nodes_df.columns:
+        poli_nodes['City'] = nodes_df['city']
+    if 'region' in nodes_df.columns:
+        poli_nodes['Region'] = nodes_df['region']
+    if 'jurisdiction' in nodes_df.columns:
+        poli_nodes['Jurisdiction'] = nodes_df['jurisdiction']
+    if 'tax_id' in nodes_df.columns:
+        poli_nodes['Tax ID'] = nodes_df['tax_id']
+    if 'assets_latest' in nodes_df.columns:
+        poli_nodes['Assets'] = nodes_df['assets_latest']
+    
+    poli_nodes['!Internal ID'] = nodes_df['node_id']
+    
+    # Edges
+    if edges_df.empty:
+        return poli_nodes, pd.DataFrame()
+    
+    poli_edges = pd.DataFrame()
+    poli_edges['Source'] = edges_df['from_id'].map(id_to_label)
+    poli_edges['Target'] = edges_df['to_id'].map(id_to_label)
+    
+    if 'edge_type' in edges_df.columns:
+        poli_edges['Type'] = edges_df['edge_type']
+    if 'amount' in edges_df.columns:
+        poli_edges['Amount'] = edges_df['amount']
+    if 'fiscal_year' in edges_df.columns:
+        poli_edges['Fiscal Year'] = edges_df['fiscal_year']
+    if 'purpose' in edges_df.columns:
+        poli_edges['Purpose'] = edges_df['purpose']
+    if 'role' in edges_df.columns:
+        poli_edges['Role'] = edges_df['role']
+    if 'city' in edges_df.columns:
+        poli_edges['City'] = edges_df['city']
+    if 'region' in edges_df.columns:
+        poli_edges['Region'] = edges_df['region']
+    
+    poli_edges = poli_edges.dropna(subset=['Source', 'Target'])
+    
+    return poli_nodes, poli_edges
+
+
 def render_downloads(nodes_df: pd.DataFrame, edges_df: pd.DataFrame, project_name: str = None) -> None:
-    """Render download buttons."""
+    """Render download buttons with both C4C and Polinode formats."""
     
     if nodes_df is None or nodes_df.empty:
         return
@@ -627,48 +841,91 @@ def render_downloads(nodes_df: pd.DataFrame, edges_df: pd.DataFrame, project_nam
     if project_name and project_name != DEMO_PROJECT_NAME:
         st.info(f"⬇️ **Download these files and upload to `demo_data/{project_name}/` on GitHub** (replace existing files)")
     
-    def create_zip_download():
-        zip_buffer = BytesIO()
-        with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
-            if not nodes_df.empty:
-                zf.writestr("nodes.csv", nodes_df.to_csv(index=False))
-            if not edges_df.empty:
-                zf.writestr("edges.csv", edges_df.to_csv(index=False))
-        zip_buffer.seek(0)
-        return zip_buffer.getvalue()
+    # Generate Polinode format
+    poli_nodes, poli_edges = convert_to_polinode_format(nodes_df, edges_df)
     
-    file_prefix = project_name if project_name else "orggraph_ca"
-    
-    st.download_button(
-        label="📦 Download All (ZIP)",
-        data=create_zip_download(),
-        file_name=f"{file_prefix}_export.zip",
-        mime="application/zip",
-        type="primary",
-        use_container_width=True
-    )
-    
-    st.markdown("**Or download individually:**")
-    
-    col1, col2 = st.columns(2)
+    # Individual file downloads
+    st.markdown("**Individual files:**")
+    col1, col2, col3, col4 = st.columns(4)
     
     with col1:
         if not nodes_df.empty:
             st.download_button(
-                label="📥 nodes.csv",
+                "📥 nodes.csv",
                 data=nodes_df.to_csv(index=False),
                 file_name="nodes.csv",
-                mime="text/csv"
+                mime="text/csv",
+                use_container_width=True,
+                help="C4C schema format"
             )
     
     with col2:
         if not edges_df.empty:
             st.download_button(
-                label="📥 edges.csv",
+                "📥 edges.csv",
                 data=edges_df.to_csv(index=False),
                 file_name="edges.csv",
-                mime="text/csv"
+                mime="text/csv",
+                use_container_width=True,
+                help="C4C schema format"
             )
+    
+    with col3:
+        if not poli_nodes.empty:
+            st.download_button(
+                "📥 nodes_polinode.csv",
+                data=poli_nodes.to_csv(index=False),
+                file_name="nodes_polinode.csv",
+                mime="text/csv",
+                use_container_width=True,
+                help="Polinode-compatible format"
+            )
+    
+    with col4:
+        if not poli_edges.empty:
+            st.download_button(
+                "📥 edges_polinode.csv",
+                data=poli_edges.to_csv(index=False),
+                file_name="edges_polinode.csv",
+                mime="text/csv",
+                use_container_width=True,
+                help="Polinode-compatible format"
+            )
+    
+    # ZIP download with everything
+    if not nodes_df.empty or not edges_df.empty:
+        zip_buffer = BytesIO()
+        with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+            # C4C schema files
+            if not nodes_df.empty:
+                zip_file.writestr('nodes.csv', nodes_df.to_csv(index=False))
+            if not edges_df.empty:
+                zip_file.writestr('edges.csv', edges_df.to_csv(index=False))
+            
+            # Polinode-compatible files
+            if not poli_nodes.empty:
+                zip_file.writestr('nodes_polinode.csv', poli_nodes.to_csv(index=False))
+            if not poli_edges.empty:
+                zip_file.writestr('edges_polinode.csv', poli_edges.to_csv(index=False))
+        
+        zip_buffer.seek(0)
+        
+        file_prefix = project_name if project_name else "orggraph_ca"
+        
+        st.caption("""
+        **Complete export includes:**
+        `nodes.csv` + `edges.csv` (C4C schema) •
+        `nodes_polinode.csv` + `edges_polinode.csv` (Polinode-ready)
+        """)
+        
+        st.download_button(
+            "📦 Download All (ZIP)",
+            data=zip_buffer.getvalue(),
+            file_name=f"{file_prefix}_export.zip",
+            mime="application/zip",
+            type="primary",
+            use_container_width=True
+        )
 
 
 # =============================================================================
@@ -699,6 +956,26 @@ def render_upload_interface(project_name: str):
     
     st.divider()
     st.subheader("📤 Upload charitydata.ca Files")
+    
+    # Data source guidance
+    with st.expander("📚 Data source guide", expanded=False):
+        st.markdown("""
+        **How to get data from charitydata.ca:**
+        
+        1. Go to [charitydata.ca](https://www.charitydata.ca/)
+        2. Search for a Canadian charity by name or Business Number (BN)
+        3. Click on the charity to view its profile
+        4. Download the CSV files you need:
+        
+        | File | Contains | Required? |
+        |------|----------|-----------|
+        | **assets.csv** | Financial information, total assets | Recommended |
+        | **directors-trustees.csv** | Board members | Optional |
+        | **grants.csv** | Grants made (for foundations) | Optional |
+        
+        **Data Quality:** charitydata.ca provides clean, structured data directly from CRA T3010 filings. 
+        Unlike PDF parsing, there's no extraction variance — the data is exactly as reported.
+        """)
     
     st.markdown("Upload CSV files for **one organization**:")
     
@@ -765,16 +1042,20 @@ def render_upload_interface(project_name: str):
 # =============================================================================
 
 def main():
-    col_logo, col_title = st.columns([0.08, 0.92])
-    with col_logo:
+    # Header with logo, title, and help button
+    col1, col2, col3 = st.columns([1, 8, 1])
+    with col1:
         st.image(C4C_LOGO_URL, width=60)
-    with col_title:
+    with col2:
         st.title("OrgGraph (CA)")
+    with col3:
+        st.markdown("<br>", unsafe_allow_html=True)
+        render_help_button()
     
     st.markdown("""
     OrgGraph currently supports US and Canadian nonprofit registries; additional sources will be added in the future.
     """)
-    st.caption(f"v{APP_VERSION}")
+    st.caption(f"App v{APP_VERSION}")
     
     st.divider()
     
@@ -809,6 +1090,11 @@ def main():
     # ==========================================================================
     if project_mode == "➕ New Project":
         st.markdown("### Create New Project")
+        
+        st.caption("""
+        **Naming tips:** Use a descriptive name like "BC Foundations 2024" or "Ontario Grantmakers Network". 
+        Avoid special characters. The name becomes a folder, so "BC Foundations" → `bc_foundations/`
+        """)
         
         col1, col2 = st.columns([3, 1])
         with col1:
