@@ -22,6 +22,8 @@ from datetime import datetime
 # Add the project root to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from c4c_utils.irs990_parser import parse_990_pdf, PARSER_VERSION
+from c4c_utils.irs990pf_xml_parser import parse_990pf_xml
+from c4c_utils.irs990_xml_parser import parse_990_xml
 from c4c_utils.network_export import build_nodes_df, build_edges_df, NODE_COLUMNS, EDGE_COLUMNS, get_existing_foundations
 from c4c_utils.regions_presets import REGION_PRESETS, US_STATES, CA_PROVINCES
 from c4c_utils.regions_catalog import load_project_regions, save_project_regions
@@ -31,7 +33,7 @@ from c4c_utils.irs_return_qa import compute_confidence, render_return_qa_panel
 # =============================================================================
 # Constants
 # =============================================================================
-APP_VERSION = "0.8.0"  # Added QA confidence scoring panel
+APP_VERSION = "0.9.0"  # Added XML parser support (990-PF and 990 Schedule I)
 MAX_FILES = 50
 C4C_LOGO_URL = "https://static.wixstatic.com/media/275a3f_25063966d6cd496eb2fe3f6ee5cde0fa~mv2.png"
 SOURCE_SYSTEM = "IRS_990"
@@ -271,11 +273,90 @@ def extract_board_with_fallback(file_bytes: bytes, filename: str, meta: dict) ->
     except Exception as e:
         # Log but don't fail - return empty DataFrame
         return pd.DataFrame()
+
+
+def parse_xml_file(xml_bytes: bytes, filename: str, tax_year_override: str = "") -> dict:
+    """
+    Parse an IRS XML file, auto-detecting form type (990-PF or 990).
+    
+    Returns standardized result dict compatible with PDF parser output.
+    """
+    import xml.etree.ElementTree as ET
+    
+    IRS_NS = {"irs": "http://www.irs.gov/efile"}
+    
+    try:
+        # Handle BOM
+        if xml_bytes.startswith(b'\xef\xbb\xbf'):
+            xml_bytes = xml_bytes[3:]
+        
+        # Detect form type
+        root = ET.fromstring(xml_bytes)
+        return_type_el = root.find(".//irs:ReturnHeader/irs:ReturnTypeCd", IRS_NS)
+        
+        if return_type_el is not None and return_type_el.text:
+            return_type = return_type_el.text.strip().upper()
+        else:
+            # Fallback detection
+            if root.find(".//irs:IRS990PF", IRS_NS) is not None:
+                return_type = "990PF"
+            elif root.find(".//irs:IRS990", IRS_NS) is not None:
+                return_type = "990"
+            else:
+                return_type = "UNKNOWN"
+        
+        # Route to appropriate parser
+        if return_type in ("990PF", "990-PF"):
+            return parse_990pf_xml(xml_bytes, filename, tax_year_override)
+        elif return_type == "990":
+            return parse_990_xml(xml_bytes, filename, tax_year_override)
+        else:
+            return {
+                'foundation_meta': {},
+                'grants_df': pd.DataFrame(),
+                'people_df': pd.DataFrame(),
+                'diagnostics': {
+                    "parser_version": "xml-dispatcher",
+                    "source_file": filename,
+                    "form_type_detected": return_type,
+                    "warnings": [f"Unsupported form type: {return_type}. Expected 990-PF or 990."],
+                    "errors": [],
+                }
+            }
+    
+    except ET.ParseError as e:
+        return {
+            'foundation_meta': {},
+            'grants_df': pd.DataFrame(),
+            'people_df': pd.DataFrame(),
+            'diagnostics': {
+                "parser_version": "xml-dispatcher",
+                "source_file": filename,
+                "errors": [f"XML parse error: {str(e)}"],
+                "warnings": [],
+            }
+        }
+    except Exception as e:
+        return {
+            'foundation_meta': {},
+            'grants_df': pd.DataFrame(),
+            'people_df': pd.DataFrame(),
+            'diagnostics': {
+                "parser_version": "xml-dispatcher",
+                "source_file": filename,
+                "errors": [f"Error parsing XML: {str(e)}"],
+                "warnings": [],
+            }
+        }
+
+
 def process_uploaded_files(uploaded_files, tax_year_override: str = "") -> tuple:
     """
-    Process uploaded 990-PF files and return canonical outputs.
+    Process uploaded 990-PF/990 files and return canonical outputs.
     
-    UPDATED for v0.7.0: Uses BoardExtractor for enhanced board member extraction.
+    UPDATED for v0.9.0: Supports both PDF and XML files.
+    - PDF: Uses irs990_parser (990-PF only)
+    - XML: Uses irs990pf_xml_parser (990-PF) or irs990_xml_parser (990 Schedule I)
     """
     all_grants = []
     all_people = []
@@ -285,7 +366,14 @@ def process_uploaded_files(uploaded_files, tax_year_override: str = "") -> tuple
     for uploaded_file in uploaded_files:
         try:
             file_bytes = uploaded_file.read()
-            result = parse_990_pdf(file_bytes, uploaded_file.name, tax_year_override)
+            filename = uploaded_file.name.lower()
+            
+            # Route based on file type
+            if filename.endswith('.xml'):
+                result = parse_xml_file(file_bytes, uploaded_file.name, tax_year_override)
+            else:
+                # Assume PDF
+                result = parse_990_pdf(file_bytes, uploaded_file.name, tax_year_override)
             
             # Extract v2.5 diagnostics
             diagnostics = result.get('diagnostics', {})
@@ -296,16 +384,20 @@ def process_uploaded_files(uploaded_files, tax_year_override: str = "") -> tuple
             org_name = meta.get('foundation_name', 'Unknown')
             grants_count = len(grants_df)
             
-            # Use BoardExtractor if parser didn't find people or found few
-            if people_df.empty or len(people_df) < 3:
-                board_df = extract_board_with_fallback(file_bytes, uploaded_file.name, meta)
-                if not board_df.empty and len(board_df) > len(people_df):
-                    people_df = board_df
-                    diagnostics['board_extraction'] = 'BoardExtractor'
+            # Use BoardExtractor if parser didn't find people or found few (PDF only)
+            # XML parsers already extract board members reliably
+            if not filename.endswith('.xml'):
+                if people_df.empty or len(people_df) < 3:
+                    board_df = extract_board_with_fallback(file_bytes, uploaded_file.name, meta)
+                    if not board_df.empty and len(board_df) > len(people_df):
+                        people_df = board_df
+                        diagnostics['board_extraction'] = 'BoardExtractor'
+                    else:
+                        diagnostics['board_extraction'] = 'parser'
                 else:
                     diagnostics['board_extraction'] = 'parser'
             else:
-                diagnostics['board_extraction'] = 'parser'
+                diagnostics['board_extraction'] = 'xml_parser'
             
             people_count = len(people_df)
             
@@ -512,7 +604,7 @@ def render_single_file_diagnostics(result: dict, expanded: bool = False):
         # Sample grants for verification
         samples = diag.get("sample_grants", [])
         if samples:
-            st.markdown("**Sample Grants** (verify against PDF)")
+            st.markdown("**Sample Grants** (verify against source)")
             sample_data = []
             for s in samples[:3]:
                 sample_data.append({
@@ -984,18 +1076,21 @@ def render_upload_interface(project_name: str):
         
     else:
         # Show upload interface
-        st.subheader("📤 Upload 990-PF PDFs")
+        st.subheader("📤 Upload IRS 990 Filings")
         
         st.markdown(f"""
-        Upload up to **{MAX_FILES} private foundation 990-PF filings**.
+        Upload up to **{MAX_FILES} IRS 990 filings** (PDF or XML).
         
-        *Note: Works with **990-PF** (private foundations). Standard **990** filings 
-        from public charities don't include itemized grants.*
+        **Supported formats:**
+        - **990-PF** (private foundations) - PDF or XML
+        - **990** (public charities with Schedule I) - XML only
+        
+        *💡 Tip: XML files from ProPublica give 100% accurate data with grantee EINs!*
         """)
         
         uploaded_files = st.file_uploader(
-            f"Upload 990-PF PDF(s) (max {MAX_FILES})",
-            type=["pdf"],
+            f"Upload 990 files (max {MAX_FILES})",
+            type=["pdf", "xml"],
             accept_multiple_files=True
         )
         
@@ -1018,7 +1113,7 @@ def render_upload_interface(project_name: str):
         parse_button = st.button("🔍 Parse 990 Filings", type="primary", disabled=not uploaded_files)
         
         if not uploaded_files:
-            st.info("👆 Upload 990-PF PDF files")
+            st.info("👆 Upload 990 PDF or XML files")
             st.stop()
         
         if parse_button:
