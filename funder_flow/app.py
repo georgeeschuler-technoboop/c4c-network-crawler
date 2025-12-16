@@ -26,14 +26,14 @@ from c4c_utils.irs990pf_xml_parser import parse_990pf_xml
 from c4c_utils.irs990_xml_parser import parse_990_xml
 from c4c_utils.network_export import build_nodes_df, build_edges_df, NODE_COLUMNS, EDGE_COLUMNS, get_existing_foundations
 from c4c_utils.regions_presets import REGION_PRESETS, US_STATES, CA_PROVINCES
-from c4c_utils.regions_catalog import load_project_regions, save_project_regions
+from c4c_utils.project_store import list_projects, load_project_config, save_project_config, get_region_from_config, update_region_in_config
 from c4c_utils.region_tagger import apply_region_tagging, get_region_summary
 from c4c_utils.board_extractor import BoardExtractor
 from c4c_utils.irs_return_qa import compute_confidence, render_return_qa_panel
 # =============================================================================
 # Constants
 # =============================================================================
-APP_VERSION = "0.9.0"  # Added XML parser support (990-PF and 990 Schedule I)
+APP_VERSION = "0.10.0"  # Unified per-project config storage
 MAX_FILES = 50
 C4C_LOGO_URL = "https://static.wixstatic.com/media/275a3f_25063966d6cd496eb2fe3f6ee5cde0fa~mv2.png"
 SOURCE_SYSTEM = "IRS_990"
@@ -696,36 +696,81 @@ def render_parse_status(parse_results: list):
 # =============================================================================
 # Region Selector UI
 # =============================================================================
-def region_selector_ui() -> dict:
+def region_selector_ui(project_id: str = None) -> dict:
     """
     Render region selector UI and return selected region definition.
     
+    Settings are saved to the project's config.json when changed.
+    
+    Args:
+        project_id: Current project ID. If None, returns no region (off mode).
+    
     Returns:
-        Region definition dict (from presets, project, or custom)
+        Region definition dict (from presets or custom), or REGION_PRESETS["none"]
     """
     st.subheader("🗺️ Regional Perspective (optional)")
     st.caption("Apply regional tagging to identify grants in specific geographic areas")
     
-    mode = st.selectbox(
+    # If no project context, just return none
+    if not project_id:
+        st.info("Select a project to configure region settings.")
+        return REGION_PRESETS["none"]
+    
+    # Load current project config
+    cfg = load_project_config(project_id)
+    rf = cfg.get("region_filter", {})
+    current_mode = rf.get("mode", "off")
+    
+    # Mode selector
+    mode_options = ["off", "preset", "custom"]
+    mode_labels = {
+        "off": "Off (show all grants)",
+        "preset": "Use preset region",
+        "custom": "Custom region",
+    }
+    
+    current_index = mode_options.index(current_mode) if current_mode in mode_options else 0
+    
+    mode = st.radio(
         "Region mode",
-        ["None (show all grants)", "Preset region", "Project region", "Custom region"],
-        index=0,
-        help="Choose how to filter/tag grants by region"
+        options=mode_options,
+        format_func=lambda x: mode_labels.get(x, x),
+        index=current_index,
+        horizontal=True,
+        help="Region tagging is saved per-project",
+        key=f"region_mode_{project_id}"
     )
     
-    project_regions = load_project_regions()
+    # Track if config changed
+    config_changed = (mode != current_mode)
     
-    # None mode
-    if mode == "None (show all grants)":
+    # Off mode
+    if mode == "off":
+        if config_changed:
+            cfg = update_region_in_config(cfg, mode="off")
+            save_project_config(project_id, cfg)
+            st.success("✅ Region tagging disabled for this project")
         return REGION_PRESETS["none"]
     
     # Preset mode
-    if mode == "Preset region":
+    if mode == "preset":
         preset_ids = [k for k in REGION_PRESETS.keys() if k != "none"]
-        labels = [REGION_PRESETS[k]["name"] for k in preset_ids]
+        preset_labels = [REGION_PRESETS[k]["name"] for k in preset_ids]
         
-        choice = st.selectbox("Choose preset region", labels, index=2)  # Default to Great Lakes
-        chosen_id = preset_ids[labels.index(choice)]
+        current_preset = rf.get("preset_key", "")
+        if current_preset in preset_ids:
+            default_index = preset_ids.index(current_preset)
+        else:
+            # Default to Great Lakes if available
+            default_index = preset_ids.index("great_lakes") if "great_lakes" in preset_ids else 0
+        
+        choice = st.selectbox(
+            "Choose preset region",
+            preset_labels,
+            index=default_index,
+            key=f"preset_choice_{project_id}"
+        )
+        chosen_id = preset_ids[preset_labels.index(choice)]
         
         selected = REGION_PRESETS[chosen_id]
         
@@ -738,89 +783,81 @@ def region_selector_ui() -> dict:
             if selected.get("notes"):
                 st.caption(selected["notes"])
         
-        return selected
-    
-    # Project region mode
-    if mode == "Project region":
-        if not project_regions:
-            st.info("No project regions saved yet. Create one under 'Custom region' and save it.")
-            return REGION_PRESETS["none"]
-        
-        ids = list(project_regions.keys())
-        labels = [project_regions[i]["name"] for i in ids]
-        
-        choice = st.selectbox("Choose project region", labels, index=0)
-        chosen_id = ids[labels.index(choice)]
-        
-        selected = project_regions[chosen_id]
-        
-        # Show what's included
-        with st.expander("Region details", expanded=False):
-            if selected.get("include_us_states"):
-                st.write(f"**US States:** {', '.join(selected['include_us_states'])}")
-            if selected.get("include_ca_provinces"):
-                st.write(f"**Canadian Provinces:** {', '.join(selected['include_ca_provinces'])}")
-            if selected.get("notes"):
-                st.caption(selected["notes"])
+        # Save if changed
+        if config_changed or chosen_id != current_preset:
+            cfg = update_region_in_config(cfg, mode="preset", preset_key=chosen_id)
+            save_project_config(project_id, cfg)
+            st.success(f"✅ Region set to: {selected['name']}")
         
         return selected
     
-    # Custom region mode
+    # Custom mode
     st.markdown("**Build custom region**")
     
-    name = st.text_input("Region name", value="Custom Region")
+    # Load current custom settings
+    current_us = [s for s in rf.get("custom_admin1_codes", []) if s in US_STATES]
+    current_ca = [s for s in rf.get("custom_admin1_codes", []) if s in CA_PROVINCES]
     
     col1, col2 = st.columns(2)
     with col1:
         us_states = st.multiselect(
             "US states to include",
-            US_STATES,
-            default=[],
-            help="Select US states for this region"
+            sorted(US_STATES),
+            default=current_us,
+            help="Select US states for this region",
+            key=f"custom_us_{project_id}"
         )
     with col2:
         ca_provinces = st.multiselect(
             "Canadian provinces/territories",
-            CA_PROVINCES,
-            default=[],
-            help="Select Canadian provinces for this region"
+            sorted(CA_PROVINCES),
+            default=current_ca,
+            help="Select Canadian provinces for this region",
+            key=f"custom_ca_{project_id}"
         )
     
-    notes = st.text_area("Notes (optional)", value="", height=60)
+    # Build region definition
+    all_codes = list(us_states) + list(ca_provinces)
+    country_codes = []
+    if us_states:
+        country_codes.append("US")
+    if ca_provinces:
+        country_codes.append("CA")
     
     region_def = {
         "id": "custom",
-        "name": name.strip() or "Custom Region",
-        "source": "custom",
+        "name": f"{cfg.get('project_name', project_id)} Custom Region",
+        "source": "project_config",
         "include_us_states": us_states,
         "include_ca_provinces": ca_provinces,
-        "include_countries": [],
-        "notes": notes.strip(),
+        "include_countries": country_codes,
+        "notes": "Custom region from project config",
     }
     
-    # Option to save as project region
-    with st.expander("💾 Save as project region"):
-        project_id = st.text_input(
-            "Project region ID (unique)",
-            value="my_region",
-            help="Unique identifier for this region (no spaces)"
+    # Show summary
+    if all_codes:
+        st.caption(f"Selected: {', '.join(sorted(all_codes))}")
+    else:
+        st.warning("No states/provinces selected. Region tagging will not be applied.")
+    
+    # Save button
+    if st.button("💾 Save region settings", key=f"save_region_{project_id}"):
+        cfg = update_region_in_config(
+            cfg,
+            mode="custom",
+            custom_admin1_codes=all_codes,
+            custom_country_codes=country_codes
         )
-        
-        if st.button("Save project region"):
-            pid = project_id.strip().lower().replace(" ", "_")
-            if not pid:
-                st.error("Project region ID cannot be empty.")
-            elif not us_states and not ca_provinces:
-                st.error("Please select at least one state or province.")
-            else:
-                region_to_save = dict(region_def)
-                region_to_save["id"] = pid
-                region_to_save["source"] = "project"
-                project_regions[pid] = region_to_save
-                save_project_regions(project_regions)
-                st.success(f"✅ Saved project region: {region_to_save['name']} ({pid})")
+        save_project_config(project_id, cfg)
+        st.success("✅ Custom region saved to project config")
+    
+    # Return none if nothing selected, otherwise return the region
+    if not all_codes:
+        return REGION_PRESETS["none"]
     
     return region_def
+
+
 def render_region_summary(grants_df: pd.DataFrame):
     """Render region tagging summary if region columns exist."""
     if grants_df is None or grants_df.empty:
@@ -1106,7 +1143,7 @@ def render_upload_interface(project_name: str):
         st.divider()
         
         # Region selector (after upload, before processing)
-        region_def = region_selector_ui()
+        region_def = region_selector_ui(project_id=project_name)
         
         st.divider()
         
