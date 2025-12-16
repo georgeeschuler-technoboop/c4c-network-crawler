@@ -1223,55 +1223,74 @@ def render_downloads(nodes_df: pd.DataFrame, edges_df: pd.DataFrame,
     if project_name and project_name != DEMO_PROJECT_NAME:
         st.info(f"⬇️ **Download these files and upload to `demo_data/{project_name}/` on GitHub** (replace existing files)")
     
-    # Format selector
-    export_format = st.radio(
-        "Export format",
-        ["Standard (C4C Schema)", "Polinode Compatible"],
-        horizontal=True,
-        help="Polinode format uses 'Name', 'Source', 'Target' columns for direct import"
-    )
+    # Generate Polinode format
+    poli_nodes, poli_edges = convert_to_polinode_format(nodes_df, edges_df)
     
-    # Convert if Polinode format selected
-    if export_format == "Polinode Compatible":
-        export_nodes, export_edges = convert_to_polinode_format(nodes_df, edges_df)
-        format_suffix = "_polinode"
-        st.caption("📊 **Polinode format:** Upload directly to [app.polinode.com](https://app.polinode.com) → New Network → Excel/CSV")
-    else:
-        export_nodes, export_edges = nodes_df, edges_df
-        format_suffix = ""
-    
-    col1, col2 = st.columns(2)
+    # Individual file downloads
+    st.markdown("**Individual files:**")
+    col1, col2, col3, col4 = st.columns(4)
     
     with col1:
-        if not export_nodes.empty:
-            nodes_csv = export_nodes.to_csv(index=False)
+        if not nodes_df.empty:
             st.download_button(
-                "📥 Download nodes.csv",
-                data=nodes_csv,
-                file_name=f"nodes{format_suffix}.csv",
+                "📥 nodes.csv",
+                data=nodes_df.to_csv(index=False),
+                file_name="nodes.csv",
                 mime="text/csv",
-                use_container_width=True
+                use_container_width=True,
+                help="C4C schema format"
             )
     
     with col2:
-        if not export_edges.empty:
-            edges_csv = export_edges.to_csv(index=False)
+        if not edges_df.empty:
             st.download_button(
-                "📥 Download edges.csv",
-                data=edges_csv,
-                file_name=f"edges{format_suffix}.csv",
+                "📥 edges.csv",
+                data=edges_df.to_csv(index=False),
+                file_name="edges.csv",
                 mime="text/csv",
-                use_container_width=True
+                use_container_width=True,
+                help="C4C schema format"
             )
     
-    # ZIP download with context
-    if not export_nodes.empty or not export_edges.empty:
+    with col3:
+        if not poli_nodes.empty:
+            st.download_button(
+                "📥 nodes_polinode.csv",
+                data=poli_nodes.to_csv(index=False),
+                file_name="nodes_polinode.csv",
+                mime="text/csv",
+                use_container_width=True,
+                help="Polinode-compatible format"
+            )
+    
+    with col4:
+        if not poli_edges.empty:
+            st.download_button(
+                "📥 edges_polinode.csv",
+                data=poli_edges.to_csv(index=False),
+                file_name="edges_polinode.csv",
+                mime="text/csv",
+                use_container_width=True,
+                help="Polinode-compatible format"
+            )
+    
+    # ZIP download with everything
+    if not nodes_df.empty or not edges_df.empty:
         zip_buffer = BytesIO()
         with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
-            if not export_nodes.empty:
-                zip_file.writestr('nodes.csv', export_nodes.to_csv(index=False))
-            if not export_edges.empty:
-                zip_file.writestr('edges.csv', export_edges.to_csv(index=False))
+            # C4C schema files
+            if not nodes_df.empty:
+                zip_file.writestr('nodes.csv', nodes_df.to_csv(index=False))
+            if not edges_df.empty:
+                zip_file.writestr('edges.csv', edges_df.to_csv(index=False))
+            
+            # Polinode-compatible files
+            if not poli_nodes.empty:
+                zip_file.writestr('nodes_polinode.csv', poli_nodes.to_csv(index=False))
+            if not poli_edges.empty:
+                zip_file.writestr('edges_polinode.csv', poli_edges.to_csv(index=False))
+            
+            # Detail files
             if grants_df is not None and not grants_df.empty:
                 zip_file.writestr('grants_detail.csv', grants_df.to_csv(index=False))
             if parse_results:
@@ -1282,12 +1301,18 @@ def render_downloads(nodes_df: pd.DataFrame, edges_df: pd.DataFrame,
         file_prefix = project_name if project_name else "orggraph"
         
         # Explain what's in the ZIP
-        st.caption("**Complete export** includes: `nodes.csv`, `edges.csv`, `grants_detail.csv` (full grant data), and `parse_log.json` (diagnostics)")
+        st.caption("""
+        **Complete export includes:**
+        `nodes.csv` + `edges.csv` (C4C schema) •
+        `nodes_polinode.csv` + `edges_polinode.csv` (Polinode-ready) •
+        `grants_detail.csv` (full grant data) •
+        `parse_log.json` (diagnostics)
+        """)
         
         st.download_button(
             "📦 Download All (ZIP)",
             data=zip_buffer.getvalue(),
-            file_name=f"{file_prefix}{format_suffix}_export.zip",
+            file_name=f"{file_prefix}_export.zip",
             mime="application/zip",
             type="primary",
             use_container_width=True
