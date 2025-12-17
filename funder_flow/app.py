@@ -36,7 +36,7 @@ from c4c_utils.summary_helpers import build_grant_network_summary, summarize_gra
 # =============================================================================
 # Constants
 # =============================================================================
-APP_VERSION = "0.14.0"  # Team spec: Diagnostics → Merge → Network Results → Analytics → Advanced
+APP_VERSION = "0.14.1"  # Improved analytics visual hierarchy with columns and h4 headers
 MAX_FILES = 50
 C4C_LOGO_URL = "https://static.wixstatic.com/media/275a3f_25063966d6cd496eb2fe3f6ee5cde0fa~mv2.png"
 SOURCE_SYSTEM = "IRS_990"
@@ -1152,24 +1152,43 @@ def render_analytics(grants_df: pd.DataFrame, region_def: dict = None):
     st.subheader(f"📈 Grant Analytics{region_label}")
     st.caption(filter_note)
     
-    # Top grantees by amount
-    if "grantee_name" in analysis_df.columns and "grant_amount" in analysis_df.columns:
-        grantee_totals = analysis_df.groupby("grantee_name")["grant_amount"].sum().sort_values(ascending=False).head(10)
-        
-        if not grantee_totals.empty:
-            st.markdown("**Top 10 Grantees by Total Funding:**")
-            for i, (grantee, amount) in enumerate(grantee_totals.items(), 1):
-                st.write(f"{i}. **{grantee}**: ${amount:,.0f}")
+    # Use columns to create visual separation
+    col1, col2 = st.columns(2)
     
-    # Multi-funder grantees
-    if "grantee_name" in analysis_df.columns and "foundation_name" in analysis_df.columns:
-        funder_counts = analysis_df.groupby("grantee_name")["foundation_name"].nunique()
-        multi_funded = funder_counts[funder_counts > 1].sort_values(ascending=False)
+    # --- Top 10 Grantees ---
+    with col1:
+        st.markdown("#### 🏆 Top 10 Grantees")
+        st.caption("By total funding received")
         
-        if not multi_funded.empty:
-            st.markdown("**Multi-Funder Grantees:**")
-            for grantee, count in multi_funded.head(10).items():
-                st.write(f"- **{grantee}**: {count} funders")
+        if "grantee_name" in analysis_df.columns and "grant_amount" in analysis_df.columns:
+            grantee_totals = analysis_df.groupby("grantee_name")["grant_amount"].sum().sort_values(ascending=False).head(10)
+            
+            if not grantee_totals.empty:
+                for i, (grantee, amount) in enumerate(grantee_totals.items(), 1):
+                    st.write(f"**{i}.** {grantee}")
+                    st.caption(f"${amount:,.0f}")
+            else:
+                st.info("No grantee data available")
+        else:
+            st.info("Missing grantee data columns")
+    
+    # --- Multi-Funder Grantees ---
+    with col2:
+        st.markdown("#### 🤝 Multi-Funder Grantees")
+        st.caption("Organizations funded by multiple foundations")
+        
+        if "grantee_name" in analysis_df.columns and "foundation_name" in analysis_df.columns:
+            funder_counts = analysis_df.groupby("grantee_name")["foundation_name"].nunique()
+            multi_funded = funder_counts[funder_counts > 1].sort_values(ascending=False)
+            
+            if not multi_funded.empty:
+                for grantee, count in multi_funded.head(10).items():
+                    st.write(f"**{grantee}**")
+                    st.caption(f"{count} funders")
+            else:
+                st.info("No multi-funder grantees found")
+        else:
+            st.info("Missing foundation data columns")
 def render_data_preview(nodes_df: pd.DataFrame, edges_df: pd.DataFrame):
     """Render data preview expanders."""
     with st.expander("👀 Preview Nodes", expanded=False):
