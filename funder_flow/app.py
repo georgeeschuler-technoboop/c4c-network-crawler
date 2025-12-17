@@ -36,7 +36,7 @@ from c4c_utils.summary_helpers import build_grant_network_summary, summarize_gra
 # =============================================================================
 # Constants
 # =============================================================================
-APP_VERSION = "0.14.1"  # Improved analytics visual hierarchy with columns and h4 headers
+APP_VERSION = "0.14.2"  # Fixed misleading 'No Grants Found' label → 'Zero-Grant Returns'
 MAX_FILES = 50
 C4C_LOGO_URL = "https://static.wixstatic.com/media/275a3f_25063966d6cd496eb2fe3f6ee5cde0fa~mv2.png"
 SOURCE_SYSTEM = "IRS_990"
@@ -627,9 +627,13 @@ def render_return_diagnostics(parse_results: list):
     
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("✅ Returns Processed", success_count)
-    col2.metric("⚠️ No Grants Found", no_grants_count)
+    col2.metric("⚠️ Zero-Grant Returns", no_grants_count)
     col3.metric("❌ Errors", error_count)
     col4.metric("👤 Board Members", f"{total_board:,}")
+    
+    # Clarifying note
+    if no_grants_count > 0:
+        st.caption(f"*Note: {no_grants_count} filing(s) contained no extractable grant rows — this does not affect the combined dataset totals below.*")
     
     # Individual file results in expander
     with st.expander("📁 Individual file results", expanded=False):
