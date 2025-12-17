@@ -24,7 +24,7 @@ from io import BytesIO, StringIO
 # Config
 # =============================================================================
 
-APP_VERSION = "0.5.0"  # Added help system, Polinode export, project naming guidance
+APP_VERSION = "0.6.0"  # UI consistency with OrgGraph US - section headers, analytics, visual hierarchy
 C4C_LOGO_URL = "https://static.wixstatic.com/media/275a3f_bcf888c01ebe499ca978b82f5291947b~mv2.png"
 SOURCE_SYSTEM = "CHARITYDATA_CA"
 JURISDICTION = "CA"
@@ -570,14 +570,17 @@ def merge_graph_data(existing_nodes: pd.DataFrame, existing_edges: pd.DataFrame,
 # UI Rendering Functions
 # =============================================================================
 
-def render_graph_summary(nodes_df: pd.DataFrame, edges_df: pd.DataFrame) -> None:
-    """Render summary metrics and data preview."""
-    
+def render_network_results(nodes_df: pd.DataFrame, edges_df: pd.DataFrame) -> None:
+    """
+    Render network results summary.
+    Aligned with OrgGraph US patterns for UI consistency.
+    """
     if nodes_df is None or nodes_df.empty:
         st.warning("No graph data loaded.")
         return
     
-    st.subheader("📊 Graph Summary")
+    st.subheader("📊 Network Results")
+    st.caption("Network constructed from uploaded charity data")
     
     org_nodes = len(nodes_df[nodes_df["node_type"] == "ORG"]) if "node_type" in nodes_df.columns else 0
     person_nodes = len(nodes_df[nodes_df["node_type"] == "PERSON"]) if "node_type" in nodes_df.columns else 0
@@ -585,35 +588,122 @@ def render_graph_summary(nodes_df: pd.DataFrame, edges_df: pd.DataFrame) -> None
     board_edges = len(edges_df[edges_df["edge_type"] == "BOARD_MEMBERSHIP"]) if not edges_df.empty and "edge_type" in edges_df.columns else 0
     
     col1, col2, col3, col4 = st.columns(4)
+    col1.metric("🏛️ Organizations", org_nodes)
+    col2.metric("👤 People", person_nodes)
+    col3.metric("💰 Grant Edges", grant_edges)
+    col4.metric("🪪 Board Edges", board_edges)
+    
+    # Calculate total grant funding if available
+    if not edges_df.empty and "edge_type" in edges_df.columns and "amount" in edges_df.columns:
+        grant_df = edges_df[edges_df["edge_type"] == "GRANT"].copy()
+        if not grant_df.empty:
+            grant_df["amount"] = pd.to_numeric(grant_df["amount"], errors="coerce").fillna(0)
+            total_funding = grant_df["amount"].sum()
+            if total_funding > 0:
+                st.caption(f"*Total grant funding: ${total_funding:,.0f} CAD*")
+
+
+def render_grant_analytics(edges_df: pd.DataFrame) -> None:
+    """
+    Render grant analytics section.
+    Aligned with OrgGraph US patterns for UI consistency.
+    """
+    if edges_df is None or edges_df.empty:
+        return
+    
+    if "edge_type" not in edges_df.columns:
+        return
+    
+    grant_df = edges_df[edges_df["edge_type"] == "GRANT"].copy()
+    if grant_df.empty:
+        return
+    
+    st.subheader("📈 Grant Analytics")
+    st.caption("Analysis of grant relationships in the network")
+    
+    # Ensure amount is numeric
+    if "amount" in grant_df.columns:
+        grant_df["amount"] = pd.to_numeric(grant_df["amount"], errors="coerce").fillna(0)
+    
+    # Use columns for visual separation (aligned with US app)
+    col1, col2 = st.columns(2)
+    
+    # --- Top Grantees ---
     with col1:
-        st.metric("🏛️ Organizations", org_nodes)
+        st.markdown("#### 🏆 Top 10 Grantees")
+        st.caption("By total funding received")
+        
+        if "to_id" in grant_df.columns and "amount" in grant_df.columns:
+            grantee_totals = grant_df.groupby("to_id")["amount"].sum().sort_values(ascending=False).head(10)
+            
+            if not grantee_totals.empty:
+                for i, (grantee, amount) in enumerate(grantee_totals.items(), 1):
+                    # Clean up the grantee ID for display
+                    display_name = str(grantee).replace("ORG:", "").replace("_", " ").title()
+                    st.write(f"**{i}.** {display_name}")
+                    st.caption(f"${amount:,.0f} CAD")
+            else:
+                st.info("No grantee data available")
+        else:
+            st.info("Missing grantee data columns")
+    
+    # --- Top Grantors ---
     with col2:
-        st.metric("👤 People", person_nodes)
-    with col3:
-        st.metric("💰 Grant Edges", grant_edges)
-    with col4:
-        st.metric("🪪 Board Edges", board_edges)
+        st.markdown("#### 🎁 Top 10 Grantors")
+        st.caption("By total funding given")
+        
+        if "from_id" in grant_df.columns and "amount" in grant_df.columns:
+            grantor_totals = grant_df.groupby("from_id")["amount"].sum().sort_values(ascending=False).head(10)
+            
+            if not grantor_totals.empty:
+                for i, (grantor, amount) in enumerate(grantor_totals.items(), 1):
+                    # Clean up the grantor ID for display
+                    display_name = str(grantor).replace("ORG:", "").replace("_", " ").title()
+                    st.write(f"**{i}.** {display_name}")
+                    st.caption(f"${amount:,.0f} CAD")
+            else:
+                st.info("No grantor data available")
+        else:
+            st.info("Missing grantor data columns")
+
+
+def render_data_preview(nodes_df: pd.DataFrame, edges_df: pd.DataFrame) -> None:
+    """
+    Render data preview in expanders.
+    Aligned with OrgGraph US patterns for UI consistency.
+    """
+    with st.expander("👀 Preview Nodes", expanded=False):
+        if not nodes_df.empty:
+            display_cols = ["node_type", "label", "jurisdiction", "city", "region", "tax_id", "source_system"]
+            display_cols = [c for c in display_cols if c in nodes_df.columns]
+            st.dataframe(nodes_df[display_cols], use_container_width=True, hide_index=True)
+            st.caption(f"{len(nodes_df)} total nodes")
+        else:
+            st.info("No nodes to display")
     
-    st.divider()
-    
-    st.subheader("📋 Data Preview")
-    
-    tab1, tab2 = st.tabs(["Nodes", "Edges"])
-    
-    with tab1:
-        display_cols = ["node_type", "label", "jurisdiction", "city", "region", "tax_id", "source_system"]
-        display_cols = [c for c in display_cols if c in nodes_df.columns]
-        st.dataframe(nodes_df[display_cols], use_container_width=True, hide_index=True)
-        st.caption(f"{len(nodes_df)} total nodes")
-    
-    with tab2:
+    with st.expander("👀 Preview Edges", expanded=False):
         if not edges_df.empty:
             display_cols = ["edge_type", "from_id", "to_id", "amount", "role", "fiscal_year", "source_system"]
             display_cols = [c for c in display_cols if c in edges_df.columns]
             st.dataframe(edges_df[display_cols], use_container_width=True, hide_index=True)
             st.caption(f"{len(edges_df)} total edges")
         else:
-            st.info("No edges found.")
+            st.info("No edges to display")
+
+
+def render_graph_summary(nodes_df: pd.DataFrame, edges_df: pd.DataFrame) -> None:
+    """
+    DEPRECATED: Split into render_network_results, render_grant_analytics, render_data_preview.
+    Kept for backward compatibility.
+    """
+    render_network_results(nodes_df, edges_df)
+    
+    # Show analytics toggle (aligned with US app)
+    show_analytics = st.checkbox("📈 Show Grant Analytics", value=False)
+    if show_analytics:
+        render_grant_analytics(edges_df)
+    
+    render_data_preview(nodes_df, edges_df)
 
 
 # =============================================================================
@@ -836,7 +926,7 @@ def render_downloads(nodes_df: pd.DataFrame, edges_df: pd.DataFrame, project_nam
         return
     
     st.divider()
-    st.subheader("💾 Download")
+    st.subheader("📥 Download Data")
     
     if project_name and project_name != DEMO_PROJECT_NAME:
         st.info(f"⬇️ **Download these files and upload to `demo_data/{project_name}/` on GitHub** (replace existing files)")
@@ -1011,7 +1101,8 @@ def render_upload_interface(project_name: str):
         existing_nodes, existing_edges, new_nodes, new_edges
     )
     
-    st.subheader(f"🔀 Merge Results — {org_name}")
+    st.subheader(f"🔁 Merge Results")
+    st.caption(f"Dataset merge outcome for {org_name}. Counts reflect what was added to the combined nodes/edges outputs.")
     
     col1, col2 = st.columns(2)
     with col1:
