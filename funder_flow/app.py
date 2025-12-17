@@ -35,7 +35,7 @@ from c4c_utils.irs_return_dispatcher import parse_irs_return
 # =============================================================================
 # Constants
 # =============================================================================
-APP_VERSION = "0.11.0"  # Unified dispatcher integration
+APP_VERSION = "0.11.1"  # Fixed region filtering in analytics and combined grant counts
 MAX_FILES = 50
 C4C_LOGO_URL = "https://static.wixstatic.com/media/275a3f_25063966d6cd496eb2fe3f6ee5cde0fa~mv2.png"
 SOURCE_SYSTEM = "IRS_990"
@@ -600,11 +600,12 @@ def render_single_file_diagnostics(result: dict, expanded: bool = False):
             source_badge = f"📑 PDF ({pages} pages) — beta"
         
         st.caption(f"{source_badge} • {form_type} • Parser v{diag.get('parser_version', 'unknown')} • {result.get('file', 'unknown')}")
-def render_parse_status(parse_results: list):
+def render_parse_status(parse_results: list, grants_df: pd.DataFrame = None, region_def: dict = None):
     """
     Render the parsing status for each file.
     
     UPDATED for v2.5 with enhanced diagnostics display.
+    UPDATED for v2.7 to show actual grant count including Schedule I.
     """
     if not parse_results:
         return
@@ -637,6 +638,24 @@ def render_parse_status(parse_results: list):
     
     # Grant totals
     st.markdown("**Grant Totals**")
+    
+    # Calculate actual total from grants_df (includes Schedule I)
+    if grants_df is not None and not grants_df.empty:
+        # Check if region filtering is active
+        if region_def and region_def.get("id") != "none" and "region_relevant" in grants_df.columns:
+            filtered_grants = grants_df[grants_df["region_relevant"] == True]
+            actual_grant_count = len(filtered_grants)
+            actual_grant_amount = filtered_grants["grant_amount"].sum() if "grant_amount" in filtered_grants.columns else 0
+            region_label = f" ({region_def.get('name', 'Region')})"
+        else:
+            actual_grant_count = len(grants_df)
+            actual_grant_amount = grants_df["grant_amount"].sum() if "grant_amount" in grants_df.columns else 0
+            region_label = ""
+    else:
+        actual_grant_count = total_3a_grants + total_3b_grants
+        actual_grant_amount = total_3a_amount + total_3b_amount
+        region_label = ""
+    
     gcol1, gcol2, gcol3, gcol4 = st.columns(4)
     with gcol1:
         st.metric("3a (Paid)", f"{total_3a_grants:,} grants")
@@ -645,8 +664,8 @@ def render_parse_status(parse_results: list):
         st.metric("3b (Future)", f"{total_3b_grants:,} grants")
         st.caption(f"${total_3b_amount:,}")
     with gcol3:
-        st.metric("Combined", f"{total_3a_grants + total_3b_grants:,} grants")
-        st.caption(f"${total_3a_amount + total_3b_amount:,}")
+        st.metric(f"Combined{region_label}", f"{actual_grant_count:,} grants")
+        st.caption(f"${actual_grant_amount:,.0f}")
     with gcol4:
         st.metric("👤 Board Members", f"{total_board:,}")
     
@@ -1066,17 +1085,29 @@ def render_graph_summary(nodes_df: pd.DataFrame, edges_df: pd.DataFrame, grants_
     if grants_df is not None and not grants_df.empty and "grant_amount" in grants_df.columns:
         total_funding = grants_df["grant_amount"].sum()
         st.metric("💵 Total Grant Funding", f"${total_funding:,.0f}")
-def render_analytics(grants_df: pd.DataFrame):
-    """Render grant analytics."""
+def render_analytics(grants_df: pd.DataFrame, region_def: dict = None):
+    """Render grant analytics, filtered by region if selected."""
     if grants_df is None or grants_df.empty:
         st.info("No grant data available for analytics")
         return
     
-    st.subheader("📈 Grant Analytics")
+    # Apply region filter if active
+    if region_def and region_def.get("id") != "none" and "region_relevant" in grants_df.columns:
+        analysis_df = grants_df[grants_df["region_relevant"] == True].copy()
+        region_label = f" ({region_def.get('name', 'Region')}-Relevant)"
+    else:
+        analysis_df = grants_df
+        region_label = ""
+    
+    if analysis_df.empty:
+        st.info("No grants in selected region")
+        return
+    
+    st.subheader(f"📈 Grant Analytics{region_label}")
     
     # Top grantees by amount
-    if "grantee_name" in grants_df.columns and "grant_amount" in grants_df.columns:
-        grantee_totals = grants_df.groupby("grantee_name")["grant_amount"].sum().sort_values(ascending=False).head(10)
+    if "grantee_name" in analysis_df.columns and "grant_amount" in analysis_df.columns:
+        grantee_totals = analysis_df.groupby("grantee_name")["grant_amount"].sum().sort_values(ascending=False).head(10)
         
         if not grantee_totals.empty:
             st.markdown("**Top 10 Grantees by Total Funding:**")
@@ -1084,8 +1115,8 @@ def render_analytics(grants_df: pd.DataFrame):
                 st.write(f"{i}. **{grantee}**: ${amount:,.0f}")
     
     # Multi-funder grantees
-    if "grantee_name" in grants_df.columns and "foundation_name" in grants_df.columns:
-        funder_counts = grants_df.groupby("grantee_name")["foundation_name"].nunique()
+    if "grantee_name" in analysis_df.columns and "foundation_name" in analysis_df.columns:
+        funder_counts = analysis_df.groupby("grantee_name")["foundation_name"].nunique()
         multi_funded = funder_counts[funder_counts > 1].sort_values(ascending=False)
         
         if not multi_funded.empty:
@@ -1428,7 +1459,7 @@ def render_upload_interface(project_name: str):
         
         # Render processing log with v2.5 diagnostics
         if st.session_state.parse_results:
-            render_parse_status(st.session_state.parse_results)
+            render_parse_status(st.session_state.parse_results, st.session_state.grants_df, st.session_state.region_def)
         
         st.divider()
         
@@ -1465,7 +1496,7 @@ def render_upload_interface(project_name: str):
         
         show_analytics = st.checkbox("📊 Show Network Analytics", value=False)
         if show_analytics:
-            render_analytics(st.session_state.grants_df)
+            render_analytics(st.session_state.grants_df, st.session_state.region_def)
         
         render_data_preview(st.session_state.nodes_df, st.session_state.edges_df)
         render_downloads(st.session_state.nodes_df, st.session_state.edges_df, 
@@ -1746,7 +1777,7 @@ def main():
         
         show_analytics = st.checkbox("📊 Show Network Analytics", value=False)
         if show_analytics:
-            render_analytics(grants_df)
+            render_analytics(grants_df, None)  # Demo mode has no region_def
         
         render_data_preview(nodes_df, edges_df)
         render_downloads(nodes_df, edges_df, grants_df, None, DEMO_PROJECT_NAME)
