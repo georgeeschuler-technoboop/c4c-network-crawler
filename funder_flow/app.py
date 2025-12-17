@@ -36,7 +36,7 @@ from c4c_utils.summary_helpers import build_grants_summary, get_filtered_grants
 # =============================================================================
 # Constants
 # =============================================================================
-APP_VERSION = "0.12.1"  # Filter-consistent metrics using summary_helpers module
+APP_VERSION = "0.13.0"  # Clear 4-section layout: Diagnostics → Network Results → Region Grants → Analytics
 MAX_FILES = 50
 C4C_LOGO_URL = "https://static.wixstatic.com/media/275a3f_25063966d6cd496eb2fe3f6ee5cde0fa~mv2.png"
 SOURCE_SYSTEM = "IRS_990"
@@ -601,15 +601,18 @@ def render_single_file_diagnostics(result: dict, expanded: bool = False):
             source_badge = f"📑 PDF ({pages} pages) — beta"
         
         st.caption(f"{source_badge} • {form_type} • Parser v{diag.get('parser_version', 'unknown')} • {result.get('file', 'unknown')}")
-def render_parse_status(parse_results: list, grants_df: pd.DataFrame = None, region_def: dict = None):
+def render_parse_status(parse_results: list, grants_df: pd.DataFrame = None, region_def: dict = None,
+                        nodes_df: pd.DataFrame = None, edges_df: pd.DataFrame = None):
     """
-    Render processing status with filter-consistent metrics.
+    Render processing results with clear separation of concerns.
     
-    Two panels:
-    1. Filtered Results - user-facing, all metrics from same filtered dataset
-    2. Return Diagnostics - parser QA, always unfiltered
+    Four sections (top to bottom):
+    1. Return Diagnostics - parsing success/failure (unfiltered, collapsible)
+    2. Grant Network Results - all parsed grants (unfiltered)
+    3. Region-Relevant Grants - filtered view (only if region active)
+    4. Analytics handled separately by render_analytics()
     
-    UPDATED for v2.8: Never mix scopes. All bucket counts in a panel come from same dataset.
+    UPDATED for v0.13: Clear mental model - ingestion → assembly → analysis
     """
     if not parse_results:
         return
@@ -619,46 +622,58 @@ def render_parse_status(parse_results: list, grants_df: pd.DataFrame = None, reg
     if parse_results:
         parser_version = parse_results[0].get("diagnostics", {}).get("parser_version", "unknown")
     
-    # Calculate file-level stats (always unfiltered - these are about parsing, not grants)
+    # Calculate file-level stats
     success_count = sum(1 for r in parse_results if r["status"] == "success")
     error_count = sum(1 for r in parse_results if r["status"] == "error")
     no_grants_count = sum(1 for r in parse_results if r["status"] == "no_grants")
     total_board = sum(r.get("board_count", 0) for r in parse_results)
     
     # ==========================================================================
-    # Panel 1: Filtered Results (user-facing, filter-consistent)
+    # Section 1: Return Diagnostics (unfiltered, collapsible)
     # ==========================================================================
     
-    # Determine if region filter is active
-    region_active = (
-        region_def and 
-        region_def.get("id") != "none" and 
-        grants_df is not None and 
-        not grants_df.empty and
-        "region_relevant" in grants_df.columns
-    )
-    
-    if region_active:
-        region_name = region_def.get("name", "Region")
-        filtered_df = get_filtered_grants(grants_df, region_def)
-        scope_label = f"{region_name} Grants"
-        filter_note = f"Showing grants within {region_name} region filter."
-    else:
-        filtered_df = grants_df
-        scope_label = "All Grants"
-        filter_note = "No region filter applied."
-    
-    st.subheader(f"📊 {scope_label}")
-    st.caption(filter_note)
-    
-    # Build filter-consistent summary using helper
-    if filtered_df is not None and not filtered_df.empty and "grant_amount" in filtered_df.columns:
-        summary = build_grants_summary(filtered_df, scope_label=scope_label)
+    with st.expander("📄 Return Processing Results", expanded=False):
+        st.caption(f"Parser v{parser_version}")
         
-        by_bucket = summary["by_bucket"]
-        total = summary["total"]
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("✅ Returns Processed", success_count)
+        col2.metric("⚠️ No Grants Found", no_grants_count)
+        col3.metric("❌ Errors", error_count)
+        col4.metric("👤 Board Members", f"{total_board:,}")
         
-        # Display metrics - all from same filtered dataset
+        # Individual file results
+        st.markdown("---")
+        st.markdown("**Individual File Results**")
+        
+        # Sort: errors first, then warnings, then success
+        def sort_key(r):
+            if r.get("diagnostics", {}).get("errors"):
+                return 0
+            if r.get("diagnostics", {}).get("warnings"):
+                return 1
+            if r.get("status") == "no_grants":
+                return 2
+            return 3
+        
+        sorted_results = sorted(parse_results, key=sort_key)
+        
+        for result in sorted_results:
+            render_single_file_diagnostics(result, expanded=False)
+    
+    # ==========================================================================
+    # Section 2: Grant Network Results — All Grants (unfiltered)
+    # ==========================================================================
+    
+    st.subheader("🔗 Grant Network Results")
+    st.caption("Full grant network constructed from all successfully parsed returns")
+    
+    if grants_df is not None and not grants_df.empty and "grant_amount" in grants_df.columns:
+        # Build unfiltered summary
+        all_summary = build_grants_summary(grants_df, scope_label="All Grants")
+        by_bucket = all_summary["by_bucket"]
+        total = all_summary["total"]
+        
+        # Display ALL grants metrics
         col1, col2, col3, col4 = st.columns(4)
         
         with col1:
@@ -678,41 +693,60 @@ def render_parse_status(parse_results: list, grants_df: pd.DataFrame = None, reg
         if "__other__" in by_bucket and by_bucket["__other__"]["count"] > 0:
             st.caption(f"*+ {by_bucket['__other__']['count']:,} other grants (${by_bucket['__other__']['amount']:,.0f})*")
         
+        # Network objects subline
+        if nodes_df is not None and edges_df is not None:
+            org_count = len(nodes_df[nodes_df["node_type"] == "ORG"]) if not nodes_df.empty and "node_type" in nodes_df.columns else 0
+            person_count = len(nodes_df[nodes_df["node_type"] == "PERSON"]) if not nodes_df.empty and "node_type" in nodes_df.columns else 0
+            grant_edges = len(edges_df[edges_df["edge_type"] == "GRANT"]) if not edges_df.empty and "edge_type" in edges_df.columns else 0
+            board_edges = len(edges_df[edges_df["edge_type"] == "BOARD_MEMBERSHIP"]) if not edges_df.empty and "edge_type" in edges_df.columns else 0
+            st.caption(f"*Network objects: {org_count:,} organizations · {person_count:,} people · {grant_edges:,} grant edges · {board_edges:,} board edges*")
     else:
         st.info("No grant data available.")
     
-    st.divider()
-    
     # ==========================================================================
-    # Panel 2: Return Diagnostics (parser QA, unfiltered)
+    # Section 3: Region-Relevant Grants (filtered, only if region active)
     # ==========================================================================
     
-    st.subheader("🔍 Return Diagnostics")
-    st.caption(f"Parser v{parser_version} • Return-level parsing stats (unfiltered)")
+    region_active = (
+        region_def and 
+        region_def.get("id") != "none" and 
+        grants_df is not None and 
+        not grants_df.empty and
+        "region_relevant" in grants_df.columns
+    )
     
-    # File status metrics
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("✅ Success", success_count)
-    col2.metric("⚠️ No Grants", no_grants_count)
-    col3.metric("❌ Errors", error_count)
-    col4.metric("👤 Board Members", f"{total_board:,}")
-    
-    # Individual file results
-    with st.expander("📄 Individual File Results", expanded=False):
-        # Sort: errors first, then warnings, then success
-        def sort_key(r):
-            if r.get("diagnostics", {}).get("errors"):
-                return 0
-            if r.get("diagnostics", {}).get("warnings"):
-                return 1
-            if r.get("status") == "no_grants":
-                return 2
-            return 3
+    if region_active:
+        region_name = region_def.get("name", "Region")
+        filtered_df = get_filtered_grants(grants_df, region_def)
         
-        sorted_results = sorted(parse_results, key=sort_key)
+        st.divider()
+        st.subheader(f"🗺️ {region_name} Grants")
+        st.caption(f"Grants relevant to the {region_name} region only")
         
-        for result in sorted_results:
-            render_single_file_diagnostics(result, expanded=False)
+        if filtered_df is not None and not filtered_df.empty:
+            filtered_summary = build_grants_summary(filtered_df, scope_label=f"{region_name} Grants")
+            by_bucket = filtered_summary["by_bucket"]
+            total = filtered_summary["total"]
+            
+            col1, col2, col3, col4 = st.columns(4)
+            
+            with col1:
+                st.metric("3a (Paid)", f"{by_bucket['3a']['count']:,}")
+                st.caption(f"${by_bucket['3a']['amount']:,.0f}")
+            with col2:
+                st.metric("3b (Future)", f"{by_bucket['3b']['count']:,}")
+                st.caption(f"${by_bucket['3b']['amount']:,.0f}")
+            with col3:
+                st.metric("Schedule I", f"{by_bucket['schedule_i']['count']:,}")
+                st.caption(f"${by_bucket['schedule_i']['amount']:,.0f}")
+            with col4:
+                st.metric("**Total**", f"{total['count']:,}")
+                st.caption(f"${total['amount']:,.0f}")
+            
+            # Clarifying note
+            st.caption("*Counts and amounts reflect region-relevant grants only. Return diagnostics above remain unfiltered.*")
+        else:
+            st.info(f"No grants found in {region_name} region.")
 
 
 # =============================================================================
@@ -1079,12 +1113,10 @@ def render_region_summary(grants_df: pd.DataFrame):
 # =============================================================================
 # Other Rendering Functions
 # =============================================================================
-def render_graph_summary(nodes_df: pd.DataFrame, edges_df: pd.DataFrame, grants_df: pd.DataFrame = None):
-    """Render summary metrics for the graph (full graph structure, unfiltered)."""
-    st.subheader("📊 Graph Summary")
-    st.caption("Full graph structure (before region filtering)")
-    
-    col1, col2, col3, col4 = st.columns(4)
+def render_network_stats(nodes_df: pd.DataFrame, edges_df: pd.DataFrame):
+    """Render minimal network object counts as a caption line."""
+    if nodes_df.empty and edges_df.empty:
+        return
     
     # Count node types
     org_count = len(nodes_df[nodes_df["node_type"] == "ORG"]) if not nodes_df.empty and "node_type" in nodes_df.columns else 0
@@ -1094,15 +1126,13 @@ def render_graph_summary(nodes_df: pd.DataFrame, edges_df: pd.DataFrame, grants_
     grant_count = len(edges_df[edges_df["edge_type"] == "GRANT"]) if not edges_df.empty and "edge_type" in edges_df.columns else 0
     board_count = len(edges_df[edges_df["edge_type"] == "BOARD_MEMBERSHIP"]) if not edges_df.empty and "edge_type" in edges_df.columns else 0
     
-    col1.metric("🏛️ Organizations", org_count)
-    col2.metric("👤 People", person_count)
-    col3.metric("💰 Grant Edges", grant_count)
-    col4.metric("🪪 Board Edges", board_count)
-    
-    # Show total funding if available
-    if grants_df is not None and not grants_df.empty and "grant_amount" in grants_df.columns:
-        total_funding = grants_df["grant_amount"].sum()
-        st.metric("💵 Total Grant Funding", f"${total_funding:,.0f}")
+    st.caption(f"Network objects: {org_count:,} organizations · {person_count:,} people · {grant_count:,} grant edges · {board_count:,} board edges")
+
+
+# Keep for backward compatibility but mark as deprecated
+def render_graph_summary(nodes_df: pd.DataFrame, edges_df: pd.DataFrame, grants_df: pd.DataFrame = None):
+    """DEPRECATED: Use render_network_stats instead. Kept for backward compatibility."""
+    render_network_stats(nodes_df, edges_df)
 def render_analytics(grants_df: pd.DataFrame, region_def: dict = None):
     """Render grant analytics, filtered by region if selected."""
     if grants_df is None or grants_df.empty:
@@ -1475,9 +1505,15 @@ def render_upload_interface(project_name: str):
                 orgs_label += f" + {len(st.session_state.processed_orgs) - 3} more"
             st.info(f"**Processed:** {orgs_label}")
         
-        # Render processing log with v2.5 diagnostics
+        # Render processing log with grant network results
         if st.session_state.parse_results:
-            render_parse_status(st.session_state.parse_results, st.session_state.grants_df, st.session_state.region_def)
+            render_parse_status(
+                st.session_state.parse_results, 
+                st.session_state.grants_df, 
+                st.session_state.region_def,
+                st.session_state.nodes_df,
+                st.session_state.edges_df
+            )
         
         st.divider()
         
@@ -1506,11 +1542,7 @@ def render_upload_interface(project_name: str):
         st.divider()
         st.success(f"📊 **Combined {display_name} dataset:** {len(st.session_state.nodes_df)} nodes, {len(st.session_state.edges_df)} edges")
         
-        # Render outputs from session state
-        render_graph_summary(st.session_state.nodes_df, st.session_state.edges_df, st.session_state.grants_df)
-        
-        # Note: Region-filtered grant metrics are now shown in render_parse_status
-        
+        # Analytics section (inherits region filter)
         show_analytics = st.checkbox("📊 Show Network Analytics", value=False)
         if show_analytics:
             render_analytics(st.session_state.grants_df, st.session_state.region_def)
