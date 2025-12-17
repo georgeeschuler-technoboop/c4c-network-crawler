@@ -25,6 +25,9 @@ UPDATED v0.5.3: Fixed input/output flow
 - Outputs: project_summary.json, insight_cards.json, insight_report.md, node_metrics.csv
 - Clear "Run" vs "Load Previous" workflow
 - No longer requires pre-computed artifacts to run
+
+UPDATED v0.5.4: Use grant_purpose_raw column
+- Purpose column is now explicitly 'grant_purpose_raw' (OrgGraph US standard)
 """
 
 import streamlit as st
@@ -41,7 +44,7 @@ import importlib.util
 # Config
 # =============================================================================
 
-APP_VERSION = "0.5.3"
+APP_VERSION = "0.5.4"
 C4C_LOGO_URL = "https://static.wixstatic.com/media/275a3f_ed8e76c8495d4799a5d7575822009e93~mv2.png"
 
 # Get paths
@@ -212,14 +215,11 @@ def add_purpose_classifications(grants_df: pd.DataFrame) -> pd.DataFrame:
     if grants_df.empty:
         return grants_df
     
-    # Find the purpose column
-    purpose_col = None
-    for col in ["grant_purpose", "purpose", "raw_purpose", "description"]:
-        if col in grants_df.columns:
-            purpose_col = col
-            break
+    # Use grant_purpose_raw column (standard field from OrgGraph US export)
+    purpose_col = "grant_purpose_raw"
     
-    if not purpose_col:
+    if purpose_col not in grants_df.columns:
+        st.warning(f"Purpose column '{purpose_col}' not found in grants_detail.csv. Available columns: {list(grants_df.columns)}")
         return grants_df
     
     # Classify each grant
@@ -606,7 +606,7 @@ def render_grant_purpose_explorer(grants_df: pd.DataFrame, project_id: str):
     
     # Check if we have purpose classifications
     if "purpose_primary" not in grants_df.columns:
-        st.warning("Purpose classifications not available. Ensure grants_detail.csv has a 'grant_purpose' or 'purpose' column.")
+        st.warning("Purpose classifications not available. Ensure grants_detail.csv has a 'grant_purpose_raw' column.")
         return
     
     # Get all unique tags
@@ -697,21 +697,8 @@ def render_grant_purpose_explorer(grants_df: pd.DataFrame, project_id: str):
         st.caption(f"Total filtered funding: ${filtered_amount:,.0f}")
     
     # Display grants table
-    display_cols = ["funder_name", "grantee_name", "grant_amount", "grant_purpose", "purpose_primary_label", "fiscal_year"]
+    display_cols = ["funder_name", "grantee_name", "grant_amount", "grant_purpose_raw", "purpose_primary_label", "fiscal_year"]
     display_cols = [c for c in display_cols if c in filtered_df.columns]
-    
-    # Add alternative column names
-    alt_cols = {
-        "funder_name": ["funder", "grantor_name", "grantor"],
-        "grantee_name": ["grantee", "recipient_name", "recipient"],
-        "grant_purpose": ["purpose", "raw_purpose", "description"],
-    }
-    for target, alts in alt_cols.items():
-        if target not in display_cols:
-            for alt in alts:
-                if alt in filtered_df.columns:
-                    display_cols.append(alt)
-                    break
     
     if display_cols:
         # Format amount column
