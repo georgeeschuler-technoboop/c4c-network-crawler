@@ -1,0 +1,352 @@
+{
+  "schema_version": "1.0-mvp",
+  "project_id": "glfn",
+  "generated_at": "2025-12-17T18:22:35.463327Z",
+  "health": {
+    "score": 55,
+    "label": "Mixed signals",
+    "positive": [
+      "\ud83d\udfe2 **Highly connected** \u2014 99% of organizations linked through shared funding"
+    ],
+    "risk": [
+      "\ud83d\udd34 **Low coordination** \u2014 only 2.7% have multiple funders"
+    ]
+  },
+  "cards": [
+    {
+      "card_id": "network_health",
+      "use_case": "System Framing",
+      "title": "Network Health Overview",
+      "summary": "\ud83d\udfe1 **Network Health: 55/100** \u2014 *Mixed signals*\n\nThe network shows **mixed signals**. Some coordination exists, but structural gaps limit how effectively funders can align. Targeted bridge-building could unlock value.",
+      "ranked_rows": [
+        {
+          "indicator": "Health Score",
+          "value": "55/100",
+          "interpretation": "Mixed signals"
+        },
+        {
+          "indicator": "Multi-Funder Grantees",
+          "value": "2.7%",
+          "interpretation": "Weak signal \u2014 only 2.7% have multiple funders, funders rarely co-invest"
+        },
+        {
+          "indicator": "Connected through Shared Funding",
+          "value": "99%",
+          "interpretation": "Nearly all organizations (99%) can reach each other through funding chains \u2014 a highly unified network"
+        },
+        {
+          "indicator": "Top 5 Funder Share",
+          "value": "90.0%",
+          "interpretation": "High \u2014 top 5 control 90.0%, limited funder diversity"
+        }
+      ],
+      "health_factors": {
+        "positive": [
+          "\ud83d\udfe2 **Highly connected** \u2014 99% of organizations linked through shared funding"
+        ],
+        "risk": [
+          "\ud83d\udd34 **Low coordination** \u2014 only 2.7% have multiple funders"
+        ]
+      },
+      "evidence": {
+        "node_ids": [],
+        "edge_ids": []
+      }
+    },
+    {
+      "card_id": "concentration_snapshot",
+      "use_case": "Funding Concentration",
+      "title": "Funding Concentration",
+      "summary": "\ud83d\udfe0 **High concentration**\n\nThe top 5 funders account for **90.0%** of total funding. While some concentration is normal, this level suggests limited funder diversity. Smaller funders may struggle to influence field direction.\n\n\ud83d\udca1 **Implication:** Encourage mid-tier funders to coordinate for collective impact.",
+      "ranked_rows": [
+        {
+          "metric": "Total Funding",
+          "value": "$844,207,979"
+        },
+        {
+          "metric": "Funders",
+          "value": "16"
+        },
+        {
+          "metric": "Grantees",
+          "value": "4328"
+        },
+        {
+          "metric": "Top 5 Share",
+          "value": "90.0%"
+        },
+        {
+          "metric": "Multi-Funder Grantees",
+          "value": "118"
+        }
+      ],
+      "evidence": {
+        "node_ids": [],
+        "edge_ids": []
+      }
+    },
+    {
+      "card_id": "funder_overlap_clusters",
+      "use_case": "Funder Flow",
+      "title": "Funder Overlap Clusters",
+      "summary": "\ud83d\udfe1 **Limited overlap**\n\n**118 grantees** (2.7%) receive from 2+ funders. Some natural alignment exists, but most grantees depend on a single funder. These shared grantees represent organic coordination points.",
+      "ranked_rows": [
+        {
+          "rank": 1,
+          "grantee": "Alliance for the Great Lakes",
+          "funders": 5,
+          "amount": "$1,800,000",
+          "narrative": "**Alliance for the Great Lakes** receives from 5 network funders ($1,800,000 from The Joyce Foundation, CHARLES STEWART MOTT FOUNDATION, The Brookby Foundation + 2 more). This exceptional overlap signals strong funder consensus around their work \u2014 a natural coordination hub.",
+          "recommendation": "\ud83d\udca1 **Opportunity:** Convene their funders for joint impact measurement, aligned reporting, or a co-funding conversation. This grantee could anchor a funder learning community."
+        },
+        {
+          "rank": 2,
+          "grantee": "St Jude Children's Research Hospital",
+          "funders": 4,
+          "amount": "$67,934",
+          "narrative": "**St Jude Children's Research Hospital** receives from 4 network funders ($67,934 from CHARLES STEWART MOTT FOUNDATION, COMMUNITY FOUNDATION FOR GREATER BUFFALO, ROCHESTER AREA COMMUNITY FOUNDATION + 1 more). This exceptional overlap signals strong funder consensus around their work \u2014 a natural coordination hub.",
+          "recommendation": "\ud83d\udca1 **Opportunity:** Convene their funders for joint impact measurement, aligned reporting, or a co-funding conversation. This grantee could anchor a funder learning community."
+        },
+        {
+          "rank": 3,
+          "grantee": "American Rivers Inc",
+          "funders": 3,
+          "amount": "$1,161,823",
+          "narrative": "**American Rivers Inc** receives from 3 funders ($1,161,823 from CHARLES STEWART MOTT FOUNDATION, NATIONAL FISH AND WILDLIFE FOUNDATION, THE SEARS SWETLAND FAMILY FOUNDATION). This overlap suggests shared priorities and potential for deeper alignment.",
+          "recommendation": "\ud83d\udca1 **Opportunity:** Explore joint site visits, shared evaluation, or coordinated grant timing among these funders."
+        },
+        {
+          "rank": 4,
+          "grantee": "CASE WESTERN RESERVE UNIVERSITY",
+          "funders": 3,
+          "amount": "$76,376",
+          "narrative": "**CASE WESTERN RESERVE UNIVERSITY** receives from 3 funders ($76,376 from COMMUNITY FOUNDATION FOR GREATER BUFFALO, ROCHESTER AREA COMMUNITY FOUNDATION, COMMUNITY FOUNDATION OF LORAIN COUNTY). This overlap suggests shared priorities and potential for deeper alignment.",
+          "recommendation": "\ud83d\udca1 **Opportunity:** Explore joint site visits, shared evaluation, or coordinated grant timing among these funders."
+        },
+        {
+          "rank": 5,
+          "grantee": "Grand Traverse Regional Land Conservancy",
+          "funders": 3,
+          "amount": "$188,600",
+          "narrative": "**Grand Traverse Regional Land Conservancy** receives from 3 funders ($188,600 from CHARLES STEWART MOTT FOUNDATION, NATIONAL FISH AND WILDLIFE FOUNDATION, The Brookby Foundation). This overlap suggests shared priorities and potential for deeper alignment.",
+          "recommendation": "\ud83d\udca1 **Opportunity:** Explore joint site visits, shared evaluation, or coordinated grant timing among these funders."
+        }
+      ],
+      "evidence": {
+        "node_ids": [],
+        "edge_ids": []
+      }
+    },
+    {
+      "card_id": "portfolio_twins",
+      "use_case": "Funding Concentration",
+      "title": "Portfolio Twins",
+      "summary": "\u26aa **Weak alignment**\n\nSome portfolio overlap exists, but even the closest funder pairs share few grantees.\n\n\ud83d\udca1 **Opportunity:** Funder pairs with high overlap could pilot joint reporting, co-investment, or aligned grantmaking.",
+      "ranked_rows": [
+        {
+          "pair": "CHARLES STEWART MOTT FOUNDATION & The Joyce Foundation",
+          "shared": 26,
+          "jaccard": 0.021,
+          "narrative": "These funders share 26 grantees \u2014 natural partners for coordination."
+        },
+        {
+          "pair": "CHARLES STEWART MOTT FOUNDATION & THE FRED A & BARBARA M ERB FAMILY",
+          "shared": 15,
+          "jaccard": 0.016,
+          "narrative": "These funders share 15 grantees \u2014 natural partners for coordination."
+        },
+        {
+          "pair": "COMMUNITY FOUNDATION FOR GREATER BUFFALO & ROCHESTER AREA COMMUNITY FOUNDATION",
+          "shared": 13,
+          "jaccard": 0.013,
+          "narrative": "These funders share 13 grantees \u2014 natural partners for coordination."
+        },
+        {
+          "pair": "THE FRED A & BARBARA M ERB FAMILY & The Joyce Foundation",
+          "shared": 12,
+          "jaccard": 0.022,
+          "narrative": "These funders share 12 grantees \u2014 natural partners for coordination."
+        },
+        {
+          "pair": "CHARLES STEWART MOTT FOUNDATION & TOLEDO COMMUNITY FOUNDATION INC",
+          "shared": 11,
+          "jaccard": 0.009,
+          "narrative": "These funders share 11 grantees \u2014 natural partners for coordination."
+        }
+      ],
+      "evidence": {
+        "node_ids": [],
+        "edge_ids": []
+      }
+    },
+    {
+      "card_id": "shared_board_conduits",
+      "use_case": "Board Network & Conduits",
+      "title": "Shared Board Conduits",
+      "summary": "\u26aa **No multi-board individuals detected**\n\nNo one serves on multiple boards in this network. Governance structures are fully separate \u2014 a potential gap for coordination.",
+      "ranked_rows": [],
+      "evidence": {
+        "node_ids": [],
+        "edge_ids": []
+      }
+    },
+    {
+      "card_id": "no_board_interlocks",
+      "use_case": "Board Network & Conduits",
+      "title": "Foundations with No Board Interlocks",
+      "summary": "\ud83d\udd34 **Governance silos**\n\n**16 of 16 funders** (100%) have no shared board members with other network foundations. This limits informal coordination channels and peer learning.\n\n\ud83d\udca1 **Opportunity:** Consider introductions between isolated funders with aligned portfolios.",
+      "ranked_rows": [
+        {
+          "rank": 1,
+          "funder": "NATIONAL FISH AND WILDLIFE FOUNDATION",
+          "outflow": "$432,363,158",
+          "narrative": "Distributes $432,363,158 with no governance ties to other network funders."
+        },
+        {
+          "rank": 2,
+          "funder": "CHARLES STEWART MOTT FOUNDATION",
+          "outflow": "$191,269,018",
+          "narrative": "Distributes $191,269,018 with no governance ties to other network funders."
+        },
+        {
+          "rank": 3,
+          "funder": "The Joyce Foundation",
+          "outflow": "$76,092,150",
+          "narrative": "Distributes $76,092,150 with no governance ties to other network funders."
+        },
+        {
+          "rank": 4,
+          "funder": "THE FRED A & BARBARA M ERB FAMILY",
+          "outflow": "$31,030,197",
+          "narrative": "Distributes $31,030,197 with no governance ties to other network funders."
+        },
+        {
+          "rank": 5,
+          "funder": "COMMUNITY FOUNDATION FOR GREATER BUFFALO",
+          "outflow": "$28,940,011",
+          "narrative": "Distributes $28,940,011 with no governance ties to other network funders."
+        }
+      ],
+      "evidence": {
+        "node_ids": [],
+        "edge_ids": []
+      }
+    },
+    {
+      "card_id": "hidden_brokers",
+      "use_case": "Brokerage Roles",
+      "title": "Hidden Brokers",
+      "summary": "\ud83d\udd0d **4217 hidden brokers identified**\n\n**4217 organizations** have high betweenness centrality but low visibility \u2014 they quietly bridge otherwise disconnected parts of the network. These 'hidden brokers' often go unrecognized but play critical structural roles in enabling coordination.",
+      "ranked_rows": [
+        {
+          "rank": 1,
+          "org": "FUND FOR LAKE MICHIGAN INC",
+          "betweenness": 0.0,
+          "narrative": "**FUND FOR LAKE MICHIGAN INC** is both a capital hub ($1,100,000 distributed) and a hidden broker \u2014 they quietly shape funding flows while bridging otherwise disconnected parts of the network. They have no board interlocks with other network members \u2014 operating in governance isolation.",
+          "recommendation": "\ud83d\udca1 **Suggested Focus:** Engage them in cross-funder coordination \u2014 they bridge groups that don't otherwise connect. Their structural position makes them valuable for pilot initiatives or coalition-building. As a major funder with no governance ties, consider facilitating introductions to peer funders for alignment conversations or joint learning."
+        },
+        {
+          "rank": 2,
+          "org": "MCDOUGAL FAMILY FOUNDATION",
+          "betweenness": 0.0,
+          "narrative": "**MCDOUGAL FAMILY FOUNDATION** is both a capital hub ($3,669,000 distributed) and a hidden broker \u2014 they quietly shape funding flows while bridging otherwise disconnected parts of the network. They have no board interlocks with other network members \u2014 operating in governance isolation.",
+          "recommendation": "\ud83d\udca1 **Suggested Focus:** Engage them in cross-funder coordination \u2014 they bridge groups that don't otherwise connect. Their structural position makes them valuable for pilot initiatives or coalition-building. As a major funder with no governance ties, consider facilitating introductions to peer funders for alignment conversations or joint learning."
+        },
+        {
+          "rank": 3,
+          "org": "21CP Foundation NFP",
+          "betweenness": 0.0,
+          "narrative": "**21CP Foundation NFP** operates as a hidden broker \u2014 despite moderate visibility, they occupy a critical bridging position connecting groups that don't otherwise interact. They have no board interlocks with other network members \u2014 operating in governance isolation.",
+          "recommendation": "\ud83d\udca1 **Suggested Focus:** Engage them in cross-funder coordination \u2014 they bridge groups that don't otherwise connect. Their structural position makes them valuable for pilot initiatives or coalition-building."
+        },
+        {
+          "rank": 4,
+          "org": "21CP Solutions LLC",
+          "betweenness": 0.0,
+          "narrative": "**21CP Solutions LLC** operates as a hidden broker \u2014 despite moderate visibility, they occupy a critical bridging position connecting groups that don't otherwise interact. They have no board interlocks with other network members \u2014 operating in governance isolation.",
+          "recommendation": "\ud83d\udca1 **Suggested Focus:** Engage them in cross-funder coordination \u2014 they bridge groups that don't otherwise connect. Their structural position makes them valuable for pilot initiatives or coalition-building."
+        },
+        {
+          "rank": 5,
+          "org": "365 Media Foundation Inc",
+          "betweenness": 0.0,
+          "narrative": "**365 Media Foundation Inc** operates as a hidden broker \u2014 despite moderate visibility, they occupy a critical bridging position connecting groups that don't otherwise interact. They have no board interlocks with other network members \u2014 operating in governance isolation.",
+          "recommendation": "\ud83d\udca1 **Suggested Focus:** Engage them in cross-funder coordination \u2014 they bridge groups that don't otherwise connect. Their structural position makes them valuable for pilot initiatives or coalition-building."
+        }
+      ],
+      "evidence": {
+        "node_ids": [],
+        "edge_ids": []
+      }
+    },
+    {
+      "card_id": "single_point_bridges",
+      "use_case": "Brokerage Roles",
+      "title": "Single-Point Bridges",
+      "summary": "\u26a0\ufe0f **15 critical bridges**\n\n**15 nodes** are critical bridges \u2014 removing any one would fragment the network into disconnected pieces. These are structural vulnerabilities but also high-leverage positions.\n\n\ud83d\udca1 **Risk Mitigation:** Build redundant pathways around critical bridges to improve resilience.",
+      "ranked_rows": [
+        {
+          "rank": 1,
+          "node": "CHARLES STEWART MOTT FOUNDATION",
+          "type": "ORG",
+          "role": "Funder ($191,269,018)",
+          "narrative": "Removing CHARLES STEWART MOTT FOUNDATION would split the network. Funder ($191,269,018)."
+        },
+        {
+          "rank": 2,
+          "node": "COMMUNITY FOUNDATION FOR GREATER BUFFALO",
+          "type": "ORG",
+          "role": "Funder ($28,940,011)",
+          "narrative": "Removing COMMUNITY FOUNDATION FOR GREATER BUFFALO would split the network. Funder ($28,940,011)."
+        },
+        {
+          "rank": 3,
+          "node": "ROCHESTER AREA COMMUNITY FOUNDATION",
+          "type": "ORG",
+          "role": "Funder ($24,344,454)",
+          "narrative": "Removing ROCHESTER AREA COMMUNITY FOUNDATION would split the network. Funder ($24,344,454)."
+        },
+        {
+          "rank": 4,
+          "node": "COMMUNITY FOUNDATION OF LORAIN COUNTY",
+          "type": "ORG",
+          "role": "Funder ($5,046,978)",
+          "narrative": "Removing COMMUNITY FOUNDATION OF LORAIN COUNTY would split the network. Funder ($5,046,978)."
+        },
+        {
+          "rank": 5,
+          "node": "NATIONAL FISH AND WILDLIFE FOUNDATION",
+          "type": "ORG",
+          "role": "Funder ($432,363,158)",
+          "narrative": "Removing NATIONAL FISH AND WILDLIFE FOUNDATION would split the network. Funder ($432,363,158)."
+        }
+      ],
+      "evidence": {
+        "node_ids": [
+          "org:charles-stewart-mott-foundation",
+          "org:community-foundation-for-greater-buffalo",
+          "org:rochester-area-community-foundation",
+          "org:community-foundation-of-lorain-county",
+          "org:national-fish-and-wildlife-foundation",
+          "org:the-sears-swetland-family-foundation",
+          "org:the-brookby-foundation",
+          "org:astor-street-foundation-inc",
+          "org:toledo-community-foundation-inc",
+          "org:porter-family-foundation-inc"
+        ],
+        "edge_ids": []
+      }
+    },
+    {
+      "card_id": "strategic_recommendations",
+      "use_case": "Strategic Recommendations",
+      "title": "Strategic Recommendations",
+      "summary": "### \ud83e\udded How to Read This\n\nThe network shows **mixed signals**. Some coordination exists, but structural gaps limit how effectively funders can align. Targeted interventions could unlock significant value.\n\n### \ud83d\udd17 Strengthen Funder Coordination\n\n- **Nurture natural alignment:** A small number of shared grantees exist. Use these as anchors \u2014 convene funders around specific grantees to build relationships and explore joint action.\n\n### \ud83c\udfdb\ufe0f Strengthen Governance Ties\n\n- **Address governance silos:** Most funders have no shared board members. Consider facilitating cross-foundation board dialogues or joint trustee convenings to build informal relationships.\n\n- **Identify potential bridge-builders:** No one currently serves on multiple boards. Look for respected individuals who could be nominated to additional boards to create connective tissue.\n\n### \ud83c\udf09 Work with Network Brokers\n\n- **Engage hidden brokers:** 4217 organization(s) quietly bridge disconnected parts of the network. Involve them in coordination design \u2014 they see patterns others miss.\n",
+      "ranked_rows": [],
+      "evidence": {
+        "node_ids": [],
+        "edge_ids": []
+      }
+    }
+  ]
+}

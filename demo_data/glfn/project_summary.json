@@ -1,0 +1,22 @@
+{
+  "generated_at": "2025-12-17T18:22:35.463709",
+  "node_counts": {
+    "total": 4669,
+    "organizations": 4349,
+    "people": 320
+  },
+  "edge_counts": {
+    "total": 5483,
+    "grants": 5160,
+    "board_memberships": 323
+  },
+  "funding": {
+    "total_amount": 844207979.0,
+    "funder_count": 16,
+    "grantee_count": 4328,
+    "top_5_share": 90.0
+  },
+  "governance": {
+    "multi_board_people": 0
+  }
+}
