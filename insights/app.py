@@ -9,11 +9,17 @@ UPDATED v0.5.0: Aligned with OrgGraph US/CA visual patterns
 - Loads pre-exported artifacts when available
 - Consistent section headers and metric labels
 - Clean separation: Network Results → Insight Cards → Downloads
+
+UPDATED v0.5.1: Added Grant Purpose Explorer
+- Loads grants_detail.csv when available
+- Keyword-based purpose classification (no AI)
+- Filter grants by purpose tags
 """
 
 import streamlit as st
 import pandas as pd
 import json
+import re
 from pathlib import Path
 from io import BytesIO
 import zipfile
@@ -24,7 +30,7 @@ import importlib.util
 # Config
 # =============================================================================
 
-APP_VERSION = "0.5.0"
+APP_VERSION = "0.5.1"
 C4C_LOGO_URL = "https://static.wixstatic.com/media/275a3f_ed8e76c8495d4799a5d7575822009e93~mv2.png"
 
 # Get paths
@@ -37,6 +43,156 @@ st.set_page_config(
     page_icon=C4C_LOGO_URL,
     layout="wide"
 )
+
+# =============================================================================
+# Grant Purpose Classification (keyword-based, no AI)
+# =============================================================================
+
+_WS_RE = re.compile(r"\s+")
+_NONWORD_RE = re.compile(r"[^a-z0-9\s]")
+
+def normalize_purpose_text(s: str) -> str:
+    """Normalize purpose text for keyword matching."""
+    if not s or pd.isna(s):
+        return ""
+    s = str(s).lower().strip()
+    s = s.replace("&", " and ")
+    s = s.replace("/", " ")
+    s = s.replace("-", " ")
+    s = s.replace("w/", " with ")
+    s = _NONWORD_RE.sub(" ", s)
+    s = _WS_RE.sub(" ", s).strip()
+    return s
+
+
+def contains_word(text: str, word: str) -> bool:
+    """Check for whole-word match."""
+    return re.search(rf"\b{re.escape(word)}\b", text) is not None
+
+
+def contains_phrase(text: str, phrase: str) -> bool:
+    """Check for phrase match."""
+    return phrase in text
+
+
+# Purpose categories with phrases and words
+CORE_PURPOSE_CATEGORIES = {
+    "water": {
+        "label": "💧 Water",
+        "phrases": ["drinking water", "stormwater", "water quality", "watershed restoration", "water stewardship", "clean water"],
+        "words": ["water", "watershed", "river", "rivers", "lake", "lakes", "wetland", "wetlands", "aquifer", "freshwater", "groundwater"]
+    },
+    "environment_nature": {
+        "label": "🌲 Environment & Nature",
+        "phrases": ["habitat restoration", "land conservation", "natural resources"],
+        "words": ["environment", "environmental", "nature", "conservation", "biodiversity", "ecosystem", "habitat", "wildlife", "forest", "forestry", "land", "parks"]
+    },
+    "climate_energy": {
+        "label": "🌡️ Climate & Energy",
+        "phrases": ["climate change", "renewable energy", "clean energy", "climate action"],
+        "words": ["climate", "carbon", "emissions", "decarbonization", "resilience", "solar", "wind", "energy", "sustainability", "sustainable"]
+    },
+    "education_research": {
+        "label": "📚 Education & Research",
+        "phrases": ["environmental education", "stem education"],
+        "words": ["education", "educational", "research", "scholarship", "scholarships", "university", "college", "school", "learning", "training", "fellows", "fellowship"]
+    },
+    "community_social": {
+        "label": "👥 Community & Social",
+        "phrases": ["community development", "civic engagement", "public health"],
+        "words": ["community", "communities", "civic", "social", "equity", "justice", "health", "neighborhood", "urban", "rural", "youth", "children"]
+    },
+    "agriculture_food": {
+        "label": "🌾 Agriculture & Food",
+        "phrases": ["food security", "sustainable agriculture"],
+        "words": ["agriculture", "agricultural", "farm", "farming", "food", "nutrition"]
+    },
+    "policy_advocacy": {
+        "label": "📢 Policy & Advocacy",
+        "phrases": ["policy research", "public policy"],
+        "words": ["policy", "advocacy", "legislation", "regulatory", "government"]
+    },
+    "general_support": {
+        "label": "🎯 General Support",
+        "phrases": ["general support", "operating support", "core support", "general operating"],
+        "words": ["operations", "operating", "unrestricted", "capacity"]
+    },
+}
+
+
+def classify_grant_purpose(raw_purpose: str) -> dict:
+    """
+    Classify grant purpose using keyword matching.
+    Returns: {"primary": str, "tags": list, "confidence": str}
+    """
+    norm = normalize_purpose_text(raw_purpose)
+    if not norm:
+        return {"primary": "uncategorized", "primary_label": "❓ Uncategorized", "tags": [], "confidence": "low"}
+
+    matched = []
+    matched_labels = []
+    
+    for cat, kws in CORE_PURPOSE_CATEGORIES.items():
+        hit = False
+
+        for ph in kws.get("phrases", []):
+            ph_norm = normalize_purpose_text(ph)
+            if contains_phrase(norm, ph_norm):
+                hit = True
+                break
+
+        if not hit:
+            for w in kws.get("words", []):
+                w_norm = normalize_purpose_text(w)
+                if contains_word(norm, w_norm):
+                    hit = True
+                    break
+
+        if hit:
+            matched.append(cat)
+            matched_labels.append(kws["label"])
+
+    matched = list(dict.fromkeys(matched))
+    matched_labels = list(dict.fromkeys(matched_labels))
+
+    if not matched:
+        return {"primary": "uncategorized", "primary_label": "❓ Uncategorized", "tags": [], "confidence": "low"}
+
+    confidence = "high" if len(matched) >= 2 else "medium"
+    return {
+        "primary": matched[0], 
+        "primary_label": matched_labels[0],
+        "tags": matched, 
+        "tag_labels": matched_labels,
+        "confidence": confidence
+    }
+
+
+def add_purpose_classifications(grants_df: pd.DataFrame) -> pd.DataFrame:
+    """Add purpose classification columns to grants dataframe."""
+    if grants_df.empty:
+        return grants_df
+    
+    # Find the purpose column
+    purpose_col = None
+    for col in ["grant_purpose", "purpose", "raw_purpose", "description"]:
+        if col in grants_df.columns:
+            purpose_col = col
+            break
+    
+    if not purpose_col:
+        return grants_df
+    
+    # Classify each grant
+    classifications = grants_df[purpose_col].apply(classify_grant_purpose)
+    
+    grants_df = grants_df.copy()
+    grants_df["purpose_primary"] = classifications.apply(lambda x: x["primary"])
+    grants_df["purpose_primary_label"] = classifications.apply(lambda x: x["primary_label"])
+    grants_df["purpose_tags"] = classifications.apply(lambda x: "|".join(x["tags"]))
+    grants_df["purpose_confidence"] = classifications.apply(lambda x: x["confidence"])
+    
+    return grants_df
 
 # =============================================================================
 # Dynamic Import of run.py (for compute fallback)
@@ -76,6 +232,7 @@ def get_projects() -> list:
             has_cards = (item / "insight_cards.json").exists()
             has_report = (item / "insight_report.md").exists()
             has_metrics = (item / "node_metrics.csv").exists()
+            has_grants_detail = (item / "grants_detail.csv").exists()
             
             if has_nodes or has_edges or has_summary:
                 projects.append({
@@ -87,6 +244,7 @@ def get_projects() -> list:
                     "has_cards": has_cards,
                     "has_report": has_report,
                     "has_metrics": has_metrics,
+                    "has_grants_detail": has_grants_detail,
                     "is_complete": has_summary and has_cards and has_report,
                 })
     
@@ -102,10 +260,12 @@ def load_project_data(project: dict) -> dict:
         "project_id": project["id"],
         "nodes_df": None,
         "edges_df": None,
+        "grants_df": None,
         "project_summary": None,
         "insight_cards": None,
         "markdown_report": None,
         "metrics_df": None,
+        "has_grants_detail": project.get("has_grants_detail", False),
     }
     
     # Load CSVs
@@ -115,6 +275,16 @@ def load_project_data(project: dict) -> dict:
         data["edges_df"] = pd.read_csv(path / "edges.csv")
     if project["has_metrics"]:
         data["metrics_df"] = pd.read_csv(path / "node_metrics.csv")
+    
+    # Load grants_detail.csv and add purpose classifications
+    if project.get("has_grants_detail"):
+        try:
+            grants_df = pd.read_csv(path / "grants_detail.csv")
+            data["grants_df"] = add_purpose_classifications(grants_df)
+        except Exception as e:
+            st.warning(f"Could not load grants_detail.csv: {e}")
+            data["grants_df"] = None
+            data["has_grants_detail"] = False
     
     # Load JSON artifacts
     if project["has_summary"]:
@@ -366,6 +536,150 @@ def render_node_metrics(metrics_df: pd.DataFrame):
                 st.caption(f"{len(person_metrics)} people")
             else:
                 st.info("No people metrics available")
+
+
+def render_grant_purpose_explorer(grants_df: pd.DataFrame, project_id: str):
+    """
+    Render Grant Purpose Explorer section.
+    Uses keyword-based classification (no AI) to categorize grants by purpose.
+    """
+    st.subheader("🎯 Grant Purpose Explorer")
+    st.caption("Keyword-based purpose classification. Filter grants by thematic area to explore funding patterns.")
+    
+    if grants_df is None or grants_df.empty:
+        st.info(f"Grant purpose analysis unavailable for this project (missing `grants_detail.csv` in `demo_data/{project_id}/`).")
+        return
+    
+    # Check if we have purpose classifications
+    if "purpose_primary" not in grants_df.columns:
+        st.warning("Purpose classifications not available. Ensure grants_detail.csv has a 'grant_purpose' or 'purpose' column.")
+        return
+    
+    # Get all unique tags
+    all_tags = set()
+    for tags_str in grants_df["purpose_tags"].dropna():
+        for t in str(tags_str).split("|"):
+            if t:
+                all_tags.add(t)
+    all_tags = sorted(all_tags)
+    
+    # Get tag labels for display
+    tag_label_map = {}
+    for cat, info in CORE_PURPOSE_CATEGORIES.items():
+        tag_label_map[cat] = info["label"]
+    tag_label_map["uncategorized"] = "❓ Uncategorized"
+    
+    # Summary metrics row
+    col1, col2, col3, col4 = st.columns(4)
+    
+    total_grants = len(grants_df)
+    total_amount = grants_df["grant_amount"].sum() if "grant_amount" in grants_df.columns else 0
+    categorized = len(grants_df[grants_df["purpose_primary"] != "uncategorized"])
+    uncategorized = total_grants - categorized
+    
+    col1.metric("📋 Total Grants", f"{total_grants:,}")
+    col2.metric("💵 Total Funding", f"${total_amount:,.0f}")
+    col3.metric("✅ Categorized", f"{categorized:,} ({100*categorized/total_grants:.0f}%)" if total_grants > 0 else "0")
+    col4.metric("❓ Uncategorized", f"{uncategorized:,}")
+    
+    st.markdown("---")
+    
+    # Purpose breakdown by category
+    st.markdown("**Funding by Purpose Category**")
+    
+    # Build summary by primary category
+    if "grant_amount" in grants_df.columns:
+        purpose_summary = grants_df.groupby("purpose_primary").agg(
+            count=("purpose_primary", "count"),
+            amount=("grant_amount", "sum")
+        ).reset_index()
+        purpose_summary["label"] = purpose_summary["purpose_primary"].map(tag_label_map).fillna(purpose_summary["purpose_primary"])
+        purpose_summary = purpose_summary.sort_values("amount", ascending=False)
+        
+        # Display as horizontal metrics
+        cols = st.columns(min(len(purpose_summary), 4))
+        for i, row in enumerate(purpose_summary.head(8).itertuples()):
+            col_idx = i % 4
+            with cols[col_idx]:
+                st.metric(
+                    row.label,
+                    f"{row.count:,} grants",
+                    f"${row.amount:,.0f}"
+                )
+    
+    st.markdown("---")
+    
+    # Filter section
+    st.markdown("**Filter Grants by Purpose**")
+    
+    # Tag filter (multi-select)
+    filter_options = [tag_label_map.get(t, t) for t in all_tags]
+    tag_to_key = {tag_label_map.get(t, t): t for t in all_tags}
+    
+    selected_labels = st.multiselect(
+        "Select purpose categories",
+        options=filter_options,
+        default=[],
+        help="Select one or more purpose categories to filter grants. Leave empty to show all."
+    )
+    
+    # Convert selected labels back to keys
+    selected_tags = [tag_to_key.get(lbl, lbl) for lbl in selected_labels]
+    
+    # Apply filter
+    if selected_tags:
+        mask = grants_df["purpose_tags"].fillna("").apply(
+            lambda s: any(t in str(s).split("|") for t in selected_tags)
+        )
+        filtered_df = grants_df[mask]
+    else:
+        filtered_df = grants_df
+    
+    # Show filtered results
+    st.markdown(f"**Showing {len(filtered_df):,} grants** ({100*len(filtered_df)/total_grants:.0f}% of total)")
+    
+    if "grant_amount" in filtered_df.columns:
+        filtered_amount = filtered_df["grant_amount"].sum()
+        st.caption(f"Total filtered funding: ${filtered_amount:,.0f}")
+    
+    # Display grants table
+    display_cols = ["funder_name", "grantee_name", "grant_amount", "grant_purpose", "purpose_primary_label", "fiscal_year"]
+    display_cols = [c for c in display_cols if c in filtered_df.columns]
+    
+    # Add alternative column names
+    alt_cols = {
+        "funder_name": ["funder", "grantor_name", "grantor"],
+        "grantee_name": ["grantee", "recipient_name", "recipient"],
+        "grant_purpose": ["purpose", "raw_purpose", "description"],
+    }
+    for target, alts in alt_cols.items():
+        if target not in display_cols:
+            for alt in alts:
+                if alt in filtered_df.columns:
+                    display_cols.append(alt)
+                    break
+    
+    if display_cols:
+        # Format amount column
+        show_df = filtered_df[display_cols].copy()
+        for col in show_df.columns:
+            if "amount" in col.lower():
+                show_df[col] = show_df[col].apply(lambda x: f"${x:,.0f}" if pd.notna(x) else "")
+        
+        st.dataframe(show_df.head(100), use_container_width=True, hide_index=True)
+        
+        if len(filtered_df) > 100:
+            st.caption(f"Showing first 100 of {len(filtered_df):,} grants. Download full data below.")
+    
+    # Download filtered data
+    if not filtered_df.empty:
+        csv_data = filtered_df.to_csv(index=False)
+        st.download_button(
+            "📥 Download Filtered Grants (CSV)",
+            data=csv_data,
+            file_name=f"{project_id}_grants_filtered.csv",
+            mime="text/csv"
+        )
 
 
 def render_downloads(data: dict):
@@ -648,21 +962,31 @@ def main():
         st.divider()
     
     # ==========================================================================
-    # Section 4: Node Metrics (optional)
+    # Section 4: Grant Purpose Explorer (if grants_detail.csv available)
+    # ==========================================================================
+    show_purpose_explorer = st.checkbox("🎯 Show Grant Purpose Explorer", value=False)
+    if show_purpose_explorer:
+        render_grant_purpose_explorer(data.get("grants_df"), data["project_id"])
+        st.divider()
+    elif not data.get("has_grants_detail"):
+        st.caption(f"*Grant Purpose Explorer unavailable (missing `grants_detail.csv` in `demo_data/{data['project_id']}/`)*")
+    
+    # ==========================================================================
+    # Section 5: Node Metrics (optional)
     # ==========================================================================
     if data.get("metrics_df") is not None and not data["metrics_df"].empty:
         render_node_metrics(data["metrics_df"])
         st.divider()
     
     # ==========================================================================
-    # Section 5: Downloads
+    # Section 6: Downloads
     # ==========================================================================
     render_downloads(data)
     
     st.divider()
     
     # ==========================================================================
-    # Section 6: Technical Details
+    # Section 7: Technical Details
     # ==========================================================================
     render_technical_details(data)
 
