@@ -35,7 +35,7 @@ from c4c_utils.irs_return_dispatcher import parse_irs_return
 # =============================================================================
 # Constants
 # =============================================================================
-APP_VERSION = "0.11.1"  # Fixed region filtering in analytics and combined grant counts
+APP_VERSION = "0.12.0"  # Filter-consistent metrics, never mix scopes
 MAX_FILES = 50
 C4C_LOGO_URL = "https://static.wixstatic.com/media/275a3f_25063966d6cd496eb2fe3f6ee5cde0fa~mv2.png"
 SOURCE_SYSTEM = "IRS_990"
@@ -602,10 +602,13 @@ def render_single_file_diagnostics(result: dict, expanded: bool = False):
         st.caption(f"{source_badge} • {form_type} • Parser v{diag.get('parser_version', 'unknown')} • {result.get('file', 'unknown')}")
 def render_parse_status(parse_results: list, grants_df: pd.DataFrame = None, region_def: dict = None):
     """
-    Render the parsing status for each file.
+    Render processing status with filter-consistent metrics.
     
-    UPDATED for v2.5 with enhanced diagnostics display.
-    UPDATED for v2.7 to show actual grant count including Schedule I.
+    Two panels:
+    1. Filtered Results - user-facing, all metrics from same filtered dataset
+    2. Return Diagnostics - parser QA, always unfiltered
+    
+    UPDATED for v2.8: Never mix scopes. All bucket counts in a panel come from same dataset.
     """
     if not parse_results:
         return
@@ -615,77 +618,116 @@ def render_parse_status(parse_results: list, grants_df: pd.DataFrame = None, reg
     if parse_results:
         parser_version = parse_results[0].get("diagnostics", {}).get("parser_version", "unknown")
     
-    # Calculate summary stats
+    # Calculate file-level stats (always unfiltered - these are about parsing, not grants)
     success_count = sum(1 for r in parse_results if r["status"] == "success")
     error_count = sum(1 for r in parse_results if r["status"] == "error")
     no_grants_count = sum(1 for r in parse_results if r["status"] == "no_grants")
-    
-    total_3a_grants = sum(r.get("diagnostics", {}).get("grants_3a_count", 0) for r in parse_results)
-    total_3b_grants = sum(r.get("diagnostics", {}).get("grants_3b_count", 0) for r in parse_results)
-    total_3a_amount = sum(r.get("diagnostics", {}).get("grants_3a_total", 0) for r in parse_results)
-    total_3b_amount = sum(r.get("diagnostics", {}).get("grants_3b_total", 0) for r in parse_results)
     total_board = sum(r.get("board_count", 0) for r in parse_results)
     
-    st.subheader("📋 Processing Summary")
-    st.caption(f"Parser v{parser_version}")
+    # ==========================================================================
+    # Panel 1: Filtered Results (user-facing, filter-consistent)
+    # ==========================================================================
+    
+    # Determine if region filter is active
+    region_active = (
+        region_def and 
+        region_def.get("id") != "none" and 
+        grants_df is not None and 
+        not grants_df.empty and
+        "region_relevant" in grants_df.columns
+    )
+    
+    if region_active:
+        region_name = region_def.get("name", "Region")
+        filtered_df = grants_df[grants_df["region_relevant"] == True].copy()
+        scope_label = f"{region_name} Grants"
+        filter_note = f"Showing grants within {region_name} region filter."
+    else:
+        filtered_df = grants_df
+        scope_label = "All Grants"
+        filter_note = "No region filter applied."
+    
+    st.subheader(f"📊 {scope_label}")
+    st.caption(filter_note)
+    
+    # Build filter-consistent summary
+    if filtered_df is not None and not filtered_df.empty and "grant_amount" in filtered_df.columns:
+        # Compute bucket breakdown from filtered data
+        if "grant_bucket" in filtered_df.columns:
+            bucket_col = "grant_bucket"
+        else:
+            bucket_col = None
+        
+        total_count = len(filtered_df)
+        total_amount = float(filtered_df["grant_amount"].sum())
+        
+        if bucket_col:
+            # Get counts by bucket from FILTERED data
+            bucket_summary = filtered_df.groupby(bucket_col, dropna=False).agg({
+                "grant_amount": ["count", "sum"]
+            })
+            bucket_summary.columns = ["count", "amount"]
+            
+            count_3a = int(bucket_summary.loc["3a", "count"]) if "3a" in bucket_summary.index else 0
+            amount_3a = float(bucket_summary.loc["3a", "amount"]) if "3a" in bucket_summary.index else 0
+            count_3b = int(bucket_summary.loc["3b", "count"]) if "3b" in bucket_summary.index else 0
+            amount_3b = float(bucket_summary.loc["3b", "amount"]) if "3b" in bucket_summary.index else 0
+            count_sched_i = int(bucket_summary.loc["schedule_i", "count"]) if "schedule_i" in bucket_summary.index else 0
+            amount_sched_i = float(bucket_summary.loc["schedule_i", "amount"]) if "schedule_i" in bucket_summary.index else 0
+        else:
+            count_3a = amount_3a = count_3b = amount_3b = count_sched_i = amount_sched_i = 0
+        
+        # Display metrics - all from same filtered dataset
+        col1, col2, col3, col4 = st.columns(4)
+        
+        with col1:
+            st.metric("3a (Paid)", f"{count_3a:,}")
+            st.caption(f"${amount_3a:,.0f}")
+        with col2:
+            st.metric("3b (Future)", f"{count_3b:,}")
+            st.caption(f"${amount_3b:,.0f}")
+        with col3:
+            st.metric("Schedule I", f"{count_sched_i:,}")
+            st.caption(f"${amount_sched_i:,.0f}")
+        with col4:
+            st.metric("**Total**", f"{total_count:,}")
+            st.caption(f"${total_amount:,.0f}")
+        
+    else:
+        st.info("No grant data available.")
+    
+    st.divider()
+    
+    # ==========================================================================
+    # Panel 2: Return Diagnostics (parser QA, unfiltered)
+    # ==========================================================================
+    
+    st.subheader("🔍 Return Diagnostics")
+    st.caption(f"Parser v{parser_version} • Return-level parsing stats (unfiltered)")
     
     # File status metrics
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("✅ Success", success_count)
     col2.metric("⚠️ No Grants", no_grants_count)
     col3.metric("❌ Errors", error_count)
-    col4.metric("📄 Total Files", len(parse_results))
-    
-    # Grant totals
-    st.markdown("**Grant Totals**")
-    
-    # Calculate actual total from grants_df (includes Schedule I)
-    if grants_df is not None and not grants_df.empty:
-        # Check if region filtering is active
-        if region_def and region_def.get("id") != "none" and "region_relevant" in grants_df.columns:
-            filtered_grants = grants_df[grants_df["region_relevant"] == True]
-            actual_grant_count = len(filtered_grants)
-            actual_grant_amount = filtered_grants["grant_amount"].sum() if "grant_amount" in filtered_grants.columns else 0
-            region_label = f" ({region_def.get('name', 'Region')})"
-        else:
-            actual_grant_count = len(grants_df)
-            actual_grant_amount = grants_df["grant_amount"].sum() if "grant_amount" in grants_df.columns else 0
-            region_label = ""
-    else:
-        actual_grant_count = total_3a_grants + total_3b_grants
-        actual_grant_amount = total_3a_amount + total_3b_amount
-        region_label = ""
-    
-    gcol1, gcol2, gcol3, gcol4 = st.columns(4)
-    with gcol1:
-        st.metric("3a (Paid)", f"{total_3a_grants:,} grants")
-        st.caption(f"${total_3a_amount:,}")
-    with gcol2:
-        st.metric("3b (Future)", f"{total_3b_grants:,} grants")
-        st.caption(f"${total_3b_amount:,}")
-    with gcol3:
-        st.metric(f"Combined{region_label}", f"{actual_grant_count:,} grants")
-        st.caption(f"${actual_grant_amount:,.0f}")
-    with gcol4:
-        st.metric("👤 Board Members", f"{total_board:,}")
+    col4.metric("👤 Board Members", f"{total_board:,}")
     
     # Individual file results
-    st.markdown("**Individual Results**")
-    
-    # Sort: errors first, then warnings, then success
-    def sort_key(r):
-        if r.get("diagnostics", {}).get("errors"):
-            return 0
-        if r.get("diagnostics", {}).get("warnings"):
-            return 1
-        if r.get("status") == "no_grants":
-            return 2
-        return 3
-    
-    sorted_results = sorted(parse_results, key=sort_key)
-    
-    for result in sorted_results:
-        render_single_file_diagnostics(result, expanded=False)
+    with st.expander("📄 Individual File Results", expanded=False):
+        # Sort: errors first, then warnings, then success
+        def sort_key(r):
+            if r.get("diagnostics", {}).get("errors"):
+                return 0
+            if r.get("diagnostics", {}).get("warnings"):
+                return 1
+            if r.get("status") == "no_grants":
+                return 2
+            return 3
+        
+        sorted_results = sorted(parse_results, key=sort_key)
+        
+        for result in sorted_results:
+            render_single_file_diagnostics(result, expanded=False)
 
 
 # =============================================================================
@@ -1038,33 +1080,24 @@ def render_region_summary(grants_df: pd.DataFrame):
     
     region_name = summary.get("region_name", "")
     if region_name and region_name != "(no region tagging)":
-        st.subheader(f"🗺️ {region_name} Relevance")
+        st.subheader(f"🗺️ {region_name} Grants")
         
-        col1, col2, col3 = st.columns(3)
+        col1, col2 = st.columns(2)
         
-        total_grants = summary.get('total_grants', 0)
         region_count = summary.get('region_relevant_count', 0)
         region_amount = summary.get('region_relevant_amount', 0)
         
         with col1:
-            st.metric("Total Grants", f"{total_grants:,}")
+            st.metric(f"{region_name} Grants", f"{region_count:,}")
         with col2:
-            st.metric(
-                "Region-Relevant",
-                f"{region_count:,}",
-                delta=f"{region_count/total_grants*100:.1f}%" if total_grants > 0 else None
-            )
-        with col3:
-            st.metric(
-                "Region Amount",
-                f"${region_amount:,.0f}"
-            )
+            st.metric(f"{region_name} Amount", f"${region_amount:,.0f}")
 # =============================================================================
 # Other Rendering Functions
 # =============================================================================
 def render_graph_summary(nodes_df: pd.DataFrame, edges_df: pd.DataFrame, grants_df: pd.DataFrame = None):
-    """Render summary metrics for the graph."""
+    """Render summary metrics for the graph (full graph structure, unfiltered)."""
     st.subheader("📊 Graph Summary")
+    st.caption("Full graph structure (before region filtering)")
     
     col1, col2, col3, col4 = st.columns(4)
     
@@ -1491,8 +1524,7 @@ def render_upload_interface(project_name: str):
         # Render outputs from session state
         render_graph_summary(st.session_state.nodes_df, st.session_state.edges_df, st.session_state.grants_df)
         
-        # Render region summary if region tagging was applied
-        render_region_summary(st.session_state.grants_df)
+        # Note: Region-filtered grant metrics are now shown in render_parse_status
         
         show_analytics = st.checkbox("📊 Show Network Analytics", value=False)
         if show_analytics:
