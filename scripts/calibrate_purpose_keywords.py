@@ -268,9 +268,9 @@ def main():
     print(f"Loading {csv_path}...")
     df = pd.read_csv(csv_path)
     
-    # Find purpose column
+    # Find purpose column (grant_purpose_raw is standard from OrgGraph US)
     purpose_col = None
-    for col in ["grant_purpose", "purpose", "raw_purpose", "grant_purpose_raw", "description"]:
+    for col in ["grant_purpose_raw", "grant_purpose", "purpose", "raw_purpose", "description"]:
         if col in df.columns:
             purpose_col = col
             break
