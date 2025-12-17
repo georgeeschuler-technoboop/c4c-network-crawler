@@ -31,11 +31,12 @@ from c4c_utils.region_tagger import apply_region_tagging, get_region_summary
 from c4c_utils.board_extractor import BoardExtractor
 from c4c_utils.irs_return_qa import compute_confidence, render_return_qa_panel
 from c4c_utils.irs_return_dispatcher import parse_irs_return
+from c4c_utils.summary_helpers import build_grants_summary, get_filtered_grants
 
 # =============================================================================
 # Constants
 # =============================================================================
-APP_VERSION = "0.12.0"  # Filter-consistent metrics, never mix scopes
+APP_VERSION = "0.12.1"  # Filter-consistent metrics using summary_helpers module
 MAX_FILES = 50
 C4C_LOGO_URL = "https://static.wixstatic.com/media/275a3f_25063966d6cd496eb2fe3f6ee5cde0fa~mv2.png"
 SOURCE_SYSTEM = "IRS_990"
@@ -639,7 +640,7 @@ def render_parse_status(parse_results: list, grants_df: pd.DataFrame = None, reg
     
     if region_active:
         region_name = region_def.get("name", "Region")
-        filtered_df = grants_df[grants_df["region_relevant"] == True].copy()
+        filtered_df = get_filtered_grants(grants_df, region_def)
         scope_label = f"{region_name} Grants"
         filter_note = f"Showing grants within {region_name} region filter."
     else:
@@ -650,48 +651,32 @@ def render_parse_status(parse_results: list, grants_df: pd.DataFrame = None, reg
     st.subheader(f"📊 {scope_label}")
     st.caption(filter_note)
     
-    # Build filter-consistent summary
+    # Build filter-consistent summary using helper
     if filtered_df is not None and not filtered_df.empty and "grant_amount" in filtered_df.columns:
-        # Compute bucket breakdown from filtered data
-        if "grant_bucket" in filtered_df.columns:
-            bucket_col = "grant_bucket"
-        else:
-            bucket_col = None
+        summary = build_grants_summary(filtered_df, scope_label=scope_label)
         
-        total_count = len(filtered_df)
-        total_amount = float(filtered_df["grant_amount"].sum())
-        
-        if bucket_col:
-            # Get counts by bucket from FILTERED data
-            bucket_summary = filtered_df.groupby(bucket_col, dropna=False).agg({
-                "grant_amount": ["count", "sum"]
-            })
-            bucket_summary.columns = ["count", "amount"]
-            
-            count_3a = int(bucket_summary.loc["3a", "count"]) if "3a" in bucket_summary.index else 0
-            amount_3a = float(bucket_summary.loc["3a", "amount"]) if "3a" in bucket_summary.index else 0
-            count_3b = int(bucket_summary.loc["3b", "count"]) if "3b" in bucket_summary.index else 0
-            amount_3b = float(bucket_summary.loc["3b", "amount"]) if "3b" in bucket_summary.index else 0
-            count_sched_i = int(bucket_summary.loc["schedule_i", "count"]) if "schedule_i" in bucket_summary.index else 0
-            amount_sched_i = float(bucket_summary.loc["schedule_i", "amount"]) if "schedule_i" in bucket_summary.index else 0
-        else:
-            count_3a = amount_3a = count_3b = amount_3b = count_sched_i = amount_sched_i = 0
+        by_bucket = summary["by_bucket"]
+        total = summary["total"]
         
         # Display metrics - all from same filtered dataset
         col1, col2, col3, col4 = st.columns(4)
         
         with col1:
-            st.metric("3a (Paid)", f"{count_3a:,}")
-            st.caption(f"${amount_3a:,.0f}")
+            st.metric("3a (Paid)", f"{by_bucket['3a']['count']:,}")
+            st.caption(f"${by_bucket['3a']['amount']:,.0f}")
         with col2:
-            st.metric("3b (Future)", f"{count_3b:,}")
-            st.caption(f"${amount_3b:,.0f}")
+            st.metric("3b (Future)", f"{by_bucket['3b']['count']:,}")
+            st.caption(f"${by_bucket['3b']['amount']:,.0f}")
         with col3:
-            st.metric("Schedule I", f"{count_sched_i:,}")
-            st.caption(f"${amount_sched_i:,.0f}")
+            st.metric("Schedule I", f"{by_bucket['schedule_i']['count']:,}")
+            st.caption(f"${by_bucket['schedule_i']['amount']:,.0f}")
         with col4:
-            st.metric("**Total**", f"{total_count:,}")
-            st.caption(f"${total_amount:,.0f}")
+            st.metric("**Total**", f"{total['count']:,}")
+            st.caption(f"${total['amount']:,.0f}")
+        
+        # Show "other" bucket if present
+        if "__other__" in by_bucket and by_bucket["__other__"]["count"] > 0:
+            st.caption(f"*+ {by_bucket['__other__']['count']:,} other grants (${by_bucket['__other__']['amount']:,.0f})*")
         
     else:
         st.info("No grant data available.")
