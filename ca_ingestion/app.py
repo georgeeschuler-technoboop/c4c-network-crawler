@@ -24,7 +24,7 @@ from io import BytesIO, StringIO
 # Config
 # =============================================================================
 
-APP_VERSION = "0.6.0"  # UI consistency with OrgGraph US - section headers, analytics, visual hierarchy
+APP_VERSION = "0.6.1"  # Fixed directors parsing for separate Last Name/First Name columns
 C4C_LOGO_URL = "https://static.wixstatic.com/media/275a3f_bcf888c01ebe499ca978b82f5291947b~mv2.png"
 SOURCE_SYSTEM = "CHARITYDATA_CA"
 JURISDICTION = "CA"
@@ -292,32 +292,89 @@ def deterministic_board_edge_id(from_id: str, to_id: str, role: str) -> str:
 # =============================================================================
 
 def process_directors_file(directors_df: pd.DataFrame, org_slug: str, cra_bn: str) -> tuple:
-    """Process directors/trustees CSV into canonical format."""
+    """
+    Process directors/trustees CSV into canonical format.
+    
+    Handles two charitydata.ca export formats:
+    1. Combined name: "Director / Trustee" or "Name" column
+    2. Separate columns: "Last Name", "First Name", "Position", etc.
+    """
     nodes = []
     edges = []
+    
+    # Detect format: separate columns vs combined name
+    has_separate_names = "Last Name" in directors_df.columns and "First Name" in directors_df.columns
+    has_combined_name = "Director / Trustee" in directors_df.columns or "Name" in directors_df.columns
     
     year_col = latest_year_column(directors_df)
     
     for _, row in directors_df.iterrows():
-        name_field = row.get("Director / Trustee") or row.get("Name") or ""
-        if not name_field or pd.isna(name_field):
+        # Extract name based on format
+        if has_separate_names:
+            # Format 2: Separate columns (newer charitydata.ca export)
+            last_name = str(row.get("Last Name", "")).strip()
+            first_name = str(row.get("First Name", "")).strip()
+            
+            # Skip if no name
+            if not last_name and not first_name:
+                continue
+            if pd.isna(last_name) and pd.isna(first_name):
+                continue
+            
+            # Clean up NaN strings
+            if last_name.lower() == "nan":
+                last_name = ""
+            if first_name.lower() == "nan":
+                first_name = ""
+            
+            # Get role from Position column
+            position = str(row.get("Position", "")).strip()
+            if position.lower() == "nan" or not position:
+                role = "Director/Trustee"
+            else:
+                role = position.title()
+            
+            # Get at arms length
+            at_arms_length = str(row.get("At Arm's Length", "")).strip().upper() == "Y"
+            
+            # Get dates
+            start_date = clean_nan(str(row.get("Appointed", "")))
+            end_date = clean_nan(str(row.get("Ceased", "")))
+            
+        elif has_combined_name:
+            # Format 1: Combined name column (older format)
+            name_field = row.get("Director / Trustee") or row.get("Name") or ""
+            if not name_field or pd.isna(name_field):
+                continue
+            
+            # Check year column for active status
+            if year_col and year_col in row.index:
+                active_val = row.get(year_col)
+                if pd.isna(active_val) or str(active_val).strip() == "":
+                    continue
+            
+            # Parse name (LASTNAME, FIRSTNAME format)
+            name_str = str(name_field).strip()
+            parts = name_str.split(",", 1)
+            if len(parts) == 2:
+                last_name = parts[0].strip()
+                first_name = parts[1].strip()
+            else:
+                name_parts = name_str.split()
+                first_name = name_parts[0] if name_parts else ""
+                last_name = " ".join(name_parts[1:]) if len(name_parts) > 1 else ""
+            
+            role = "Director/Trustee"
+            at_arms_length = True
+            start_date = ""
+            end_date = ""
+        else:
+            # Unknown format - skip
             continue
         
-        if year_col and year_col in row.index:
-            active_val = row.get(year_col)
-            if pd.isna(active_val) or str(active_val).strip() == "":
-                continue
-        
-        # Parse name
-        name_str = str(name_field).strip()
-        parts = name_str.split(",", 1)
-        if len(parts) == 2:
-            last_name = parts[0].strip()
-            first_name = parts[1].strip()
-        else:
-            name_parts = name_str.split()
-            first_name = name_parts[0] if name_parts else ""
-            last_name = " ".join(name_parts[1:]) if len(name_parts) > 1 else ""
+        # Skip if we still don't have a valid name
+        if not first_name and not last_name:
+            continue
         
         # Generate IDs
         person_id = deterministic_person_id(first_name, last_name, org_slug)
@@ -337,7 +394,6 @@ def process_directors_file(directors_df: pd.DataFrame, org_slug: str, cra_bn: st
         nodes.append(person_node)
         
         # Create board edge
-        role = "Director/Trustee"
         edge_id = deterministic_board_edge_id(person_id, org_id, role)
         
         board_edge = {col: "" for col in EDGE_COLUMNS}
@@ -347,6 +403,9 @@ def process_directors_file(directors_df: pd.DataFrame, org_slug: str, cra_bn: st
             "to_id": org_id,
             "edge_type": "BOARD_MEMBERSHIP",
             "role": role,
+            "start_date": start_date,
+            "end_date": end_date,
+            "at_arms_length": "Y" if at_arms_length else "N",
             "source_system": SOURCE_SYSTEM,
         })
         edges.append(board_edge)
