@@ -19,7 +19,12 @@ UPDATED v0.5.2: Data-calibrated purpose keywords
 - Keywords calibrated from GLFN grants_detail.csv (5,160 grants)
 - Added Arts & Culture category
 - Improved coverage: 80% of grants now categorized
-- Added: restoration, creek, democracy, journalism, discretionary, membership
+
+UPDATED v0.5.3: Fixed input/output flow
+- Inputs: nodes.csv + edges.csv (required), grants_detail.csv (optional)
+- Outputs: project_summary.json, insight_cards.json, insight_report.md, node_metrics.csv
+- Clear "Run" vs "Load Previous" workflow
+- No longer requires pre-computed artifacts to run
 """
 
 import streamlit as st
@@ -36,7 +41,7 @@ import importlib.util
 # Config
 # =============================================================================
 
-APP_VERSION = "0.5.2"
+APP_VERSION = "0.5.3"
 C4C_LOGO_URL = "https://static.wixstatic.com/media/275a3f_ed8e76c8495d4799a5d7575822009e93~mv2.png"
 
 # Get paths
@@ -262,55 +267,55 @@ def get_projects() -> list:
             # Check what files exist
             has_nodes = (item / "nodes.csv").exists()
             has_edges = (item / "edges.csv").exists()
+            has_grants_detail = (item / "grants_detail.csv").exists()
+            
+            # Pre-computed artifacts (outputs from previous runs)
             has_summary = (item / "project_summary.json").exists()
             has_cards = (item / "insight_cards.json").exists()
             has_report = (item / "insight_report.md").exists()
             has_metrics = (item / "node_metrics.csv").exists()
-            has_grants_detail = (item / "grants_detail.csv").exists()
             
-            if has_nodes or has_edges or has_summary:
+            # Only show projects that have the required inputs
+            if has_nodes and has_edges:
                 projects.append({
                     "id": item.name,
                     "path": item,
+                    # Required inputs
                     "has_nodes": has_nodes,
                     "has_edges": has_edges,
+                    # Optional input
+                    "has_grants_detail": has_grants_detail,
+                    # Pre-computed outputs (from previous runs)
                     "has_summary": has_summary,
                     "has_cards": has_cards,
                     "has_report": has_report,
                     "has_metrics": has_metrics,
-                    "has_grants_detail": has_grants_detail,
-                    "is_complete": has_summary and has_cards and has_report,
+                    "has_precomputed": has_summary and has_cards,
                 })
     
-    # Sort: complete projects first, then alphabetically
-    projects.sort(key=lambda x: (not x["is_complete"], x["id"].lower()))
+    # Sort alphabetically
+    projects.sort(key=lambda x: x["id"].lower())
     return projects
 
 
-def load_project_data(project: dict) -> dict:
-    """Load all available data for a project."""
+def load_project_inputs(project: dict) -> dict:
+    """Load input files for a project (nodes, edges, grants_detail)."""
     path = project["path"]
     data = {
         "project_id": project["id"],
         "nodes_df": None,
         "edges_df": None,
         "grants_df": None,
-        "project_summary": None,
-        "insight_cards": None,
-        "markdown_report": None,
-        "metrics_df": None,
         "has_grants_detail": project.get("has_grants_detail", False),
     }
     
-    # Load CSVs
+    # Load required inputs
     if project["has_nodes"]:
         data["nodes_df"] = pd.read_csv(path / "nodes.csv")
     if project["has_edges"]:
         data["edges_df"] = pd.read_csv(path / "edges.csv")
-    if project["has_metrics"]:
-        data["metrics_df"] = pd.read_csv(path / "node_metrics.csv")
     
-    # Load grants_detail.csv and add purpose classifications
+    # Load optional grants_detail.csv and add purpose classifications
     if project.get("has_grants_detail"):
         try:
             grants_df = pd.read_csv(path / "grants_detail.csv")
@@ -320,20 +325,35 @@ def load_project_data(project: dict) -> dict:
             data["grants_df"] = None
             data["has_grants_detail"] = False
     
-    # Load JSON artifacts
-    if project["has_summary"]:
-        with open(path / "project_summary.json", "r") as f:
-            data["project_summary"] = json.load(f)
-    if project["has_cards"]:
-        with open(path / "insight_cards.json", "r") as f:
-            data["insight_cards"] = json.load(f)
-    
-    # Load markdown report
-    if project["has_report"]:
-        with open(path / "insight_report.md", "r") as f:
-            data["markdown_report"] = f.read()
-    
     return data
+
+
+def load_precomputed_artifacts(project: dict) -> dict:
+    """Load pre-computed artifacts from a previous run (if they exist)."""
+    path = project["path"]
+    artifacts = {
+        "project_summary": None,
+        "insight_cards": None,
+        "markdown_report": None,
+        "metrics_df": None,
+    }
+    
+    if project.get("has_summary"):
+        with open(path / "project_summary.json", "r") as f:
+            artifacts["project_summary"] = json.load(f)
+    
+    if project.get("has_cards"):
+        with open(path / "insight_cards.json", "r") as f:
+            artifacts["insight_cards"] = json.load(f)
+    
+    if project.get("has_report"):
+        with open(path / "insight_report.md", "r") as f:
+            artifacts["markdown_report"] = f.read()
+    
+    if project.get("has_metrics"):
+        artifacts["metrics_df"] = pd.read_csv(path / "node_metrics.csv")
+    
+    return artifacts
 
 
 # =============================================================================
@@ -341,8 +361,8 @@ def load_project_data(project: dict) -> dict:
 # =============================================================================
 
 def init_session_state():
-    if "current_project" not in st.session_state:
-        st.session_state.current_project = None
+    if "current_project_id" not in st.session_state:
+        st.session_state.current_project_id = None
     if "project_data" not in st.session_state:
         st.session_state.project_data = None
 
@@ -907,7 +927,7 @@ def main():
     # Section 1: Project Selection
     # ==========================================================================
     st.subheader("🗂️ Project")
-    st.caption("Select a prepared demo dataset (exported from OrgGraph). Insight Engine reads the exported network + metrics.")
+    st.caption("Select a project folder containing nodes.csv and edges.csv (exported from OrgGraph).")
     
     projects = get_projects()
     
@@ -917,77 +937,108 @@ def main():
         
         Expected location: `{DEMO_DATA_DIR}`
         
-        Each project folder should contain at minimum `nodes.csv` and `edges.csv`.
-        For full functionality, also include: `project_summary.json`, `insight_cards.json`, `insight_report.md`, `node_metrics.csv`
+        Each project folder must contain:
+        - `nodes.csv` (required)
+        - `edges.csv` (required)
+        - `grants_detail.csv` (optional, enables Purpose Explorer)
         """)
         st.stop()
     
     # Build project selector
-    project_options = []
-    for p in projects:
-        status = "✅" if p["is_complete"] else "⚠️"
-        project_options.append(f"{status} {p['id']}")
+    project_options = [p["id"] for p in projects]
     
-    selected_option = st.selectbox(
+    selected_id = st.selectbox(
         "Select project",
         project_options,
         label_visibility="collapsed"
     )
     
-    # Find selected project
-    selected_id = selected_option.split(" ", 1)[1]  # Remove status emoji
     selected_project = next((p for p in projects if p["id"] == selected_id), None)
     
     if not selected_project:
         st.error("Project not found")
         st.stop()
     
-    # Show project status
-    if selected_project["is_complete"]:
-        st.success(f"📂 **{selected_id}** — Complete dataset (pre-computed insights available)")
-    else:
-        missing = []
-        if not selected_project["has_summary"]:
-            missing.append("project_summary.json")
-        if not selected_project["has_cards"]:
-            missing.append("insight_cards.json")
-        if not selected_project["has_report"]:
-            missing.append("insight_report.md")
-        st.info(f"📂 **{selected_id}** — Missing: {', '.join(missing)}")
+    # Show project input status
+    st.markdown(f"**📂 {selected_id}**")
     
-    # Load or compute data
-    if selected_project["is_complete"]:
-        # Load pre-exported data
-        data = load_project_data(selected_project)
-    else:
-        # Need to compute
-        col1, col2 = st.columns([1, 3])
-        with col1:
-            compute_btn = st.button("🚀 Compute Insights", type="primary")
-        
-        if compute_btn:
-            data = compute_insights(selected_project, selected_id)
-            if data:
-                st.session_state.project_data = data
-                st.rerun()
-        
-        if st.session_state.project_data and st.session_state.project_data.get("project_id") == selected_id:
-            data = st.session_state.project_data
-        else:
-            st.info("Click 'Compute Insights' to generate analysis from the network data.")
-            st.stop()
+    col1, col2, col3 = st.columns(3)
+    col1.markdown("✅ nodes.csv" if selected_project["has_nodes"] else "❌ nodes.csv")
+    col2.markdown("✅ edges.csv" if selected_project["has_edges"] else "❌ edges.csv")
+    col3.markdown("✅ grants_detail.csv" if selected_project["has_grants_detail"] else "⚪ grants_detail.csv (optional)")
+    
+    if selected_project["has_precomputed"]:
+        st.caption("💾 *Pre-computed results available from previous run*")
     
     st.divider()
     
     # ==========================================================================
-    # Section 2: Network Results (from project_summary.json)
+    # Section 2: Run or Load
+    # ==========================================================================
+    
+    # Load input data (nodes, edges, grants_detail)
+    inputs = load_project_inputs(selected_project)
+    
+    # Check session state for computed results
+    data = None
+    
+    if selected_project["has_precomputed"]:
+        # Offer choice: load previous or recompute
+        col1, col2 = st.columns(2)
+        with col1:
+            load_btn = st.button("📂 Load Previous Results", type="secondary", use_container_width=True)
+        with col2:
+            compute_btn = st.button("🚀 Recompute Insights", type="primary", use_container_width=True)
+        
+        if load_btn:
+            artifacts = load_precomputed_artifacts(selected_project)
+            data = {**inputs, **artifacts}
+            st.session_state.project_data = data
+            st.session_state.current_project_id = selected_id
+            st.rerun()
+        
+        if compute_btn:
+            computed = compute_insights(selected_project, selected_id)
+            if computed:
+                data = {**inputs, **computed}
+                st.session_state.project_data = data
+                st.session_state.current_project_id = selected_id
+                st.rerun()
+    else:
+        # No precomputed - must run
+        compute_btn = st.button("🚀 Run Insights Engine", type="primary")
+        
+        if compute_btn:
+            computed = compute_insights(selected_project, selected_id)
+            if computed:
+                data = {**inputs, **computed}
+                st.session_state.project_data = data
+                st.session_state.current_project_id = selected_id
+                st.rerun()
+    
+    # Check if we have data from session state
+    if st.session_state.get("project_data") and st.session_state.get("current_project_id") == selected_id:
+        data = st.session_state.project_data
+        # Make sure grants_df is included from inputs
+        if data.get("grants_df") is None and inputs.get("grants_df") is not None:
+            data["grants_df"] = inputs["grants_df"]
+            data["has_grants_detail"] = inputs["has_grants_detail"]
+    
+    if not data or not data.get("project_summary"):
+        st.info("Click a button above to load or compute insights.")
+        st.stop()
+    
+    st.divider()
+    
+    # ==========================================================================
+    # Section 3: Network Results (from project_summary.json)
     # ==========================================================================
     if data.get("project_summary"):
         render_network_results(data["project_summary"])
         st.divider()
     
     # ==========================================================================
-    # Section 3: Health Banner + Insight Cards
+    # Section 4: Health Banner + Insight Cards
     # ==========================================================================
     if data.get("insight_cards"):
         render_health_banner(data["insight_cards"])
@@ -996,7 +1047,7 @@ def main():
         st.divider()
     
     # ==========================================================================
-    # Section 4: Grant Purpose Explorer (if grants_detail.csv available)
+    # Section 5: Grant Purpose Explorer (if grants_detail.csv available)
     # ==========================================================================
     show_purpose_explorer = st.checkbox("🎯 Show Grant Purpose Explorer", value=False)
     if show_purpose_explorer:
@@ -1006,21 +1057,21 @@ def main():
         st.caption(f"*Grant Purpose Explorer unavailable (missing `grants_detail.csv` in `demo_data/{data['project_id']}/`)*")
     
     # ==========================================================================
-    # Section 5: Node Metrics (optional)
+    # Section 6: Node Metrics (optional)
     # ==========================================================================
     if data.get("metrics_df") is not None and not data["metrics_df"].empty:
         render_node_metrics(data["metrics_df"])
         st.divider()
     
     # ==========================================================================
-    # Section 6: Downloads
+    # Section 7: Downloads
     # ==========================================================================
     render_downloads(data)
     
     st.divider()
     
     # ==========================================================================
-    # Section 7: Technical Details
+    # Section 8: Technical Details
     # ==========================================================================
     render_technical_details(data)
 
