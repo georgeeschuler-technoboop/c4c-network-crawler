@@ -14,6 +14,12 @@ UPDATED v0.5.1: Added Grant Purpose Explorer
 - Loads grants_detail.csv when available
 - Keyword-based purpose classification (no AI)
 - Filter grants by purpose tags
+
+UPDATED v0.5.2: Data-calibrated purpose keywords
+- Keywords calibrated from GLFN grants_detail.csv (5,160 grants)
+- Added Arts & Culture category
+- Improved coverage: 80% of grants now categorized
+- Added: restoration, creek, democracy, journalism, discretionary, membership
 """
 
 import streamlit as st
@@ -30,7 +36,7 @@ import importlib.util
 # Config
 # =============================================================================
 
-APP_VERSION = "0.5.1"
+APP_VERSION = "0.5.2"
 C4C_LOGO_URL = "https://static.wixstatic.com/media/275a3f_ed8e76c8495d4799a5d7575822009e93~mv2.png"
 
 # Get paths
@@ -76,31 +82,49 @@ def contains_phrase(text: str, phrase: str) -> bool:
 
 
 # Purpose categories with phrases and words
+# CALIBRATED from GLFN grants_detail.csv (5,160 grants)
 CORE_PURPOSE_CATEGORIES = {
     "water": {
         "label": "💧 Water",
-        "phrases": ["drinking water", "stormwater", "water quality", "watershed restoration", "water stewardship", "clean water"],
-        "words": ["water", "watershed", "river", "rivers", "lake", "lakes", "wetland", "wetlands", "aquifer", "freshwater", "groundwater"]
+        "phrases": ["drinking water", "stormwater", "water quality", "watershed restoration", 
+                   "water stewardship", "clean water", "great lakes", "wetland restoration",
+                   "lakes region", "flint water", "river restoration", "creek restoration"],
+        "words": ["water", "watershed", "river", "rivers", "lake", "lakes", "wetland", "wetlands", 
+                 "aquifer", "freshwater", "groundwater", "stream", "coastal", "flint", "creek"]
     },
     "environment_nature": {
         "label": "🌲 Environment & Nature",
-        "phrases": ["habitat restoration", "land conservation", "natural resources"],
-        "words": ["environment", "environmental", "nature", "conservation", "biodiversity", "ecosystem", "habitat", "wildlife", "forest", "forestry", "land", "parks"]
+        "phrases": ["habitat restoration", "land conservation", "natural resources", 
+                   "salmon habitat", "land mgmt", "habitat for", "forest restoration"],
+        "words": ["environment", "environmental", "nature", "conservation", "biodiversity", 
+                 "ecosystem", "habitat", "wildlife", "forest", "forests", "forestry", 
+                 "land", "parks", "grassland", "island", "restore", "restoring", 
+                 "restoration", "protect", "monitoring"]
     },
     "climate_energy": {
         "label": "🌡️ Climate & Energy",
-        "phrases": ["climate change", "renewable energy", "clean energy", "climate action"],
-        "words": ["climate", "carbon", "emissions", "decarbonization", "resilience", "solar", "wind", "energy", "sustainability", "sustainable"]
+        "phrases": ["climate change", "renewable energy", "clean energy", "climate action",
+                   "climate resilience"],
+        "words": ["climate", "carbon", "emissions", "decarbonization", "resilience", 
+                 "solar", "wind", "energy", "sustainability", "sustainable", "renewable"]
     },
     "education_research": {
         "label": "📚 Education & Research",
-        "phrases": ["environmental education", "stem education"],
-        "words": ["education", "educational", "research", "scholarship", "scholarships", "university", "college", "school", "learning", "training", "fellows", "fellowship"]
+        "phrases": ["environmental education", "stem education", "afterschool network",
+                   "statewide afterschool", "quality afterschool", "summer learning",
+                   "learning opportunities", "school linked"],
+        "words": ["education", "educational", "research", "scholarship", "scholarships", 
+                 "university", "college", "school", "learning", "training", "fellows", 
+                 "fellowship", "afterschool"]
     },
     "community_social": {
         "label": "👥 Community & Social",
-        "phrases": ["community development", "civic engagement", "public health"],
-        "words": ["community", "communities", "civic", "social", "equity", "justice", "health", "neighborhood", "urban", "rural", "youth", "children"]
+        "phrases": ["community development", "civic engagement", "public health",
+                   "gun violence", "violence prevention", "justice reform", 
+                   "economic mobility", "underserved youth"],
+        "words": ["community", "communities", "civic", "social", "equity", "justice", 
+                 "health", "neighborhood", "urban", "rural", "youth", "children",
+                 "violence", "prevention", "mobility", "underserved"]
     },
     "agriculture_food": {
         "label": "🌾 Agriculture & Food",
@@ -109,13 +133,23 @@ CORE_PURPOSE_CATEGORIES = {
     },
     "policy_advocacy": {
         "label": "📢 Policy & Advocacy",
-        "phrases": ["policy research", "public policy"],
-        "words": ["policy", "advocacy", "legislation", "regulatory", "government"]
+        "phrases": ["policy research", "public policy", "reform efforts"],
+        "words": ["policy", "advocacy", "legislation", "regulatory", "government", "reform",
+                 "democracy", "democratic", "voting", "civic"]
+    },
+    "arts_culture": {
+        "label": "🎭 Arts & Culture",
+        "phrases": ["arts and culture", "cultural programs"],
+        "words": ["arts", "culture", "cultural", "museum", "theater", "theatre", 
+                 "music", "dance", "heritage", "journalism", "media"]
     },
     "general_support": {
         "label": "🎯 General Support",
-        "phrases": ["general support", "operating support", "core support", "general operating"],
-        "words": ["operations", "operating", "unrestricted", "capacity"]
+        "phrases": ["general support", "operating support", "core support", "general operating",
+                   "general purposes", "charitable purposes", "charitable support", 
+                   "mission fund", "discretionary fund", "membership grants"],
+        "words": ["operations", "operating", "unrestricted", "capacity", "mission",
+                 "discretionary", "membership"]
     },
 }
 
