@@ -1,12 +1,34 @@
 """
 OrgGraph (US) — US Nonprofit Registry Ingestion
+
 Multi-project Streamlit app:
 - New Project: Create a new project and upload initial data
 - Add to Existing: Select existing project and merge new data
 - View Demo: Read-only view of sample demo data
+
 Outputs conform to C4C Network Schema v1 (MVP):
 - nodes.csv: ORG and PERSON nodes
 - edges.csv: GRANT and BOARD_MEMBERSHIP edges
+- grants_detail.csv: Canonical grant detail format (shared with CA)
+
+VERSION HISTORY:
+----------------
+UPDATED v0.14.0: Multi-project support
+- Project selection UI (New / Add to Existing / View Demo)
+- Merge behavior for adding foundations to existing projects
+- Region mode with Great Lakes preset
+
+UPDATED v0.14.1: Region tagging improvements
+- apply_region_tagging() for grantee state/country analysis
+- region_relevant column in grants_detail.csv
+- Region summary stats in UI
+
+UPDATED v0.15.0: grants_detail.csv saved to project folder
+- grants_detail.csv now saved directly to demo_data/{project}/
+- Append-only merge behavior (existing rows preserved)
+- Deduplication by composite key (foundation_ein + grantee_name + amount + year)
+- All 19 canonical columns ensured on every export
+- Schema aligned with OrgGraph CA for cross-border analysis
 """
 import streamlit as st
 import pandas as pd
