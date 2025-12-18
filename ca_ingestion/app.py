@@ -20,6 +20,10 @@ UPDATED v0.8.0: Added Save to Project + schema alignment
 - Save to Project button (writes directly to demo_data/{project}/)
 - Robust currency amount parsing (handles $, CAD, commas, spaces)
 - Schema fully aligned with OrgGraph US v0.15.0+
+- BATCH UPLOAD: Process 5-10 organizations at once!
+  - Upload multiple files per category (assets, directors, grants)
+  - Files auto-grouped by CRA Business Number in header
+  - Per-org results shown with combined merge stats
 """
 
 import streamlit as st
@@ -335,6 +339,214 @@ def read_charitydata_csv_from_upload(uploaded_file) -> tuple:
     """Read a charitydata.ca CSV from Streamlit upload."""
     content = uploaded_file.getvalue().decode("utf-8")
     return _parse_charitydata_content(content)
+
+
+def extract_org_identity_from_file(uploaded_file) -> tuple:
+    """
+    Extract org name and CRA BN from a charitydata.ca file header without fully parsing.
+    Returns: (org_name, cra_bn, file_type)
+    """
+    content = uploaded_file.getvalue().decode("utf-8")
+    lines = content.split("\n")
+    
+    if not lines:
+        return "", "", "unknown"
+    
+    # Parse header line
+    header_line = lines[0].strip().lstrip("\ufeff").strip().strip('"').rstrip(",")
+    m = HEADER_RE.match(header_line)
+    
+    if m:
+        org_name = m.group(1).strip()
+        cra_bn = m.group(2)
+    else:
+        org_name = header_line
+        cra_bn = ""
+    
+    # Detect file type from content
+    file_type = "unknown"
+    if len(lines) > 1:
+        second_line = lines[1].lower() if len(lines) > 1 else ""
+        if "assets" in second_line or "total revenue" in second_line:
+            file_type = "assets"
+        elif "director" in second_line or "trustee" in second_line or "position" in second_line or "first name" in second_line:
+            file_type = "directors"
+        elif "donee" in second_line or "qualified donee" in second_line or "cash" in second_line:
+            file_type = "grants"
+    
+    # Reset file pointer for later use
+    uploaded_file.seek(0)
+    
+    return org_name, cra_bn, file_type
+
+
+def group_files_by_organization(all_files: list) -> dict:
+    """
+    Group uploaded files by organization (CRA BN).
+    
+    Returns: {
+        cra_bn: {
+            "org_name": str,
+            "assets": file or None,
+            "directors": file or None,
+            "grants": file or None,
+        }
+    }
+    """
+    orgs = {}
+    
+    for f in all_files:
+        if f is None:
+            continue
+        
+        org_name, cra_bn, file_type = extract_org_identity_from_file(f)
+        
+        # Use CRA BN as key, or org_name if no BN
+        key = cra_bn if cra_bn else org_name
+        if not key:
+            continue
+        
+        if key not in orgs:
+            orgs[key] = {
+                "org_name": org_name,
+                "cra_bn": cra_bn,
+                "assets": None,
+                "directors": None,
+                "grants": None,
+            }
+        
+        # Assign file to appropriate slot (allow override if same type uploaded twice)
+        if file_type == "assets":
+            orgs[key]["assets"] = f
+        elif file_type == "directors":
+            orgs[key]["directors"] = f
+        elif file_type == "grants":
+            orgs[key]["grants"] = f
+        else:
+            # Unknown type - try to infer from filename
+            fname = f.name.lower() if hasattr(f, 'name') else ""
+            if "asset" in fname:
+                orgs[key]["assets"] = f
+            elif "director" in fname or "trustee" in fname:
+                orgs[key]["directors"] = f
+            elif "grant" in fname:
+                orgs[key]["grants"] = f
+    
+    return orgs
+
+
+def process_batch_organizations(
+    org_files: dict,
+    region_mode: RegionMode,
+    admin1_codes: list,
+    country_codes: list
+) -> tuple:
+    """
+    Process multiple organizations in batch.
+    
+    Args:
+        org_files: dict from group_files_by_organization()
+        region_mode: RegionMode enum
+        admin1_codes: list of state/province codes
+        country_codes: list of country codes
+    
+    Returns: (all_nodes_df, all_edges_df, all_grants_detail_df, batch_stats)
+    """
+    all_nodes = []
+    all_edges = []
+    all_grants_detail = []
+    
+    batch_stats = {
+        "orgs_processed": 0,
+        "orgs_failed": 0,
+        "total_nodes": 0,
+        "total_edges": 0,
+        "total_grants": 0,
+        "org_results": []  # List of per-org stats
+    }
+    
+    for key, files in org_files.items():
+        org_name = files["org_name"]
+        cra_bn = files["cra_bn"]
+        
+        try:
+            # Process this organization's files
+            nodes_df, edges_df, org_attributes = process_uploaded_files(
+                files["assets"],
+                files["directors"],
+                files["grants"]
+            )
+            
+            if nodes_df.empty:
+                batch_stats["orgs_failed"] += 1
+                batch_stats["org_results"].append({
+                    "org_name": org_name,
+                    "cra_bn": cra_bn,
+                    "status": "failed",
+                    "error": "No data extracted"
+                })
+                continue
+            
+            # Build grants_detail if grants file present
+            grants_detail_df = pd.DataFrame(columns=GRANTS_DETAIL_COLUMNS)
+            if files["grants"]:
+                files["grants"].seek(0)
+                grants_df, _, _ = read_charitydata_csv_from_upload(files["grants"])
+                if not grants_df.empty:
+                    source_filename = files["grants"].name if hasattr(files["grants"], 'name') else "grants.csv"
+                    grants_detail_df = build_grants_detail_from_grants_csv(
+                        grants_df=grants_df,
+                        foundation_name=org_attributes.get("org_legal_name", org_name),
+                        foundation_ein=org_attributes.get("tax_id", cra_bn),
+                        source_file=source_filename,
+                        region_mode=region_mode,
+                        admin1_codes=admin1_codes,
+                        country_codes=country_codes
+                    )
+            
+            # Accumulate results
+            all_nodes.append(nodes_df)
+            all_edges.append(edges_df)
+            if not grants_detail_df.empty:
+                all_grants_detail.append(grants_detail_df)
+            
+            # Track stats
+            batch_stats["orgs_processed"] += 1
+            batch_stats["total_nodes"] += len(nodes_df)
+            batch_stats["total_edges"] += len(edges_df)
+            batch_stats["total_grants"] += len(grants_detail_df)
+            batch_stats["org_results"].append({
+                "org_name": org_attributes.get("org_legal_name", org_name),
+                "cra_bn": org_attributes.get("tax_id", cra_bn),
+                "status": "success",
+                "nodes": len(nodes_df),
+                "edges": len(edges_df),
+                "grants": len(grants_detail_df)
+            })
+            
+        except Exception as e:
+            batch_stats["orgs_failed"] += 1
+            batch_stats["org_results"].append({
+                "org_name": org_name,
+                "cra_bn": cra_bn,
+                "status": "failed",
+                "error": str(e)
+            })
+    
+    # Combine all results
+    combined_nodes = pd.concat(all_nodes, ignore_index=True) if all_nodes else pd.DataFrame(columns=NODE_COLUMNS)
+    combined_edges = pd.concat(all_edges, ignore_index=True) if all_edges else pd.DataFrame(columns=EDGE_COLUMNS)
+    combined_grants = pd.concat(all_grants_detail, ignore_index=True) if all_grants_detail else pd.DataFrame(columns=GRANTS_DETAIL_COLUMNS)
+    
+    # Deduplicate nodes by node_id
+    if not combined_nodes.empty:
+        combined_nodes = combined_nodes.drop_duplicates(subset=["node_id"], keep="first")
+    
+    # Deduplicate edges by edge_id
+    if not combined_edges.empty:
+        combined_edges = combined_edges.drop_duplicates(subset=["edge_id"], keep="first")
+    
+    return combined_nodes, combined_edges, combined_grants, batch_stats
 
 
 def latest_year_column(df: pd.DataFrame) -> str:
@@ -1406,24 +1618,68 @@ def render_upload_interface(project_name: str):
         | **directors-trustees.csv** | Board members | Optional |
         | **grants.csv** | Grants made (for foundations) | Optional |
         
+        **Batch Upload:** You can upload files for multiple organizations at once!
+        Files are automatically grouped by the organization name in the header.
+        
         **Data Quality:** charitydata.ca provides clean, structured data directly from CRA T3010 filings. 
         Unlike PDF parsing, there's no extraction variance — the data is exactly as reported.
         """)
     
-    st.markdown("Upload CSV files for **one organization**:")
+    st.markdown("**Batch Upload:** Upload CSV files for **one or more organizations**")
+    st.caption("Files are automatically grouped by the organization header (CRA Business Number)")
     
     col1, col2, col3 = st.columns(3)
     
     with col1:
-        assets_file = st.file_uploader("assets.csv", type=["csv"])
+        assets_files = st.file_uploader(
+            "assets.csv files", 
+            type=["csv"], 
+            accept_multiple_files=True,
+            help="Upload one or more assets.csv files"
+        )
     with col2:
-        directors_file = st.file_uploader("directors-trustees.csv", type=["csv"])
+        directors_files = st.file_uploader(
+            "directors-trustees.csv files", 
+            type=["csv"], 
+            accept_multiple_files=True,
+            help="Upload one or more directors-trustees.csv files"
+        )
     with col3:
-        grants_file = st.file_uploader("grants.csv", type=["csv"])
+        grants_files = st.file_uploader(
+            "grants.csv files", 
+            type=["csv"], 
+            accept_multiple_files=True,
+            help="Upload one or more grants.csv files"
+        )
     
-    if not (assets_file or directors_file or grants_file):
-        st.info("👆 Upload at least one CSV file")
+    # Combine all uploaded files
+    all_files = (assets_files or []) + (directors_files or []) + (grants_files or [])
+    
+    if not all_files:
+        st.info("👆 Upload CSV files for one or more organizations")
         st.stop()
+    
+    # Group files by organization
+    org_files = group_files_by_organization(all_files)
+    
+    if not org_files:
+        st.warning("Could not identify any organizations from uploaded files.")
+        st.stop()
+    
+    # Show detected organizations
+    st.divider()
+    st.subheader(f"🏢 Detected Organizations ({len(org_files)})")
+    
+    for key, files in org_files.items():
+        file_types = []
+        if files["assets"]:
+            file_types.append("📊 assets")
+        if files["directors"]:
+            file_types.append("👥 directors")
+        if files["grants"]:
+            file_types.append("💰 grants")
+        
+        st.write(f"🇨🇦 **{files['org_name']}** ({files['cra_bn'] or 'no BN'}) — {', '.join(file_types)}")
     
     # Region Mode Selection (for grants_detail)
     st.divider()
@@ -1454,40 +1710,42 @@ def render_upload_interface(project_name: str):
     
     st.divider()
     
-    with st.spinner("Processing..."):
-        new_nodes, new_edges, org_attributes = process_uploaded_files(
-            assets_file, directors_file, grants_file
+    # Process all organizations in batch
+    with st.spinner(f"Processing {len(org_files)} organization(s)..."):
+        new_nodes, new_edges, new_grants_detail, batch_stats = process_batch_organizations(
+            org_files=org_files,
+            region_mode=region_mode,
+            admin1_codes=admin1_codes,
+            country_codes=country_codes
         )
     
     if new_nodes.empty:
         st.warning("Could not extract data from uploaded files.")
         st.stop()
     
-    org_name = org_attributes.get("org_legal_name", "Unknown")
-    cra_bn = org_attributes.get("tax_id", "")
+    # Show batch processing results
+    st.subheader("✅ Batch Processing Complete")
     
-    # Build grants_detail from grants file
-    new_grants_detail = pd.DataFrame(columns=GRANTS_DETAIL_COLUMNS)
-    if grants_file:
-        grants_file.seek(0)  # Reset file pointer
-        grants_df, _, _ = read_charitydata_csv_from_upload(grants_file)
-        if not grants_df.empty:
-            source_filename = grants_file.name if hasattr(grants_file, 'name') else "grants.csv"
-            new_grants_detail = build_grants_detail_from_grants_csv(
-                grants_df=grants_df,
-                foundation_name=org_name,
-                foundation_ein=cra_bn,
-                source_file=source_filename,
-                region_mode=region_mode,
-                admin1_codes=admin1_codes,
-                country_codes=country_codes
-            )
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Organizations", batch_stats["orgs_processed"])
+    col2.metric("Total Nodes", batch_stats["total_nodes"])
+    col3.metric("Total Edges", batch_stats["total_edges"])
+    col4.metric("Total Grants", batch_stats["total_grants"])
     
-    st.success(f"✅ Processed **{org_name}**: {len(new_nodes)} nodes, {len(new_edges)} edges, {len(new_grants_detail)} grant details")
+    if batch_stats["orgs_failed"] > 0:
+        st.warning(f"⚠️ {batch_stats['orgs_failed']} organization(s) failed to process")
+    
+    # Show per-org breakdown
+    with st.expander(f"📋 Per-Organization Results ({len(batch_stats['org_results'])})", expanded=True):
+        for result in batch_stats["org_results"]:
+            if result["status"] == "success":
+                st.write(f"✅ **{result['org_name']}** — {result['nodes']} nodes, {result['edges']} edges, {result['grants']} grants")
+            else:
+                st.write(f"❌ **{result['org_name']}** — {result.get('error', 'Unknown error')}")
     
     st.divider()
     
-    # Merge nodes and edges
+    # Merge with existing data
     nodes_df, edges_df, stats = merge_graph_data(
         existing_nodes, existing_edges, new_nodes, new_edges
     )
@@ -1498,13 +1756,13 @@ def render_upload_interface(project_name: str):
     )
     
     st.subheader(f"🔁 Merge Results")
-    st.caption(f"Dataset merge outcome for {org_name}. Counts reflect what was added to the combined outputs.")
+    st.caption(f"Dataset merge outcome for {batch_stats['orgs_processed']} organizations. Counts reflect what was added to the combined outputs.")
     
     col1, col2, col3 = st.columns(3)
     with col1:
         st.markdown("**Nodes:**")
         st.write(f"- Existing: {stats['existing_nodes']}")
-        st.write(f"- From this org: {stats['new_nodes_total']}")
+        st.write(f"- From batch: {stats['new_nodes_total']}")
         st.write(f"- ✅ **Added: {stats['nodes_added']}**")
         if stats['nodes_skipped'] > 0:
             st.write(f"- ⏭️ Skipped: {stats['nodes_skipped']}")
@@ -1512,7 +1770,7 @@ def render_upload_interface(project_name: str):
     with col2:
         st.markdown("**Edges:**")
         st.write(f"- Existing: {stats['existing_edges']}")
-        st.write(f"- From this org: {stats['new_edges_total']}")
+        st.write(f"- From batch: {stats['new_edges_total']}")
         st.write(f"- ✅ **Added: {stats['edges_added']}**")
         if stats['edges_skipped'] > 0:
             st.write(f"- ⏭️ Skipped: {stats['edges_skipped']}")
@@ -1520,7 +1778,7 @@ def render_upload_interface(project_name: str):
     with col3:
         st.markdown("**Grant Details:**")
         st.write(f"- Existing: {grants_stats['existing']}")
-        st.write(f"- From this org: {grants_stats['new']}")
+        st.write(f"- From batch: {grants_stats['new']}")
         st.write(f"- ✅ **Added: {grants_stats['added']}**")
         if grants_stats['skipped'] > 0:
             st.write(f"- ⏭️ Skipped: {grants_stats['skipped']}")
