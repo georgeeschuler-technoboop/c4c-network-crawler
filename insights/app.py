@@ -4,6 +4,8 @@ Insight Engine — Streamlit App
 Structured insight from complex networks.
 Reads exported data from OrgGraph US/CA projects.
 
+VERSION HISTORY:
+----------------
 UPDATED v0.5.0: Aligned with OrgGraph US/CA visual patterns
 - Multi-project support (scans demo_data/)
 - Loads pre-exported artifacts when available
