@@ -36,7 +36,7 @@ from c4c_utils.summary_helpers import build_grant_network_summary, summarize_gra
 # =============================================================================
 # Constants
 # =============================================================================
-APP_VERSION = "0.14.2"  # Fixed misleading 'No Grants Found' label → 'Zero-Grant Returns'
+APP_VERSION = "0.15.0"  # Added grants_detail.csv project save + append behavior
 MAX_FILES = 50
 C4C_LOGO_URL = "https://static.wixstatic.com/media/275a3f_25063966d6cd496eb2fe3f6ee5cde0fa~mv2.png"
 SOURCE_SYSTEM = "IRS_990"
@@ -45,6 +45,23 @@ JURISDICTION = "US"
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEMO_DATA_DIR = REPO_ROOT / "demo_data"
 DEMO_PROJECT_NAME = "_demo"  # Reserved name for demo dataset
+
+# =============================================================================
+# Canonical grants_detail.csv Schema (Shared with OrgGraph CA)
+# =============================================================================
+GRANTS_DETAIL_COLUMNS = [
+    "foundation_name", "foundation_ein", "tax_year", "grantee_name",
+    "grantee_city", "grantee_state", "grant_amount", "grant_purpose_raw",
+    "grant_bucket", "region_relevant", "source_file",
+    "grantee_country", "foundation_country", "source_system",
+    "grant_amount_cash", "grant_amount_in_kind", "currency",
+    "fiscal_year", "reporting_period"
+]
+
+# US Grant bucket constants
+GRANT_BUCKET_3A = "3a"           # Part XIV line 3a (paid this year)
+GRANT_BUCKET_3B = "3b"           # Part XIV line 3b (future commitments)
+GRANT_BUCKET_SCHEDULE_I = "schedule_i"  # Schedule I grants
 
 # =============================================================================
 # Page Configuration
@@ -115,9 +132,11 @@ def load_project_data(project_name: str) -> tuple:
     project_path = DEMO_DATA_DIR / project_name
     nodes_path = project_path / "nodes.csv"
     edges_path = project_path / "edges.csv"
+    grants_detail_path = project_path / "grants_detail.csv"
     
     nodes_df = pd.DataFrame(columns=NODE_COLUMNS)
     edges_df = pd.DataFrame(columns=EDGE_COLUMNS)
+    grants_detail_df = pd.DataFrame(columns=GRANTS_DETAIL_COLUMNS)
     
     if nodes_path.exists():
         try:
@@ -135,7 +154,15 @@ def load_project_data(project_name: str) -> tuple:
         except:
             pass
     
-    return nodes_df, edges_df
+    if grants_detail_path.exists():
+        try:
+            df = pd.read_csv(grants_detail_path)
+            if not df.empty and len(df) > 0:
+                grants_detail_df = df
+        except:
+            pass
+    
+    return nodes_df, edges_df, grants_detail_df
 def get_project_path(project_name: str) -> Path:
     """Get the path for a project folder."""
     return DEMO_DATA_DIR / project_name
@@ -232,6 +259,108 @@ def merge_graph_data(existing_nodes: pd.DataFrame, existing_edges: pd.DataFrame,
         merged_edges = pd.concat([existing_edges, edges_to_add], ignore_index=True)
     
     return merged_nodes, merged_edges, stats
+
+
+def merge_grants_detail(existing_df: pd.DataFrame, new_df: pd.DataFrame) -> tuple:
+    """
+    Merge new grants_detail rows with existing, avoiding duplicates.
+    
+    Uses composite key: foundation_ein + grantee_name + grant_amount + fiscal_year
+    
+    Returns: (merged_df, stats_dict)
+    """
+    stats = {
+        "existing": len(existing_df) if not existing_df.empty else 0,
+        "new": len(new_df) if not new_df.empty else 0,
+        "added": 0,
+        "skipped": 0,
+    }
+    
+    if existing_df.empty or len(existing_df) == 0:
+        stats["added"] = len(new_df) if not new_df.empty else 0
+        return new_df.copy() if not new_df.empty else pd.DataFrame(columns=GRANTS_DETAIL_COLUMNS), stats
+    
+    if new_df.empty or len(new_df) == 0:
+        return existing_df.copy(), stats
+    
+    # Create composite key for deduplication
+    def make_key(row):
+        return f"{row.get('foundation_ein', '')}|{row.get('grantee_name', '')}|{row.get('grant_amount', '')}|{row.get('fiscal_year', '')}"
+    
+    existing_keys = set(existing_df.apply(make_key, axis=1))
+    new_keys = new_df.apply(make_key, axis=1)
+    
+    mask = ~new_keys.isin(existing_keys)
+    to_add = new_df[mask]
+    
+    stats["added"] = len(to_add)
+    stats["skipped"] = len(new_df) - len(to_add)
+    
+    merged = pd.concat([existing_df, to_add], ignore_index=True)
+    
+    return merged, stats
+
+
+def ensure_grants_detail_columns(grants_df: pd.DataFrame, source_file: str = "") -> pd.DataFrame:
+    """
+    Ensure grants_df has all canonical grants_detail columns.
+    Maps existing columns to canonical names and fills missing with defaults.
+    """
+    if grants_df is None or grants_df.empty:
+        return pd.DataFrame(columns=GRANTS_DETAIL_COLUMNS)
+    
+    df = grants_df.copy()
+    
+    # Map existing column names to canonical names
+    column_mappings = {
+        "grantee": "grantee_name",
+        "org_name": "grantee_name",
+        "amount": "grant_amount",
+        "state": "grantee_state",
+        "city": "grantee_city",
+        "purpose": "grant_purpose_raw",
+        "grant_purpose": "grant_purpose_raw",
+    }
+    
+    for old_name, new_name in column_mappings.items():
+        if old_name in df.columns and new_name not in df.columns:
+            df[new_name] = df[old_name]
+    
+    # Add missing columns with defaults
+    defaults = {
+        "foundation_name": "",
+        "foundation_ein": "",
+        "tax_year": "",
+        "grantee_name": "",
+        "grantee_city": "",
+        "grantee_state": "",
+        "grant_amount": 0,
+        "grant_purpose_raw": "",
+        "grant_bucket": "unknown",
+        "region_relevant": True,
+        "source_file": source_file,
+        "grantee_country": "US",
+        "foundation_country": "US",
+        "source_system": SOURCE_SYSTEM,
+        "grant_amount_cash": "",
+        "grant_amount_in_kind": "",
+        "currency": "USD",
+        "fiscal_year": "",
+        "reporting_period": "",
+    }
+    
+    for col, default in defaults.items():
+        if col not in df.columns:
+            df[col] = default
+    
+    # Ensure all canonical columns exist
+    for col in GRANTS_DETAIL_COLUMNS:
+        if col not in df.columns:
+            df[col] = ""
+    
+    return df
+
+
 def extract_board_with_fallback(file_bytes: bytes, filename: str, meta: dict) -> pd.DataFrame:
     """
     Extract board members using BoardExtractor.
@@ -1381,11 +1510,15 @@ def render_downloads(nodes_df: pd.DataFrame, edges_df: pd.DataFrame,
                 try:
                     export_nodes.to_csv(project_path / "nodes.csv", index=False)
                     export_edges.to_csv(project_path / "edges.csv", index=False)
+                    # Save grants_detail.csv (append behavior handled by merge earlier)
+                    if export_grants is not None and not export_grants.empty:
+                        grants_detail = ensure_grants_detail_columns(export_grants)
+                        grants_detail.to_csv(project_path / "grants_detail.csv", index=False)
                     st.success(f"✅ Saved to `{project_path}/`")
                 except Exception as e:
                     st.error(f"Error saving: {e}")
         with save_col2:
-            st.caption("Saves nodes.csv and edges.csv to the project folder")
+            st.caption("Saves nodes.csv, edges.csv, and grants_detail.csv to the project folder")
     
     st.divider()
     
@@ -1455,9 +1588,10 @@ def render_downloads(nodes_df: pd.DataFrame, edges_df: pd.DataFrame,
             if not poli_edges.empty:
                 zip_file.writestr('edges_polinode.csv', poli_edges.to_csv(index=False))
             
-            # Detail files
+            # Grants detail (canonical schema)
             if export_grants is not None and not export_grants.empty:
-                zip_file.writestr('grants_detail.csv', export_grants.to_csv(index=False))
+                grants_detail = ensure_grants_detail_columns(export_grants)
+                zip_file.writestr('grants_detail.csv', grants_detail.to_csv(index=False))
             if parse_results:
                 zip_file.writestr('parse_log.json', json.dumps(parse_results, indent=2, default=str))
         
@@ -1468,9 +1602,8 @@ def render_downloads(nodes_df: pd.DataFrame, edges_df: pd.DataFrame,
         # Explain what's in the ZIP
         st.caption("""
         **Complete export includes:**
-        `nodes.csv` + `edges.csv` (C4C schema) •
+        `nodes.csv` + `edges.csv` + `grants_detail.csv` (C4C schema) •
         `nodes_polinode.csv` + `edges_polinode.csv` (Polinode-ready) •
-        `grants_detail.csv` (full grant data) •
         `parse_log.json` (diagnostics)
         """)
         
@@ -1489,12 +1622,13 @@ def render_upload_interface(project_name: str):
     """Render the upload and processing interface for a project."""
     display_name = get_project_display_name(project_name)
     
-    # Load existing data
-    existing_nodes, existing_edges = load_project_data(project_name)
+    # Load existing data (now includes grants_detail)
+    existing_nodes, existing_edges, existing_grants_detail = load_project_data(project_name)
     
     # Show existing data status
     if not existing_nodes.empty or not existing_edges.empty:
-        st.success(f"📂 **Existing {display_name} data:** {len(existing_nodes)} nodes, {len(existing_edges)} edges")
+        grants_count = len(existing_grants_detail) if not existing_grants_detail.empty else 0
+        st.success(f"📂 **Existing {display_name} data:** {len(existing_nodes)} nodes, {len(existing_edges)} edges, {grants_count} grant details")
         
         existing_foundations = get_existing_foundations(existing_nodes)
         if existing_foundations:
@@ -1543,14 +1677,14 @@ def render_upload_interface(project_name: str):
             st.subheader("🔁 Merge Results")
             st.caption("Dataset merge outcome. Counts below reflect what was added to the combined nodes/edges outputs from this upload.")
             
-            col1, col2 = st.columns(2)
+            col1, col2, col3 = st.columns(3)
             with col1:
                 st.markdown("**Nodes:**")
                 st.write(f"- Existing: {stats['existing_nodes']}")
                 st.write(f"- From this upload: {stats['new_nodes_total']}")
                 st.write(f"- ✅ **Added: {stats['nodes_added']}**")
                 if stats['nodes_skipped'] > 0:
-                    st.write(f"- ⏭️ Skipped (duplicates): {stats['nodes_skipped']}")
+                    st.write(f"- ⏭️ Skipped: {stats['nodes_skipped']}")
             
             with col2:
                 st.markdown("**Edges:**")
@@ -1558,7 +1692,15 @@ def render_upload_interface(project_name: str):
                 st.write(f"- From this upload: {stats['new_edges_total']}")
                 st.write(f"- ✅ **Added: {stats['edges_added']}**")
                 if stats['edges_skipped'] > 0:
-                    st.write(f"- ⏭️ Skipped (duplicates): {stats['edges_skipped']}")
+                    st.write(f"- ⏭️ Skipped: {stats['edges_skipped']}")
+            
+            with col3:
+                st.markdown("**Grant Details:**")
+                st.write(f"- Existing: {stats.get('existing_grants', 0)}")
+                st.write(f"- From this upload: {stats.get('new_grants_total', 0)}")
+                st.write(f"- ✅ **Added: {stats.get('grants_added', 0)}**")
+                if stats.get('grants_skipped', 0) > 0:
+                    st.write(f"- ⏭️ Skipped: {stats.get('grants_skipped', 0)}")
         
         st.divider()
         
@@ -1575,7 +1717,8 @@ def render_upload_interface(project_name: str):
         st.divider()
         
         # Combined dataset summary
-        st.success(f"📊 **Combined {display_name} dataset:** {len(st.session_state.nodes_df)} nodes, {len(st.session_state.edges_df)} edges")
+        grants_count = len(st.session_state.grants_df) if st.session_state.grants_df is not None else 0
+        st.success(f"📊 **Combined {display_name} dataset:** {len(st.session_state.nodes_df)} nodes, {len(st.session_state.edges_df)} edges, {grants_count} grant details")
         
         # =================================================================
         # SECTION 4: Analytics (toggle, uses region-filtered if available)
@@ -1684,16 +1827,28 @@ def render_upload_interface(project_name: str):
                 )
                 st.rerun()
             
-            # Merge with existing
+            # Merge nodes and edges with existing
             nodes_df, edges_df, merge_stats = merge_graph_data(
                 existing_nodes, existing_edges, new_nodes, new_edges
             )
             
+            # Merge grants_detail with existing (append behavior)
+            new_grants_detail = ensure_grants_detail_columns(grants_df)
+            merged_grants_df, grants_stats = merge_grants_detail(
+                existing_grants_detail, new_grants_detail
+            )
+            
+            # Add grants_detail stats to merge_stats
+            merge_stats['existing_grants'] = grants_stats['existing']
+            merge_stats['new_grants_total'] = grants_stats['new']
+            merge_stats['grants_added'] = grants_stats['added']
+            merge_stats['grants_skipped'] = grants_stats['skipped']
+            
             # Get processed org names
             processed_orgs = [r["org_name"] for r in parse_results if r.get("status") == "success" and r.get("org_name")]
             
-            # Store in session state
-            store_results(nodes_df, edges_df, grants_df, parse_results, merge_stats, processed_orgs, region_def)
+            # Store in session state (use merged grants)
+            store_results(nodes_df, edges_df, merged_grants_df, parse_results, merge_stats, processed_orgs, region_def)
             
             # Rerun to show results
             st.rerun()
@@ -1802,7 +1957,7 @@ def main():
             if not p["is_demo"]:
                 display_name = get_project_display_name(p["name"])
                 if p["has_data"]:
-                    nodes_df, edges_df = load_project_data(p["name"])
+                    nodes_df, edges_df, grants_detail_df = load_project_data(p["name"])
                     display_name += f" ({len(nodes_df)} nodes, {len(edges_df)} edges)"
                 else:
                     display_name += " (empty)"
@@ -1837,7 +1992,7 @@ def main():
         st.markdown("### Demo Dataset")
         st.caption(f"📂 Loading from `demo_data/{DEMO_PROJECT_NAME}/`...")
         
-        nodes_df, edges_df = load_project_data(DEMO_PROJECT_NAME)
+        nodes_df, edges_df, grants_detail_df = load_project_data(DEMO_PROJECT_NAME)
         
         if nodes_df.empty and edges_df.empty:
             st.warning("""
@@ -1847,7 +2002,8 @@ def main():
             """)
             st.stop()
         
-        st.success(f"✅ Demo data: {len(nodes_df)} nodes, {len(edges_df)} edges")
+        grants_count = len(grants_detail_df) if not grants_detail_df.empty else 0
+        st.success(f"✅ Demo data: {len(nodes_df)} nodes, {len(edges_df)} edges, {grants_count} grant details")
         
         # Show existing foundations
         existing_foundations = get_existing_foundations(nodes_df)
@@ -1857,9 +2013,9 @@ def main():
                     flag = "🇨🇦" if source == "CHARITYDATA_CA" else "🇺🇸" if source == "IRS_990" else "📄"
                     st.write(f"{flag} {label}")
         
-        # Reconstruct grants_df for analytics
-        grants_df = None
-        if not edges_df.empty and "edge_type" in edges_df.columns:
+        # Use grants_detail.csv if available, otherwise reconstruct from edges
+        grants_df = grants_detail_df if not grants_detail_df.empty else None
+        if grants_df is None and not edges_df.empty and "edge_type" in edges_df.columns:
             grant_edges = edges_df[edges_df["edge_type"] == "GRANT"].copy()
             if not grant_edges.empty:
                 grants_df = pd.DataFrame({
