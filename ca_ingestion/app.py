@@ -15,6 +15,11 @@ UPDATED v0.7.0: Added grants_detail.csv export + region mode
 - Canonical grants_detail.csv schema (same as OrgGraph US)
 - Region mode with Great Lakes preset
 - grant_bucket = "ca_t3010" for all CA grants
+
+UPDATED v0.8.0: Added Save to Project + schema alignment
+- Save to Project button (writes directly to demo_data/{project}/)
+- Robust currency amount parsing (handles $, CAD, commas, spaces)
+- Schema fully aligned with OrgGraph US v0.15.0+
 """
 
 import streamlit as st
@@ -31,7 +36,7 @@ from enum import Enum
 # Config
 # =============================================================================
 
-APP_VERSION = "0.7.0"  # Added grants_detail.csv export + region mode
+APP_VERSION = "0.8.0"  # Added Save to Project button + schema alignment with US
 C4C_LOGO_URL = "https://static.wixstatic.com/media/275a3f_bcf888c01ebe499ca978b82f5291947b~mv2.png"
 SOURCE_SYSTEM = "CHARITYDATA_CA"
 JURISDICTION = "CA"
@@ -202,9 +207,14 @@ def create_project(project_name: str) -> tuple:
         return False, f"Failed to create project: {str(e)}"
 
 
+def get_project_path(project_name: str) -> Path:
+    """Get the path for a project folder."""
+    return DEMO_DATA_DIR / project_name
+
+
 def load_project_data(project_name: str) -> tuple:
     """Load existing data from a project folder."""
-    project_path = DEMO_DATA_DIR / project_name
+    project_path = get_project_path(project_name)
     nodes_path = project_path / "nodes.csv"
     edges_path = project_path / "edges.csv"
     grants_detail_path = project_path / "grants_detail.csv"
@@ -263,6 +273,36 @@ def get_existing_foundations(nodes_df: pd.DataFrame) -> list:
 # =============================================================================
 
 HEADER_RE = re.compile(r"^(.*)\s+\((\d{9}RR\d{4})\)\s*$")
+
+
+def parse_currency_amount(value) -> float:
+    """
+    Parse a currency amount robustly.
+    Handles: numbers, strings with $, commas, spaces, CAD prefix, etc.
+    Returns 0.0 if parsing fails.
+    """
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return 0.0
+    
+    if isinstance(value, (int, float)):
+        return float(value)
+    
+    # Convert to string and clean
+    s = str(value).strip()
+    if not s or s.lower() == "nan":
+        return 0.0
+    
+    # Remove currency symbols and common formatting
+    s = s.replace("$", "").replace("CAD", "").replace(",", "").replace(" ", "").strip()
+    
+    # Handle parentheses for negative numbers: (123) -> -123
+    if s.startswith("(") and s.endswith(")"):
+        s = "-" + s[1:-1]
+    
+    try:
+        return float(s)
+    except (ValueError, TypeError):
+        return 0.0
 
 
 def _parse_charitydata_content(content: str) -> tuple:
@@ -514,20 +554,9 @@ def process_grants_file(grants_df: pd.DataFrame, org_slug: str, cra_bn: str) -> 
         if not grantee_name or pd.isna(grantee_name):
             continue
         
-        # Extract values
-        cash = row.get("Cash ($)", 0)
-        in_kind = row.get("In-kind ($)", 0)
-        
-        try:
-            cash = float(cash) if pd.notna(cash) else 0
-        except:
-            cash = 0
-        
-        try:
-            in_kind = float(in_kind) if pd.notna(in_kind) else 0
-        except:
-            in_kind = 0
-        
+        # Extract values with robust parsing
+        cash = parse_currency_amount(row.get("Cash ($)", 0))
+        in_kind = parse_currency_amount(row.get("In-kind ($)", 0))
         total_amount = cash + in_kind
         
         # Get reporting period
@@ -610,17 +639,9 @@ def build_grants_detail_from_grants_csv(
         if not grantee_name or pd.isna(grantee_name):
             continue
         
-        # Get amounts
-        cash = row.get("Cash ($)", 0)
-        in_kind = row.get("In-kind ($)", 0)
-        try:
-            cash = float(cash) if pd.notna(cash) else 0
-        except:
-            cash = 0
-        try:
-            in_kind = float(in_kind) if pd.notna(in_kind) else 0
-        except:
-            in_kind = 0
+        # Get amounts with robust parsing
+        cash = parse_currency_amount(row.get("Cash ($)", 0))
+        in_kind = parse_currency_amount(row.get("In-kind ($)", 0))
         total_amount = cash + in_kind
         
         # Get location
@@ -1215,17 +1236,34 @@ def render_downloads(nodes_df: pd.DataFrame, edges_df: pd.DataFrame,
     st.divider()
     st.subheader("📥 Download Data")
     
+    # Check if we have grants_detail
+    has_grants_detail = grants_detail_df is not None and not grants_detail_df.empty
+    
+    # Save to project folder (PRIMARY ACTION)
     if project_name and project_name != DEMO_PROJECT_NAME:
-        st.info(f"⬇️ **Download these files and upload to `demo_data/{project_name}/` on GitHub** (replace existing files)")
+        save_col1, save_col2 = st.columns([2, 1])
+        with save_col1:
+            if st.button("💾 Save to Project", type="primary", use_container_width=True):
+                project_path = get_project_path(project_name)
+                try:
+                    nodes_df.to_csv(project_path / "nodes.csv", index=False)
+                    edges_df.to_csv(project_path / "edges.csv", index=False)
+                    if has_grants_detail:
+                        grants_detail_df.to_csv(project_path / "grants_detail.csv", index=False)
+                    st.success(f"✅ Saved to `{project_path}/`")
+                    st.caption("Files saved: nodes.csv, edges.csv" + (", grants_detail.csv" if has_grants_detail else ""))
+                except Exception as e:
+                    st.error(f"Error saving: {e}")
+        with save_col2:
+            st.caption("Saves nodes.csv, edges.csv, and grants_detail.csv directly to the project folder")
+        
+        st.divider()
     
     # Generate Polinode format
     poli_nodes, poli_edges = convert_to_polinode_format(nodes_df, edges_df)
     
-    # Check if we have grants_detail
-    has_grants_detail = grants_detail_df is not None and not grants_detail_df.empty
-    
     # Individual file downloads
-    st.markdown("**Individual files:**")
+    st.markdown("**Manual download (alternative):**")
     col1, col2, col3, col4, col5 = st.columns(5)
     
     with col1:
