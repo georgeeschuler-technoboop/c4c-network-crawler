@@ -11,12 +11,14 @@ Outputs conform to C4C Network Schema v1 (MVP):
 - edges.csv: GRANT and BOARD_MEMBERSHIP edges
 - grants_detail.csv: Canonical grant detail format (shared with US)
 
+VERSION HISTORY:
+----------------
 UPDATED v0.7.0: Added grants_detail.csv export + region mode
 - Canonical grants_detail.csv schema (same as OrgGraph US)
 - Region mode with Great Lakes preset
 - grant_bucket = "ca_t3010" for all CA grants
 
-UPDATED v0.8.0: Added Save to Project + schema alignment
+UPDATED v0.8.0: Added Save to Project + batch upload
 - Save to Project button (writes directly to demo_data/{project}/)
 - Robust currency amount parsing (handles $, CAD, commas, spaces)
 - Schema fully aligned with OrgGraph US v0.15.0+
