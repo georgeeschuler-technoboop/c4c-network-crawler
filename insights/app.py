@@ -28,6 +28,13 @@ UPDATED v0.5.3: Fixed input/output flow
 
 UPDATED v0.5.4: Use grant_purpose_raw column
 - Purpose column is now explicitly 'grant_purpose_raw' (OrgGraph US standard)
+
+UPDATED v0.6.0: Canonical schema alignment with OrgGraph US/CA
+- Added Grant Network Results section (All vs Region Relevant)
+- Support for grant_bucket column (3a, 3b, schedule_i, ca_t3010)
+- Column aliasing: foundation_name ↔ funder_name for compatibility
+- Region filtering support via region_relevant column
+- Source breakdown (US vs CA) when multiple source_systems present
 """
 
 import streamlit as st
@@ -44,13 +51,37 @@ import importlib.util
 # Config
 # =============================================================================
 
-APP_VERSION = "0.5.4"
+APP_VERSION = "0.6.0"  # Added Grant Network Results (All vs Region), canonical schema alignment
 C4C_LOGO_URL = "https://static.wixstatic.com/media/275a3f_ed8e76c8495d4799a5d7575822009e93~mv2.png"
 
 # Get paths
 APP_DIR = Path(__file__).resolve().parent
 REPO_ROOT = APP_DIR.parent
 DEMO_DATA_DIR = REPO_ROOT / "demo_data"
+
+# =============================================================================
+# Canonical grants_detail.csv Schema (Shared with OrgGraph US/CA)
+# =============================================================================
+# OrgGraph US/CA output these columns. Insight Engine should handle both
+# naming conventions for backward compatibility.
+
+GRANTS_DETAIL_COLUMN_ALIASES = {
+    # OrgGraph US uses foundation_*, Insight Engine historically used funder_*
+    "foundation_name": "funder_name",
+    "foundation_ein": "funder_id",
+    "foundation_country": "funder_country",
+    # Ensure these exist
+    "grantee_state": "grantee_admin1",
+}
+
+# Grant bucket constants (US + CA)
+GRANT_BUCKETS = {
+    "3a": "Part XIV 3a (US)",
+    "3b": "Part XIV 3b (US)", 
+    "schedule_i": "Schedule I (US)",
+    "ca_t3010": "T3010 (Canada)",
+    "unknown": "Unknown",
+}
 
 st.set_page_config(
     page_title="Insight Engine",
@@ -233,6 +264,124 @@ def add_purpose_classifications(grants_df: pd.DataFrame) -> pd.DataFrame:
     
     return grants_df
 
+
+def normalize_grants_detail_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Normalize grants_detail.csv columns to canonical names.
+    Handles both OrgGraph US (foundation_*) and legacy (funder_*) naming.
+    Adds missing columns with sensible defaults.
+    """
+    if df is None or df.empty:
+        return df
+    
+    df = df.copy()
+    
+    # Apply aliases: create funder_name from foundation_name if missing, etc.
+    for canonical, alias in GRANTS_DETAIL_COLUMN_ALIASES.items():
+        if canonical in df.columns and alias not in df.columns:
+            df[alias] = df[canonical]
+        elif alias in df.columns and canonical not in df.columns:
+            df[canonical] = df[alias]
+    
+    # Ensure critical columns exist with defaults
+    defaults = {
+        "grant_bucket": "unknown",
+        "region_relevant": True,  # Default to True (show all)
+        "source_system": "unknown",
+        "grant_amount": 0.0,
+        "grantee_country": "",
+        "fiscal_year": "",
+    }
+    
+    for col, default in defaults.items():
+        if col not in df.columns:
+            df[col] = default
+    
+    # Normalize grant_amount to numeric
+    if "grant_amount" in df.columns:
+        df["grant_amount"] = pd.to_numeric(df["grant_amount"], errors="coerce").fillna(0.0)
+    
+    # Normalize region_relevant to boolean
+    if "region_relevant" in df.columns:
+        df["region_relevant"] = df["region_relevant"].fillna(True).astype(bool)
+    
+    return df
+
+
+def summarize_grants_by_bucket(df: pd.DataFrame, region_only: bool = False) -> dict:
+    """
+    Summarize grants by bucket (3a, 3b, schedule_i, ca_t3010, etc).
+    
+    Returns: {
+        "row_count": int,
+        "total_amount": float,
+        "by_bucket": pd.DataFrame with [grant_bucket, count, amount]
+    }
+    """
+    if df is None or df.empty:
+        return {
+            "row_count": 0,
+            "total_amount": 0.0,
+            "by_bucket": pd.DataFrame(columns=["grant_bucket", "count", "amount"]),
+        }
+    
+    work = df.copy()
+    
+    # Ensure required columns
+    if "grant_bucket" not in work.columns:
+        work["grant_bucket"] = "unknown"
+    if "grant_amount" not in work.columns:
+        work["grant_amount"] = 0.0
+    if "region_relevant" not in work.columns:
+        work["region_relevant"] = True
+    
+    work["grant_amount"] = pd.to_numeric(work["grant_amount"], errors="coerce").fillna(0.0)
+    
+    # Filter by region if requested
+    if region_only:
+        work = work[work["region_relevant"] == True]
+    
+    # Aggregate by bucket
+    by_bucket = (
+        work.groupby("grant_bucket", dropna=False)
+        .agg(count=("grant_bucket", "size"), amount=("grant_amount", "sum"))
+        .reset_index()
+        .sort_values("amount", ascending=False)
+    )
+    
+    # Add bucket labels
+    by_bucket["bucket_label"] = by_bucket["grant_bucket"].map(GRANT_BUCKETS).fillna(by_bucket["grant_bucket"])
+    
+    return {
+        "row_count": int(len(work)),
+        "total_amount": float(work["grant_amount"].sum()),
+        "by_bucket": by_bucket,
+    }
+
+
+def summarize_grants_by_source(df: pd.DataFrame) -> dict:
+    """Summarize grants by source_system (US vs CA)."""
+    if df is None or df.empty:
+        return {"by_source": pd.DataFrame()}
+    
+    work = df.copy()
+    
+    if "source_system" not in work.columns:
+        work["source_system"] = "unknown"
+    if "grant_amount" not in work.columns:
+        work["grant_amount"] = 0.0
+    
+    work["grant_amount"] = pd.to_numeric(work["grant_amount"], errors="coerce").fillna(0.0)
+    
+    by_source = (
+        work.groupby("source_system", dropna=False)
+        .agg(count=("source_system", "size"), amount=("grant_amount", "sum"))
+        .reset_index()
+        .sort_values("amount", ascending=False)
+    )
+    
+    return {"by_source": by_source}
+
 # =============================================================================
 # Dynamic Import of run.py (for compute fallback)
 # =============================================================================
@@ -307,6 +456,7 @@ def load_project_inputs(project: dict) -> dict:
         "edges_df": None,
         "grants_df": None,
         "has_grants_detail": project.get("has_grants_detail", False),
+        "has_region_data": False,  # Set to True if region_relevant column exists
     }
     
     # Load required inputs
@@ -315,11 +465,19 @@ def load_project_inputs(project: dict) -> dict:
     if project["has_edges"]:
         data["edges_df"] = pd.read_csv(path / "edges.csv")
     
-    # Load optional grants_detail.csv and add purpose classifications
+    # Load optional grants_detail.csv, normalize columns, add purpose classifications
     if project.get("has_grants_detail"):
         try:
             grants_df = pd.read_csv(path / "grants_detail.csv")
-            data["grants_df"] = add_purpose_classifications(grants_df)
+            # Normalize to canonical schema (handles foundation_name → funder_name, etc.)
+            grants_df = normalize_grants_detail_columns(grants_df)
+            # Check if region data exists (not all True/False)
+            if "region_relevant" in grants_df.columns:
+                unique_vals = grants_df["region_relevant"].dropna().unique()
+                data["has_region_data"] = len(unique_vals) > 1 or (len(unique_vals) == 1 and not unique_vals[0])
+            # Add purpose classifications
+            grants_df = add_purpose_classifications(grants_df)
+            data["grants_df"] = grants_df
         except Exception as e:
             st.warning(f"Could not load grants_detail.csv: {e}")
             data["grants_df"] = None
@@ -400,6 +558,73 @@ def render_network_results(summary: dict):
     if "funding" in summary and "top5_share" in summary["funding"]:
         top5 = summary["funding"]["top5_share"]
         st.caption(f"*Top 5 funders account for {top5:.1%} of total funding*")
+
+
+def render_grant_network_results(grants_df: pd.DataFrame, has_region_data: bool = False):
+    """
+    Render Grant Network Results section (aligned with OrgGraph US/CA).
+    Shows All Grants (unfiltered) vs Region Relevant (filtered) summaries.
+    """
+    st.subheader("📌 Grant Network Results")
+    st.caption(
+        "Grant totals from grants_detail.csv. 'All Grants' is unfiltered. "
+        "'Region Relevant' uses region_relevant == True when available."
+    )
+    
+    if grants_df is None or grants_df.empty:
+        st.info("No grants_detail.csv found for this project.")
+        return
+    
+    # Compute summaries
+    all_summary = summarize_grants_by_bucket(grants_df, region_only=False)
+    region_summary = summarize_grants_by_bucket(grants_df, region_only=True) if has_region_data else None
+    
+    # Display All vs Region side by side
+    if has_region_data and region_summary:
+        col1, col2 = st.columns(2)
+        with col1:
+            st.markdown("**All Grants (unfiltered)**")
+            st.metric("Grant rows", f"{all_summary['row_count']:,}")
+            st.metric("Total amount", f"${all_summary['total_amount']:,.0f}")
+        with col2:
+            st.markdown("**Region Relevant**")
+            st.metric("Grant rows", f"{region_summary['row_count']:,}")
+            st.metric("Total amount", f"${region_summary['total_amount']:,.0f}")
+    else:
+        col1, col2 = st.columns(2)
+        with col1:
+            st.markdown("**All Grants**")
+            st.metric("Grant rows", f"{all_summary['row_count']:,}")
+            st.metric("Total amount", f"${all_summary['total_amount']:,.0f}")
+        with col2:
+            st.caption("*Region filtering not available for this project*")
+    
+    # Bucket breakdown in expander
+    with st.expander("📊 Show bucket breakdown", expanded=False):
+        st.markdown("**All Grants by bucket**")
+        if not all_summary["by_bucket"].empty:
+            display_df = all_summary["by_bucket"][["bucket_label", "count", "amount"]].copy()
+            display_df.columns = ["Bucket", "Count", "Amount"]
+            display_df["Amount"] = display_df["Amount"].apply(lambda x: f"${x:,.0f}")
+            st.dataframe(display_df, use_container_width=True, hide_index=True)
+        else:
+            st.info("No bucket data available")
+        
+        if has_region_data and region_summary and not region_summary["by_bucket"].empty:
+            st.markdown("**Region Relevant by bucket**")
+            display_df = region_summary["by_bucket"][["bucket_label", "count", "amount"]].copy()
+            display_df.columns = ["Bucket", "Count", "Amount"]
+            display_df["Amount"] = display_df["Amount"].apply(lambda x: f"${x:,.0f}")
+            st.dataframe(display_df, use_container_width=True, hide_index=True)
+    
+    # Source breakdown (US vs CA) if multiple sources
+    source_summary = summarize_grants_by_source(grants_df)
+    if not source_summary["by_source"].empty and len(source_summary["by_source"]) > 1:
+        with st.expander("🌐 Show source breakdown (US vs CA)", expanded=False):
+            display_df = source_summary["by_source"].copy()
+            display_df.columns = ["Source", "Count", "Amount"]
+            display_df["Amount"] = display_df["Amount"].apply(lambda x: f"${x:,.0f}")
+            st.dataframe(display_df, use_container_width=True, hide_index=True)
 
 
 def render_health_banner(insight_cards: dict):
@@ -697,8 +922,20 @@ def render_grant_purpose_explorer(grants_df: pd.DataFrame, project_id: str):
         st.caption(f"Total filtered funding: ${filtered_amount:,.0f}")
     
     # Display grants table
-    display_cols = ["funder_name", "grantee_name", "grant_amount", "grant_purpose_raw", "purpose_primary_label", "fiscal_year"]
-    display_cols = [c for c in display_cols if c in filtered_df.columns]
+    # Try foundation_name first (OrgGraph US), then funder_name (legacy)
+    display_cols = ["foundation_name", "funder_name", "grantee_name", "grant_amount", "grant_purpose_raw", "purpose_primary_label", "grant_bucket", "fiscal_year"]
+    # Filter to columns that exist, but avoid duplicates (foundation_name and funder_name are aliases)
+    available_cols = []
+    seen_funder_col = False
+    for c in display_cols:
+        if c in filtered_df.columns:
+            if c in ("foundation_name", "funder_name"):
+                if not seen_funder_col:
+                    available_cols.append(c)
+                    seen_funder_col = True
+            else:
+                available_cols.append(c)
+    display_cols = available_cols
     
     if display_cols:
         # Format amount column
@@ -1010,6 +1247,7 @@ def main():
         if data.get("grants_df") is None and inputs.get("grants_df") is not None:
             data["grants_df"] = inputs["grants_df"]
             data["has_grants_detail"] = inputs["has_grants_detail"]
+            data["has_region_data"] = inputs.get("has_region_data", False)
     
     if not data or not data.get("project_summary"):
         st.info("Click a button above to load or compute insights.")
@@ -1022,6 +1260,13 @@ def main():
     # ==========================================================================
     if data.get("project_summary"):
         render_network_results(data["project_summary"])
+        st.divider()
+    
+    # ==========================================================================
+    # Section 3.5: Grant Network Results (from grants_detail.csv)
+    # ==========================================================================
+    if data.get("has_grants_detail") and data.get("grants_df") is not None:
+        render_grant_network_results(data["grants_df"], data.get("has_region_data", False))
         st.divider()
     
     # ==========================================================================
