@@ -24,6 +24,12 @@ UPDATED v0.8.0: Added Save to Project + schema alignment
   - Upload multiple files per category (assets, directors, grants)
   - Files auto-grouped by CRA Business Number in header
   - Per-org results shown with combined merge stats
+
+UPDATED v0.8.1: Fixed CA grants column mapping
+- standardize_ca_grants_columns() normalizes column names before processing
+- Handles: Donee Name → Qualified donee, Reported Amount → Cash ($), 
+  Gifts In Kind → In-kind ($), Province → Prov, Fiscal Year → Reporting period
+- Fixes $0 grant amounts from CRA-style CSV exports (e.g., Consecon)
 """
 
 import streamlit as st
@@ -40,7 +46,7 @@ from enum import Enum
 # Config
 # =============================================================================
 
-APP_VERSION = "0.8.0"  # Added Save to Project button + schema alignment with US
+APP_VERSION = "0.8.1"  # Fixed CA grants column mapping (Donee Name, Reported Amount, etc.)
 C4C_LOGO_URL = "https://static.wixstatic.com/media/275a3f_bcf888c01ebe499ca978b82f5291947b~mv2.png"
 SOURCE_SYSTEM = "CHARITYDATA_CA"
 JURISDICTION = "CA"
@@ -307,6 +313,124 @@ def parse_currency_amount(value) -> float:
         return float(s)
     except (ValueError, TypeError):
         return 0.0
+
+
+def _norm_col(c: str) -> str:
+    """Normalize column name for matching."""
+    c = str(c).strip().lower()
+    c = re.sub(r"[^a-z0-9]+", "_", c)
+    return c.strip("_")
+
+
+def standardize_ca_grants_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Convert CRA-style grants CSV columns into the canonical names expected by process_grants_file().
+    
+    Expected output columns:
+      - Qualified donee
+      - Cash ($)
+      - In-kind ($)
+      - Reporting period
+      - City
+      - Prov
+    
+    Handles input variations:
+      - Donee Name / Qualified donee / Donee
+      - Reported Amount ($) / Cash ($)
+      - Gifts In Kind / In-kind ($)
+      - Fiscal Year / Reporting period
+      - Province / Prov
+    """
+    if df is None or df.empty:
+        return df
+
+    # Build lookup of normalized -> original column names
+    col_map = {_norm_col(c): c for c in df.columns}
+
+    def pick(*candidates):
+        """Find first matching column from candidates."""
+        for cand in candidates:
+            if cand in col_map:
+                return col_map[cand]
+        return None
+
+    # Identify source columns (order matters - more specific first)
+    c_donee = pick("qualified_donee", "donee_name", "donee_name_organization", "donee")
+    c_reported = pick("reported_amount", "reported_amount_", "total_amount", "amount")
+    c_cash = pick("cash", "cash_")
+    c_inkind = pick("gifts_in_kind", "gifts_in_kind_", "in_kind", "in_kind_")
+    c_city = pick("city")
+    c_prov = pick("prov", "province", "state_province", "state")
+    c_fy = pick("fiscal_year", "fiscalyear", "year", "tax_year", "reporting_period")
+
+    # Create output with canonical columns (preserve originals)
+    out = df.copy()
+
+    # Qualified donee
+    if c_donee:
+        out["Qualified donee"] = out[c_donee].astype(str).fillna("").str.strip()
+    elif "Qualified donee" not in out.columns:
+        out["Qualified donee"] = ""
+
+    # In-kind amount
+    if c_inkind:
+        out["In-kind ($)"] = (
+            out[c_inkind].astype(str)
+            .str.replace(",", "", regex=False)
+            .str.replace("$", "", regex=False)
+            .str.strip()
+        )
+    elif "In-kind ($)" not in out.columns:
+        out["In-kind ($)"] = "0"
+
+    # Cash / Reported amount handling:
+    # - If explicit Cash column exists, use it
+    # - Otherwise use Reported Amount
+    # - If both Reported and In-kind exist, Cash = Reported - In-kind
+    if c_cash and "Cash ($)" not in out.columns:
+        out["Cash ($)"] = (
+            out[c_cash].astype(str)
+            .str.replace(",", "", regex=False)
+            .str.replace("$", "", regex=False)
+            .str.strip()
+        )
+    elif c_reported:
+        rep = (
+            out[c_reported].astype(str)
+            .str.replace(",", "", regex=False)
+            .str.replace("$", "", regex=False)
+            .str.strip()
+        )
+        # If we have in-kind, compute cash = reported - in-kind
+        if c_inkind:
+            rep_num = pd.to_numeric(rep, errors="coerce").fillna(0)
+            ink_num = pd.to_numeric(out["In-kind ($)"], errors="coerce").fillna(0)
+            cash_num = (rep_num - ink_num).clip(lower=0)
+            out["Cash ($)"] = cash_num.astype(str)
+        else:
+            out["Cash ($)"] = rep
+    elif "Cash ($)" not in out.columns:
+        out["Cash ($)"] = "0"
+
+    # Location
+    if c_city and "City" not in out.columns:
+        out["City"] = out[c_city].astype(str).fillna("").str.strip()
+    elif "City" not in out.columns:
+        out["City"] = ""
+    
+    if c_prov and "Prov" not in out.columns:
+        out["Prov"] = out[c_prov].astype(str).fillna("").str.strip()
+    elif "Prov" not in out.columns:
+        out["Prov"] = ""
+
+    # Reporting period (derive from fiscal year if needed)
+    if c_fy and "Reporting period" not in out.columns:
+        fy = out[c_fy].astype(str).fillna("").str.extract(r"(\d{4})", expand=False).fillna("")
+        out["Reporting period"] = fy.apply(lambda y: f"FY {y}" if y else "")
+    elif "Reporting period" not in out.columns:
+        out["Reporting period"] = ""
+
+    return out
 
 
 def _parse_charitydata_content(content: str) -> tuple:
@@ -759,6 +883,12 @@ def process_grants_file(grants_df: pd.DataFrame, org_slug: str, cra_bn: str) -> 
     nodes = []
     edges = []
     
+    # Standardize column names (handles Donee Name → Qualified donee, etc.)
+    grants_df = standardize_ca_grants_columns(grants_df)
+    
+    if grants_df.empty:
+        return nodes, edges
+    
     org_id = f"org-{cra_bn}" if cra_bn else f"org-{org_slug}"
     
     for _, row in grants_df.iterrows():
@@ -842,6 +972,9 @@ def build_grants_detail_from_grants_csv(
     """
     if grants_df.empty:
         return pd.DataFrame(columns=GRANTS_DETAIL_COLUMNS)
+    
+    # Standardize column names (handles Donee Name → Qualified donee, etc.)
+    grants_df = standardize_ca_grants_columns(grants_df)
     
     rows = []
     
