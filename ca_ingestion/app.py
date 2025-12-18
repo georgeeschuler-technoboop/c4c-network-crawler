@@ -9,6 +9,12 @@ Multi-project Streamlit app:
 Outputs conform to C4C Network Schema v1 (MVP):
 - nodes.csv: ORG and PERSON nodes
 - edges.csv: GRANT and BOARD_MEMBERSHIP edges
+- grants_detail.csv: Canonical grant detail format (shared with US)
+
+UPDATED v0.7.0: Added grants_detail.csv export + region mode
+- Canonical grants_detail.csv schema (same as OrgGraph US)
+- Region mode with Great Lakes preset
+- grant_bucket = "ca_t3010" for all CA grants
 """
 
 import streamlit as st
@@ -19,12 +25,13 @@ import hashlib
 import zipfile
 from pathlib import Path
 from io import BytesIO, StringIO
+from enum import Enum
 
 # =============================================================================
 # Config
 # =============================================================================
 
-APP_VERSION = "0.6.1"  # Fixed directors parsing for separate Last Name/First Name columns
+APP_VERSION = "0.7.0"  # Added grants_detail.csv export + region mode
 C4C_LOGO_URL = "https://static.wixstatic.com/media/275a3f_bcf888c01ebe499ca978b82f5291947b~mv2.png"
 SOURCE_SYSTEM = "CHARITYDATA_CA"
 JURISDICTION = "CA"
@@ -41,6 +48,78 @@ st.set_page_config(
     page_icon=C4C_LOGO_URL,
     layout="wide"
 )
+
+# =============================================================================
+# Region Mode (Shared Logic with OrgGraph US)
+# =============================================================================
+
+class RegionMode(Enum):
+    OFF = "off"
+    PRESET = "preset"
+    CUSTOM = "custom"
+
+REGION_PRESETS = {
+    "great_lakes": {
+        "label": "Great Lakes Region",
+        "description": "US Great Lakes states + Ontario & Quebec",
+        "admin1_codes": ["MI", "OH", "MN", "WI", "IN", "IL", "NY", "PA", "ON", "QC"],
+        "country_codes": ["US", "CA"],
+    },
+    "ontario": {
+        "label": "Ontario",
+        "description": "Ontario only",
+        "admin1_codes": ["ON"],
+        "country_codes": ["CA"],
+    },
+    "british_columbia": {
+        "label": "British Columbia", 
+        "description": "British Columbia only",
+        "admin1_codes": ["BC"],
+        "country_codes": ["CA"],
+    },
+    "canada_all": {
+        "label": "All Canada",
+        "description": "All Canadian provinces and territories",
+        "admin1_codes": ["AB", "BC", "MB", "NB", "NL", "NS", "NT", "NU", "ON", "PE", "QC", "SK", "YT"],
+        "country_codes": ["CA"],
+    },
+}
+
+CA_PROVINCES = ["AB", "BC", "MB", "NB", "NL", "NS", "NT", "NU", "ON", "PE", "QC", "SK", "YT"]
+
+def compute_region_relevant(grantee_state: str, grantee_country: str, 
+                           region_mode: RegionMode, admin1_codes: list, country_codes: list) -> bool:
+    """Compute whether a grant is region-relevant."""
+    if region_mode == RegionMode.OFF:
+        return True
+    
+    state = str(grantee_state).strip().upper() if grantee_state else ""
+    country = str(grantee_country).strip().upper() if grantee_country else ""
+    
+    # Check country
+    if country_codes and country and country not in country_codes:
+        return False
+    
+    # Check admin1 (state/province)
+    if admin1_codes and state and state not in admin1_codes:
+        return False
+    
+    return True
+
+# =============================================================================
+# Canonical grants_detail.csv Schema
+# =============================================================================
+
+GRANTS_DETAIL_COLUMNS = [
+    "foundation_name", "foundation_ein", "tax_year", "grantee_name",
+    "grantee_city", "grantee_state", "grant_amount", "grant_purpose_raw",
+    "grant_bucket", "region_relevant", "source_file",
+    "grantee_country", "foundation_country", "source_system",
+    "grant_amount_cash", "grant_amount_in_kind", "currency",
+    "fiscal_year", "reporting_period"
+]
+
+GRANT_BUCKET_CA = "ca_t3010"  # CRA T3010 grant disclosures
 
 # =============================================================================
 # Canonical Schema Columns
@@ -128,9 +207,11 @@ def load_project_data(project_name: str) -> tuple:
     project_path = DEMO_DATA_DIR / project_name
     nodes_path = project_path / "nodes.csv"
     edges_path = project_path / "edges.csv"
+    grants_detail_path = project_path / "grants_detail.csv"
     
     nodes_df = pd.DataFrame(columns=NODE_COLUMNS)
     edges_df = pd.DataFrame(columns=EDGE_COLUMNS)
+    grants_detail_df = pd.DataFrame(columns=GRANTS_DETAIL_COLUMNS)
     
     if nodes_path.exists():
         try:
@@ -148,7 +229,15 @@ def load_project_data(project_name: str) -> tuple:
         except:
             pass
     
-    return nodes_df, edges_df
+    if grants_detail_path.exists():
+        try:
+            df = pd.read_csv(grants_detail_path)
+            if not df.empty and len(df) > 0:
+                grants_detail_df = df
+        except:
+            pass
+    
+    return nodes_df, edges_df, grants_detail_df
 
 
 def get_existing_foundations(nodes_df: pd.DataFrame) -> list:
@@ -490,6 +579,104 @@ def process_grants_file(grants_df: pd.DataFrame, org_slug: str, cra_bn: str) -> 
     return nodes, edges
 
 
+def build_grants_detail_from_grants_csv(
+    grants_df: pd.DataFrame,
+    foundation_name: str,
+    foundation_ein: str,
+    source_file: str,
+    region_mode: RegionMode = RegionMode.OFF,
+    admin1_codes: list = None,
+    country_codes: list = None
+) -> pd.DataFrame:
+    """
+    Build grants_detail.csv rows from CA grants CSV.
+    
+    Maps charitydata.ca columns to canonical grants_detail schema:
+    - Donee Name / Qualified donee → grantee_name
+    - Prov → grantee_state
+    - City → grantee_city
+    - Cash ($) + In-kind ($) → grant_amount
+    - grant_purpose_raw = "" (CA data doesn't have purpose text)
+    - grant_bucket = "ca_t3010"
+    """
+    if grants_df.empty:
+        return pd.DataFrame(columns=GRANTS_DETAIL_COLUMNS)
+    
+    rows = []
+    
+    for _, row in grants_df.iterrows():
+        # Get grantee name (handle different column names)
+        grantee_name = row.get("Qualified donee") or row.get("Donee") or row.get("Donee Name") or ""
+        if not grantee_name or pd.isna(grantee_name):
+            continue
+        
+        # Get amounts
+        cash = row.get("Cash ($)", 0)
+        in_kind = row.get("In-kind ($)", 0)
+        try:
+            cash = float(cash) if pd.notna(cash) else 0
+        except:
+            cash = 0
+        try:
+            in_kind = float(in_kind) if pd.notna(in_kind) else 0
+        except:
+            in_kind = 0
+        total_amount = cash + in_kind
+        
+        # Get location
+        city = str(row.get("City", "")).strip()
+        if city.lower() == "nan":
+            city = ""
+        province = str(row.get("Prov", "")).strip()
+        if province.lower() == "nan":
+            province = ""
+        
+        # Get reporting period / fiscal year
+        reporting_period = str(row.get("Reporting period", "")).strip()
+        if reporting_period.lower() == "nan":
+            reporting_period = ""
+        fiscal_year = None
+        if reporting_period:
+            match = re.search(r"(\d{4})", reporting_period)
+            if match:
+                fiscal_year = int(match.group(1))
+        
+        # Compute region relevance
+        is_relevant = compute_region_relevant(
+            grantee_state=province,
+            grantee_country="CA",
+            region_mode=region_mode,
+            admin1_codes=admin1_codes or [],
+            country_codes=country_codes or []
+        )
+        
+        # Build canonical row
+        detail_row = {
+            "foundation_name": foundation_name,
+            "foundation_ein": foundation_ein,
+            "tax_year": str(fiscal_year) if fiscal_year else "",
+            "grantee_name": str(grantee_name).strip(),
+            "grantee_city": city,
+            "grantee_state": province,
+            "grant_amount": total_amount,
+            "grant_purpose_raw": "",  # CA data doesn't have purpose text
+            "grant_bucket": GRANT_BUCKET_CA,
+            "region_relevant": is_relevant,
+            "source_file": source_file,
+            "grantee_country": "CA",
+            "foundation_country": "CA",
+            "source_system": SOURCE_SYSTEM,
+            "grant_amount_cash": cash,
+            "grant_amount_in_kind": in_kind,
+            "currency": CURRENCY,
+            "fiscal_year": fiscal_year if fiscal_year else "",
+            "reporting_period": reporting_period,
+        }
+        rows.append(detail_row)
+    
+    return pd.DataFrame(rows, columns=GRANTS_DETAIL_COLUMNS)
+
+
 def process_uploaded_files(assets_file, directors_file, grants_file) -> tuple:
     """Process uploaded charitydata.ca files."""
     
@@ -623,6 +810,46 @@ def merge_graph_data(existing_nodes: pd.DataFrame, existing_edges: pd.DataFrame,
         merged_edges = pd.concat([existing_edges, edges_to_add], ignore_index=True)
     
     return merged_nodes, merged_edges, stats
+
+
+def merge_grants_detail(existing_df: pd.DataFrame, new_df: pd.DataFrame) -> tuple:
+    """
+    Merge new grants_detail rows with existing, avoiding duplicates.
+    
+    Uses composite key: foundation_ein + grantee_name + grant_amount + fiscal_year
+    
+    Returns: (merged_df, stats_dict)
+    """
+    stats = {
+        "existing": len(existing_df) if not existing_df.empty else 0,
+        "new": len(new_df) if not new_df.empty else 0,
+        "added": 0,
+        "skipped": 0,
+    }
+    
+    if existing_df.empty or len(existing_df) == 0:
+        stats["added"] = len(new_df) if not new_df.empty else 0
+        return new_df.copy() if not new_df.empty else pd.DataFrame(columns=GRANTS_DETAIL_COLUMNS), stats
+    
+    if new_df.empty or len(new_df) == 0:
+        return existing_df.copy(), stats
+    
+    # Create composite key for deduplication
+    def make_key(row):
+        return f"{row.get('foundation_ein', '')}|{row.get('grantee_name', '')}|{row.get('grant_amount', '')}|{row.get('fiscal_year', '')}"
+    
+    existing_keys = set(existing_df.apply(make_key, axis=1))
+    new_keys = new_df.apply(make_key, axis=1)
+    
+    mask = ~new_keys.isin(existing_keys)
+    to_add = new_df[mask]
+    
+    stats["added"] = len(to_add)
+    stats["skipped"] = len(new_df) - len(to_add)
+    
+    merged = pd.concat([existing_df, to_add], ignore_index=True)
+    
+    return merged, stats
 
 
 # =============================================================================
@@ -978,8 +1205,9 @@ def convert_to_polinode_format(nodes_df: pd.DataFrame, edges_df: pd.DataFrame) -
     return poli_nodes, poli_edges
 
 
-def render_downloads(nodes_df: pd.DataFrame, edges_df: pd.DataFrame, project_name: str = None) -> None:
-    """Render download buttons with both C4C and Polinode formats."""
+def render_downloads(nodes_df: pd.DataFrame, edges_df: pd.DataFrame, 
+                     grants_detail_df: pd.DataFrame = None, project_name: str = None) -> None:
+    """Render download buttons with C4C, Polinode, and grants_detail formats."""
     
     if nodes_df is None or nodes_df.empty:
         return
@@ -993,9 +1221,12 @@ def render_downloads(nodes_df: pd.DataFrame, edges_df: pd.DataFrame, project_nam
     # Generate Polinode format
     poli_nodes, poli_edges = convert_to_polinode_format(nodes_df, edges_df)
     
+    # Check if we have grants_detail
+    has_grants_detail = grants_detail_df is not None and not grants_detail_df.empty
+    
     # Individual file downloads
     st.markdown("**Individual files:**")
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2, col3, col4, col5 = st.columns(5)
     
     with col1:
         if not nodes_df.empty:
@@ -1020,6 +1251,17 @@ def render_downloads(nodes_df: pd.DataFrame, edges_df: pd.DataFrame, project_nam
             )
     
     with col3:
+        if has_grants_detail:
+            st.download_button(
+                "📥 grants_detail.csv",
+                data=grants_detail_df.to_csv(index=False),
+                file_name="grants_detail.csv",
+                mime="text/csv",
+                use_container_width=True,
+                help="Canonical grant detail (for Insight Engine)"
+            )
+    
+    with col4:
         if not poli_nodes.empty:
             st.download_button(
                 "📥 nodes_polinode.csv",
@@ -1030,7 +1272,7 @@ def render_downloads(nodes_df: pd.DataFrame, edges_df: pd.DataFrame, project_nam
                 help="Polinode-compatible format"
             )
     
-    with col4:
+    with col5:
         if not poli_edges.empty:
             st.download_button(
                 "📥 edges_polinode.csv",
@@ -1050,6 +1292,9 @@ def render_downloads(nodes_df: pd.DataFrame, edges_df: pd.DataFrame, project_nam
                 zip_file.writestr('nodes.csv', nodes_df.to_csv(index=False))
             if not edges_df.empty:
                 zip_file.writestr('edges.csv', edges_df.to_csv(index=False))
+            # Grants detail (canonical format for Insight Engine)
+            if has_grants_detail:
+                zip_file.writestr('grants_detail.csv', grants_detail_df.to_csv(index=False))
             
             # Polinode-compatible files
             if not poli_nodes.empty:
@@ -1063,7 +1308,7 @@ def render_downloads(nodes_df: pd.DataFrame, edges_df: pd.DataFrame, project_nam
         
         st.caption("""
         **Complete export includes:**
-        `nodes.csv` + `edges.csv` (C4C schema) •
+        `nodes.csv` + `edges.csv` + `grants_detail.csv` (C4C schema) •
         `nodes_polinode.csv` + `edges_polinode.csv` (Polinode-ready)
         """)
         
@@ -1085,12 +1330,13 @@ def render_upload_interface(project_name: str):
     """Render the upload and processing interface for a project."""
     display_name = get_project_display_name(project_name)
     
-    # Load existing data
-    existing_nodes, existing_edges = load_project_data(project_name)
+    # Load existing data (now includes grants_detail)
+    existing_nodes, existing_edges, existing_grants_detail = load_project_data(project_name)
     
     # Show existing data status
     if not existing_nodes.empty or not existing_edges.empty:
-        st.success(f"📂 **Existing {display_name} data:** {len(existing_nodes)} nodes, {len(existing_edges)} edges")
+        grants_count = len(existing_grants_detail) if not existing_grants_detail.empty else 0
+        st.success(f"📂 **Existing {display_name} data:** {len(existing_nodes)} nodes, {len(existing_edges)} edges, {grants_count} grant details")
         
         existing_foundations = get_existing_foundations(existing_nodes)
         if existing_foundations:
@@ -1141,6 +1387,35 @@ def render_upload_interface(project_name: str):
         st.info("👆 Upload at least one CSV file")
         st.stop()
     
+    # Region Mode Selection (for grants_detail)
+    st.divider()
+    st.subheader("🌍 Region Mode")
+    st.caption("Filter grants by recipient location for regional analysis")
+    
+    region_mode_options = {
+        "Off (include all grants)": RegionMode.OFF,
+        "Great Lakes Region": RegionMode.PRESET,
+    }
+    selected_region_label = st.radio(
+        "Region filter",
+        list(region_mode_options.keys()),
+        horizontal=True,
+        label_visibility="collapsed"
+    )
+    region_mode = region_mode_options[selected_region_label]
+    
+    # Get region config
+    if region_mode == RegionMode.PRESET:
+        preset = REGION_PRESETS["great_lakes"]
+        admin1_codes = preset["admin1_codes"]
+        country_codes = preset["country_codes"]
+        st.caption(f"**Includes:** {', '.join(admin1_codes)} ({', '.join(country_codes)})")
+    else:
+        admin1_codes = []
+        country_codes = []
+    
+    st.divider()
+    
     with st.spinner("Processing..."):
         new_nodes, new_edges, org_attributes = process_uploaded_files(
             assets_file, directors_file, grants_file
@@ -1151,26 +1426,50 @@ def render_upload_interface(project_name: str):
         st.stop()
     
     org_name = org_attributes.get("org_legal_name", "Unknown")
-    st.success(f"✅ Processed **{org_name}**: {len(new_nodes)} nodes, {len(new_edges)} edges")
+    cra_bn = org_attributes.get("tax_id", "")
+    
+    # Build grants_detail from grants file
+    new_grants_detail = pd.DataFrame(columns=GRANTS_DETAIL_COLUMNS)
+    if grants_file:
+        grants_file.seek(0)  # Reset file pointer
+        grants_df, _, _ = read_charitydata_csv_from_upload(grants_file)
+        if not grants_df.empty:
+            source_filename = grants_file.name if hasattr(grants_file, 'name') else "grants.csv"
+            new_grants_detail = build_grants_detail_from_grants_csv(
+                grants_df=grants_df,
+                foundation_name=org_name,
+                foundation_ein=cra_bn,
+                source_file=source_filename,
+                region_mode=region_mode,
+                admin1_codes=admin1_codes,
+                country_codes=country_codes
+            )
+    
+    st.success(f"✅ Processed **{org_name}**: {len(new_nodes)} nodes, {len(new_edges)} edges, {len(new_grants_detail)} grant details")
     
     st.divider()
     
-    # Merge
+    # Merge nodes and edges
     nodes_df, edges_df, stats = merge_graph_data(
         existing_nodes, existing_edges, new_nodes, new_edges
     )
     
-    st.subheader(f"🔁 Merge Results")
-    st.caption(f"Dataset merge outcome for {org_name}. Counts reflect what was added to the combined nodes/edges outputs.")
+    # Merge grants_detail
+    grants_detail_df, grants_stats = merge_grants_detail(
+        existing_grants_detail, new_grants_detail
+    )
     
-    col1, col2 = st.columns(2)
+    st.subheader(f"🔁 Merge Results")
+    st.caption(f"Dataset merge outcome for {org_name}. Counts reflect what was added to the combined outputs.")
+    
+    col1, col2, col3 = st.columns(3)
     with col1:
         st.markdown("**Nodes:**")
         st.write(f"- Existing: {stats['existing_nodes']}")
         st.write(f"- From this org: {stats['new_nodes_total']}")
         st.write(f"- ✅ **Added: {stats['nodes_added']}**")
         if stats['nodes_skipped'] > 0:
-            st.write(f"- ⏭️ Skipped (duplicates): {stats['nodes_skipped']}")
+            st.write(f"- ⏭️ Skipped: {stats['nodes_skipped']}")
     
     with col2:
         st.markdown("**Edges:**")
@@ -1178,13 +1477,27 @@ def render_upload_interface(project_name: str):
         st.write(f"- From this org: {stats['new_edges_total']}")
         st.write(f"- ✅ **Added: {stats['edges_added']}**")
         if stats['edges_skipped'] > 0:
-            st.write(f"- ⏭️ Skipped (duplicates): {stats['edges_skipped']}")
+            st.write(f"- ⏭️ Skipped: {stats['edges_skipped']}")
+    
+    with col3:
+        st.markdown("**Grant Details:**")
+        st.write(f"- Existing: {grants_stats['existing']}")
+        st.write(f"- From this org: {grants_stats['new']}")
+        st.write(f"- ✅ **Added: {grants_stats['added']}**")
+        if grants_stats['skipped'] > 0:
+            st.write(f"- ⏭️ Skipped: {grants_stats['skipped']}")
+    
+    # Show region-relevant count
+    if not grants_detail_df.empty and "region_relevant" in grants_detail_df.columns:
+        relevant_count = grants_detail_df["region_relevant"].sum()
+        total_count = len(grants_detail_df)
+        st.caption(f"*Region-relevant grants: {relevant_count} of {total_count} ({100*relevant_count/total_count:.0f}%)*")
     
     st.divider()
-    st.success(f"📊 **Combined {display_name} dataset:** {len(nodes_df)} nodes, {len(edges_df)} edges")
+    st.success(f"📊 **Combined {display_name} dataset:** {len(nodes_df)} nodes, {len(edges_df)} edges, {len(grants_detail_df)} grant details")
     
     render_graph_summary(nodes_df, edges_df)
-    render_downloads(nodes_df, edges_df, project_name)
+    render_downloads(nodes_df, edges_df, grants_detail_df, project_name)
 
 
 # =============================================================================
@@ -1289,7 +1602,7 @@ def main():
             if not p["is_demo"]:
                 display_name = get_project_display_name(p["name"])
                 if p["has_data"]:
-                    nodes_df, edges_df = load_project_data(p["name"])
+                    nodes_df, edges_df, grants_detail_df = load_project_data(p["name"])
                     display_name += f" ({len(nodes_df)} nodes, {len(edges_df)} edges)"
                 else:
                     display_name += " (empty)"
@@ -1323,7 +1636,7 @@ def main():
         st.markdown("### Demo Dataset")
         st.caption(f"📂 Loading from `demo_data/{DEMO_PROJECT_NAME}/`...")
         
-        nodes_df, edges_df = load_project_data(DEMO_PROJECT_NAME)
+        nodes_df, edges_df, grants_detail_df = load_project_data(DEMO_PROJECT_NAME)
         
         if nodes_df.empty and edges_df.empty:
             st.warning("""
@@ -1333,7 +1646,8 @@ def main():
             """)
             st.stop()
         
-        st.success(f"✅ Demo data: {len(nodes_df)} nodes, {len(edges_df)} edges")
+        grants_count = len(grants_detail_df) if not grants_detail_df.empty else 0
+        st.success(f"✅ Demo data: {len(nodes_df)} nodes, {len(edges_df)} edges, {grants_count} grant details")
         
         # Show existing foundations
         existing_foundations = get_existing_foundations(nodes_df)
@@ -1344,7 +1658,7 @@ def main():
                     st.write(f"{flag} {label}")
         
         render_graph_summary(nodes_df, edges_df)
-        render_downloads(nodes_df, edges_df, DEMO_PROJECT_NAME)
+        render_downloads(nodes_df, edges_df, grants_detail_df, DEMO_PROJECT_NAME)
 
 
 if __name__ == "__main__":
