@@ -47,6 +47,13 @@ v2.0.5 (2025-12-19): Fixed misleading status indicator
 - Projects with grants_detail.csv now show "✅ Full analysis" instead of "⚠️ Basic mode"
 - Updated is_complete logic to recognize grants_detail.csv as full capability
 
+v2.0.6 (2025-12-19): Fixed visibility metric and JSON types
+- Visibility now shows intuitive percentile (lower = less visible)
+- Computed among connectors (nodes with betweenness > 0) for meaningful comparison
+- Shows raw degree in parentheses to ground the metric in real data
+- Fixed JSON output to use native Python types (was outputting numpy types as strings)
+- Updated report footer to show v2 version
+
 Based on: insight-engine-spec.md (December 2025)
 
 INTEGRATION NOTE:
@@ -88,7 +95,7 @@ from report_generator import ReportData, generate_report
 # App Configuration
 # =============================================================================
 
-APP_VERSION = "2.0.5"
+APP_VERSION = "2.0.6"
 C4C_LOGO_URL = "https://static.wixstatic.com/media/275a3f_ddef70debd0b46c799a9d3d8c73a42da~mv2.png"
 
 # Paths
@@ -217,6 +224,10 @@ def compute_hidden_brokers(
     1. Traditional: top X% betweenness AND bottom Y% degree within node type
     2. Efficiency-based: high betweenness-to-degree ratio (for sparse networks)
     
+    Visibility is computed as percentile rank AMONG CONNECTORS (nodes with 
+    betweenness > 0), so that lower values = fewer connections relative to 
+    other structurally important nodes.
+    
     Returns: (broker_count, list of broker dicts)
     """
     if len(G.nodes()) == 0:
@@ -276,6 +287,10 @@ def compute_hidden_brokers(
         degree_values = [degree.get(n, 0) for n in nodes_with_betweenness]
         degree_median = np.median(degree_values)
         
+        # For visibility rank: compute among CONNECTORS (nodes with betweenness > 0)
+        # This makes the percentile meaningful - comparing apples to apples
+        connector_degrees = np.array([degree.get(n, 0) for n in nodes_with_betweenness])
+        
         for node in nodes_with_betweenness:
             node_efficiency = efficiencies.get(node, 0)
             node_degree = degree.get(node, 0)
@@ -283,17 +298,17 @@ def compute_hidden_brokers(
             
             # High efficiency AND below-median degree among connectors
             if node_efficiency >= efficiency_threshold and node_degree <= degree_median:
-                # Compute degree percentile for display
-                all_type_degree = [degree.get(n, 0) for n in nodes]
-                degree_pctl = (np.sum(np.array(all_type_degree) <= node_degree) / len(all_type_degree)) * 100
+                # Compute visibility rank among connectors (lower = less visible)
+                # "What % of connectors have fewer connections than me?"
+                visibility_rank = (np.sum(connector_degrees < node_degree) / len(connector_degrees)) * 100
                 
                 brokers.append({
                     "org_name": node_label_map.get(node, node),
                     "node_id": node,
                     "node_type": ntype,
                     "betweenness": round(node_betweenness, 4),
-                    "degree": node_degree,
-                    "visibility_percentile": round(degree_pctl, 0),
+                    "degree": int(node_degree),
+                    "visibility_rank": round(visibility_rank, 0),
                     "efficiency": round(node_efficiency, 4),
                     "broker_reason": f"High structural efficiency (top 10%), below-median visibility among connectors",
                 })
@@ -846,33 +861,34 @@ def compute_basic_metrics(project_path: Path) -> dict:
     # Cap at 100
     network_health_score = min(100, max(0, network_health_score))
     
+    # Cast to native Python types for clean JSON serialization
     return {
-        "node_count": node_count,
-        "edge_count": edge_count,
-        "org_count": org_count,
-        "person_count": person_count,
-        "grant_edge_count": grant_edge_count,
-        "board_edge_count": board_edge_count,
-        "funder_count": funder_count,
-        "grantee_count": grantee_count,
-        "total_funding": total_funding,
-        "multi_funder_count": multi_funder_count,
-        "multi_funder_pct": multi_funder_pct,
-        "top5_share_pct": top5_share_pct,
-        "connectivity_pct": connectivity_pct,
-        "network_health_score": network_health_score,
-        "governance_data_available": governance_data_available,
-        "shared_board_count": shared_board_count,
-        "pct_with_interlocks": pct_with_interlocks,
-        "governance_coverage_pct": 0.5 if governance_data_available else 0,
-        "broker_count": broker_count,
-        "bridge_count": bridge_count,
+        "node_count": int(node_count),
+        "edge_count": int(edge_count),
+        "org_count": int(org_count),
+        "person_count": int(person_count),
+        "grant_edge_count": int(grant_edge_count),
+        "board_edge_count": int(board_edge_count),
+        "funder_count": int(funder_count),
+        "grantee_count": int(grantee_count),
+        "total_funding": float(total_funding),
+        "multi_funder_count": int(multi_funder_count),
+        "multi_funder_pct": float(multi_funder_pct),
+        "top5_share_pct": float(top5_share_pct),
+        "connectivity_pct": float(connectivity_pct),
+        "network_health_score": float(network_health_score),
+        "governance_data_available": bool(governance_data_available),
+        "shared_board_count": int(shared_board_count),
+        "pct_with_interlocks": float(pct_with_interlocks),
+        "governance_coverage_pct": 0.5 if governance_data_available else 0.0,
+        "broker_count": int(broker_count),
+        "bridge_count": int(bridge_count),
         "top_shared_grantees": top_shared_grantees,
         "top_funder_pairs": top_funder_pairs,
         "top_brokers": top_brokers[:cfg.TOP_N_BROKERS],
         "top_bridges": top_bridges[:cfg.TOP_N_BRIDGES],
-        "max_funder_overlap_pct": max_funder_overlap_pct,
-        "num_components": connectivity_metrics.get("num_components", 1),
+        "max_funder_overlap_pct": float(max_funder_overlap_pct),
+        "num_components": int(connectivity_metrics.get("num_components", 1)),
     }
 
 
