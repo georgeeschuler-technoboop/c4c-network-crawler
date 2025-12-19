@@ -9,6 +9,13 @@ Usage:
     
     Or with defaults (GLFN demo):
     python -m insights.run
+
+VERSION HISTORY:
+----------------
+v3.0.1 (2025-12-19): Fixed hidden broker detection bug
+- Added betweenness > 0 check to is_broker and is_hidden_broker
+- Previously flagged 2,810 nodes with betweenness=0 as hidden brokers
+- Now correctly requires actual brokerage (betweenness > 0)
 """
 
 import argparse
@@ -212,8 +219,9 @@ def compute_derived_signals(metrics_df: pd.DataFrame) -> pd.DataFrame:
         outflow_75 = np.percentile(outflow_vals, CAPITAL_HUB_THRESHOLD) if len(outflow_vals) > 0 else 0
         
         df.loc[org_mask & (df["degree"] >= degree_75), "is_connector"] = 1
-        df.loc[org_mask & (df["betweenness"] >= betweenness_75), "is_broker"] = 1
-        df.loc[org_mask & (df["betweenness"] >= betweenness_75) & (df["degree"] <= degree_40), "is_hidden_broker"] = 1
+        # FIX: Added betweenness > 0 check to prevent flagging nodes with zero betweenness
+        df.loc[org_mask & (df["betweenness"] > 0) & (df["betweenness"] >= betweenness_75), "is_broker"] = 1
+        df.loc[org_mask & (df["betweenness"] > 0) & (df["betweenness"] >= betweenness_75) & (df["degree"] <= degree_40), "is_hidden_broker"] = 1
         df.loc[org_mask & (df["grant_outflow_total"] >= outflow_75) & (df["grant_outflow_total"] > 0), "is_capital_hub"] = 1
         df.loc[org_mask & (df["degree"] == 1), "is_isolated"] = 1
     
