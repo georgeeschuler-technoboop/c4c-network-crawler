@@ -9,7 +9,19 @@ Each function returns a SignalInterpretation object with:
 - evidence: top examples, metrics, tables
 - confidence: high, medium, low, unavailable
 
-Version: 1.0.0
+VERSION HISTORY:
+----------------
+v1.0.0 (2025-12-19): Initial release
+- SignalInterpretation dataclass
+- Interpretation functions for all signal sections
+- generate_system_summary() with headline + positives/gaps
+- generate_recommendations() always returns exactly 4
+
+v1.0.1 (2025-12-19): Fixed recommendations bug
+- Default recommendations now have unique triggers (default_info_sharing, 
+  default_thematic, default_visibility, default_evolution)
+- Removed duplicate trigger check that was blocking defaults
+- Guarantees exactly 4 recommendations in all cases
 """
 
 from dataclasses import dataclass, field
