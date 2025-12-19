@@ -43,6 +43,10 @@ v2.0.4 (2025-12-19): Added full graph analysis (Option B - self-sufficient)
 - v2 now fully self-sufficient - computes all metrics from CSVs directly
 - No longer requires v1 artifacts (project_summary.json, insight_cards.json)
 
+v2.0.5 (2025-12-19): Fixed misleading status indicator
+- Projects with grants_detail.csv now show "✅ Full analysis" instead of "⚠️ Basic mode"
+- Updated is_complete logic to recognize grants_detail.csv as full capability
+
 Based on: insight-engine-spec.md (December 2025)
 
 INTEGRATION NOTE:
@@ -84,7 +88,7 @@ from report_generator import ReportData, generate_report
 # App Configuration
 # =============================================================================
 
-APP_VERSION = "2.0.4"
+APP_VERSION = "2.0.5"
 C4C_LOGO_URL = "https://static.wixstatic.com/media/275a3f_ddef70debd0b46c799a9d3d8c73a42da~mv2.png"
 
 # Paths
@@ -155,8 +159,8 @@ def get_projects() -> list[dict]:
                     "has_v1_artifacts": has_summary and has_cards,
                     # v2 native format
                     "has_network_metrics": has_network_metrics,
-                    # Overall status
-                    "is_complete": has_summary and has_cards,
+                    # Overall status - complete if we have v1 artifacts OR grants_detail for full computation
+                    "is_complete": (has_summary and has_cards) or has_grants_detail,
                 })
     
     # Sort alphabetically
@@ -1078,11 +1082,13 @@ def main():
     col2.markdown("✅ edges.csv" if project["has_edges"] else "❌ edges.csv")
     
     if project["has_v1_artifacts"]:
-        col3.markdown("✅ v1 artifacts (will adapt)")
+        col3.markdown("✅ v1 artifacts available")
     elif project["has_network_metrics"]:
-        col3.markdown("✅ v2 metrics")
+        col3.markdown("✅ v2 metrics available")
+    elif project["has_grants_detail"]:
+        col3.markdown("✅ Full analysis (from CSVs)")
     else:
-        col3.markdown("⚠️ Basic mode (limited data)")
+        col3.markdown("⚠️ Partial analysis (no grants_detail.csv)")
     
     # Generate button
     if st.button("🚀 Generate Briefing", type="primary", use_container_width=True):
