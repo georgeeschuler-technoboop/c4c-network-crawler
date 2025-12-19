@@ -6,14 +6,40 @@ Generates narrative reports with expandable evidence.
 
 The UI is an interface to the briefing, not the product itself.
 
-Version: 2.0.0
+VERSION HISTORY:
+----------------
+v2.0.0 (2025-12-19): Initial v2 release
+- New report structure based on insight-engine-spec.md
+- Signal/Interpretation/Why it matters pattern for all sections
+- Reading contract banner (5-min / 20-min / explore)
+- System Summary with headline, positives, gaps
+- Opportunity/Risk lens labels for Brokers/Bridges
+- Strategic Recommendations (always exactly 4)
+- Project Outputs organized by audience (Executive/Analyst/Developer)
+
+v2.0.1 (2025-12-19): Fixed recommendations bug
+- Each default recommendation now has unique trigger
+- Prevents IndexError when fewer than 4 signal-triggered recs
+
+v2.0.2 (2025-12-19): Fixed CSV schema handling
+- compute_basic_metrics() now handles actual OrgGraph schema
+- Supports node_type = ORG/PERSON (not funder/grantee)
+- Supports edge_type = GRANT/BOARD_MEMBERSHIP
+- Supports from_id/to_id column names
+- Uses grants_detail.csv as primary funding source when available
+- Computes funder pairs, overlap percentages, governance metrics
+- Proper health score calculation
+
+v2.0.3 (2025-12-19): Updated logo
+- Changed C4C_LOGO_URL to new icon
+
 Based on: insight-engine-spec.md (December 2025)
 
 INTEGRATION NOTE:
 This v2 app can load data from:
 1. v1 artifacts (project_summary.json, insight_cards.json) - adapts to v2 format
 2. v2 native format (network_metrics.json) - if available
-3. Raw CSVs (nodes.csv, edges.csv) - computes basic metrics only
+3. Raw CSVs (nodes.csv, edges.csv, grants_detail.csv) - computes metrics directly
 """
 
 import streamlit as st
@@ -46,7 +72,7 @@ from report_generator import ReportData, generate_report
 # App Configuration
 # =============================================================================
 
-APP_VERSION = "2.0.0"
+APP_VERSION = "2.0.3"
 C4C_LOGO_URL = "https://static.wixstatic.com/media/275a3f_ddef70debd0b46c799a9d3d8c73a42da~mv2.png"
 
 # Paths
