@@ -47,7 +47,7 @@ from report_generator import ReportData, generate_report
 # =============================================================================
 
 APP_VERSION = "2.0.0"
-C4C_LOGO_URL = "https://static.wixstatic.com/media/275a3f_ed8e76c8495d4799a5d7575822009e93~mv2.png"
+C4C_LOGO_URL = "https://static.wixstatic.com/media/275a3f_ddef70debd0b46c799a9d3d8c73a42da~mv2.png"
 
 # Paths
 APP_DIR = Path(__file__).resolve().parent
