@@ -54,6 +54,13 @@ v2.0.6 (2025-12-19): Fixed visibility metric and JSON types
 - Fixed JSON output to use native Python types (was outputting numpy types as strings)
 - Updated report footer to show v2 version
 
+v2.0.7 (2025-12-19): Fixed funding metrics to use edges.csv as source of truth
+- Previously used grants_detail.csv which had inconsistent data
+- Now always uses edges.csv for funding, grantee count, and multi-funder metrics
+- Fixed: Total funding was $536.9M, now correctly $517.7M
+- Fixed: Grantee count was 3,002, now correctly 2,899
+- Fixed: Multi-funder count was 70, now correctly 91
+
 Based on: insight-engine-spec.md (December 2025)
 
 INTEGRATION NOTE:
@@ -95,7 +102,7 @@ from report_generator import ReportData, generate_report
 # App Configuration
 # =============================================================================
 
-APP_VERSION = "2.0.6"
+APP_VERSION = "2.0.7"
 C4C_LOGO_URL = "https://static.wixstatic.com/media/275a3f_ddef70debd0b46c799a9d3d8c73a42da~mv2.png"
 
 # Paths
@@ -648,134 +655,94 @@ def compute_basic_metrics(project_path: Path) -> dict:
             break
     
     # ==========================================================================
-    # If grants_detail.csv exists, use it for funding metrics (more reliable)
+    # FIX: Always use edges.csv for funding metrics (source of truth)
+    # Previously used grants_detail.csv which had inconsistent data
     # ==========================================================================
-    if grants_df is not None and not grants_df.empty:
-        # Funder and grantee counts from grants
-        funder_col = "foundation_name" if "foundation_name" in grants_df.columns else "funder_name"
-        grantee_col = "grantee_name"
-        amount_col_grants = "grant_amount"
-        
-        if funder_col in grants_df.columns:
-            funder_count = grants_df[funder_col].nunique()
-        else:
-            funder_count = 0
-        
-        if grantee_col in grants_df.columns:
-            grantee_count = grants_df[grantee_col].nunique()
-        else:
-            grantee_count = 0
-        
-        # Total funding
-        if amount_col_grants in grants_df.columns:
-            total_funding = pd.to_numeric(grants_df[amount_col_grants], errors="coerce").fillna(0).sum()
-        else:
-            total_funding = 0
-        
-        # Multi-funder grantees
-        if funder_col in grants_df.columns and grantee_col in grants_df.columns:
-            grantee_funder_counts = grants_df.groupby(grantee_col)[funder_col].nunique()
-            multi_funder_grantees = grantee_funder_counts[grantee_funder_counts > 1]
-            multi_funder_count = len(multi_funder_grantees)
-            multi_funder_pct = (multi_funder_count / grantee_count * 100) if grantee_count > 0 else 0
-            
-            # Top shared grantees
-            top_shared = multi_funder_grantees.sort_values(ascending=False).head(cfg.TOP_N_SHARED_GRANTEES)
-            top_shared_grantees = []
-            for grantee_name, funder_ct in top_shared.items():
-                grantee_grants = grants_df[grants_df[grantee_col] == grantee_name]
-                total_received = grantee_grants[amount_col_grants].sum() if amount_col_grants in grantee_grants.columns else 0
-                top_funders = grantee_grants[funder_col].unique().tolist()[:3]
-                top_shared_grantees.append({
-                    "grantee_name": grantee_name,
-                    "funder_count": int(funder_ct),
-                    "total_received": float(total_received),
-                    "top_funders": top_funders,
-                })
-        else:
-            multi_funder_count = 0
-            multi_funder_pct = 0
-            top_shared_grantees = []
-        
-        # Top 5 funder concentration
-        if funder_col in grants_df.columns and amount_col_grants in grants_df.columns:
-            funder_totals = grants_df.groupby(funder_col)[amount_col_grants].sum().sort_values(ascending=False)
-            top5_funding = funder_totals.head(5).sum()
-            top5_share_pct = (top5_funding / total_funding * 100) if total_funding > 0 else 0
-        else:
-            top5_share_pct = 0
-        
-        # Funder pair overlap (Portfolio Twins)
-        top_funder_pairs = []
-        max_funder_overlap_pct = 0
-        if funder_col in grants_df.columns and grantee_col in grants_df.columns:
-            # Build funder -> set of grantees mapping
-            funder_grantees = grants_df.groupby(funder_col)[grantee_col].apply(set).to_dict()
-            funders = list(funder_grantees.keys())
-            
-            pairs = []
-            for i, f1 in enumerate(funders):
-                for f2 in funders[i+1:]:
-                    shared = funder_grantees[f1] & funder_grantees[f2]
-                    if len(shared) > 0:
-                        union = funder_grantees[f1] | funder_grantees[f2]
-                        jaccard = len(shared) / len(union) * 100 if len(union) > 0 else 0
-                        pairs.append({
-                            "funder_a": f1,
-                            "funder_b": f2,
-                            "shared_grantee_count": len(shared),
-                            "overlap_pct": round(jaccard, 1),
-                        })
-            
-            # Sort by shared count and take top N
-            pairs.sort(key=lambda x: x["shared_grantee_count"], reverse=True)
-            top_funder_pairs = pairs[:cfg.TOP_N_FUNDER_PAIRS]
-            if top_funder_pairs:
-                max_funder_overlap_pct = max(p["overlap_pct"] for p in top_funder_pairs)
-    
+    # Filter to grant edges only for funding metrics
+    if "edge_type" in edges_df.columns:
+        grant_edges = edges_df[edges_df["edge_type"].str.upper() == "GRANT"]
     else:
-        # ==========================================================================
-        # Fallback: compute from edges.csv only (less reliable)
-        # ==========================================================================
-        # Filter to grant edges only for funding metrics
-        if "edge_type" in edges_df.columns:
-            grant_edges = edges_df[edges_df["edge_type"].str.upper() == "GRANT"]
-        else:
-            grant_edges = edges_df
+        grant_edges = edges_df
+    
+    # Funder/grantee counts from edges
+    if source_col and target_col:
+        funder_count = grant_edges[source_col].nunique() if not grant_edges.empty else 0
+        grantee_count = grant_edges[target_col].nunique() if not grant_edges.empty else 0
+    else:
+        funder_count = 0
+        grantee_count = 0
+    
+    # Total funding from edge amounts
+    if amount_col and not grant_edges.empty:
+        total_funding = pd.to_numeric(grant_edges[amount_col], errors="coerce").fillna(0).sum()
+    else:
+        total_funding = 0
+    
+    # Multi-funder calculation
+    multi_funder_count = 0
+    multi_funder_pct = 0
+    top_shared_grantees = []
+    
+    if source_col and target_col and not grant_edges.empty:
+        grantee_funder_counts = grant_edges.groupby(target_col)[source_col].nunique()
+        multi_funder_grantees = grantee_funder_counts[grantee_funder_counts >= 2]
+        multi_funder_count = len(multi_funder_grantees)
+        multi_funder_pct = (multi_funder_count / grantee_count * 100) if grantee_count > 0 else 0
         
-        # Estimate funder/grantee counts from edges
-        if source_col and target_col:
-            funder_count = grant_edges[source_col].nunique() if not grant_edges.empty else 0
-            grantee_count = grant_edges[target_col].nunique() if not grant_edges.empty else 0
-        else:
-            funder_count = 0
-            grantee_count = 0
+        # Get node labels for display
+        node_label_map = {}
+        if "node_id" in nodes_df.columns and "label" in nodes_df.columns:
+            node_label_map = dict(zip(nodes_df["node_id"], nodes_df["label"]))
         
-        # Total funding from edge amounts
-        if amount_col and not grant_edges.empty:
-            total_funding = pd.to_numeric(grant_edges[amount_col], errors="coerce").fillna(0).sum()
-        else:
-            total_funding = 0
+        # Top shared grantees
+        for grantee_id in multi_funder_grantees.sort_values(ascending=False).head(cfg.TOP_N_SHARED_GRANTEES).index:
+            grantee_grants = grant_edges[grant_edges[target_col] == grantee_id]
+            funder_ids = grantee_grants[source_col].unique().tolist()
+            total_received = float(grantee_grants[amount_col].sum()) if amount_col else 0.0
+            top_shared_grantees.append({
+                "grantee_name": node_label_map.get(grantee_id, grantee_id),
+                "funder_count": int(len(funder_ids)),
+                "total_received": total_received,
+                "top_funders": [node_label_map.get(f, f) for f in funder_ids[:3]],
+            })
+    
+    # Top 5 concentration
+    top5_share_pct = 0
+    if source_col and amount_col and not grant_edges.empty:
+        funder_totals = grant_edges.groupby(source_col)[amount_col].sum().sort_values(ascending=False)
+        top5_funding = pd.to_numeric(funder_totals.head(5), errors="coerce").sum()
+        top5_share_pct = (top5_funding / total_funding * 100) if total_funding > 0 else 0
+    
+    # Funder pair overlap (Portfolio Twins)
+    top_funder_pairs = []
+    max_funder_overlap_pct = 0
+    
+    if source_col and target_col and not grant_edges.empty:
+        funder_grantees = grant_edges.groupby(source_col)[target_col].apply(set).to_dict()
+        funders = list(funder_grantees.keys())
         
-        # Multi-funder calculation
-        multi_funder_count = 0
-        multi_funder_pct = 0
-        top_shared_grantees = []
+        node_label_map = {}
+        if "node_id" in nodes_df.columns and "label" in nodes_df.columns:
+            node_label_map = dict(zip(nodes_df["node_id"], nodes_df["label"]))
         
-        if source_col and target_col and not grant_edges.empty:
-            grantee_funder_counts = grant_edges.groupby(target_col)[source_col].nunique()
-            multi_funder_count = (grantee_funder_counts > 1).sum()
-            multi_funder_pct = (multi_funder_count / len(grantee_funder_counts) * 100) if len(grantee_funder_counts) > 0 else 0
+        pairs = []
+        for i, f1 in enumerate(funders):
+            for f2 in funders[i+1:]:
+                shared = funder_grantees[f1] & funder_grantees[f2]
+                if len(shared) > 0:
+                    union = funder_grantees[f1] | funder_grantees[f2]
+                    jaccard = len(shared) / len(union) * 100 if len(union) > 0 else 0
+                    pairs.append({
+                        "funder_a": node_label_map.get(f1, f1),
+                        "funder_b": node_label_map.get(f2, f2),
+                        "shared_grantee_count": len(shared),
+                        "overlap_pct": round(jaccard, 1),
+                    })
         
-        # Top 5 concentration
-        top5_share_pct = 0
-        if source_col and amount_col and not grant_edges.empty:
-            funder_totals = grant_edges.groupby(source_col)[amount_col].sum().sort_values(ascending=False)
-            top5_funding = pd.to_numeric(funder_totals.head(5), errors="coerce").sum()
-            top5_share_pct = (top5_funding / total_funding * 100) if total_funding > 0 else 0
-        
-        top_funder_pairs = []
-        max_funder_overlap_pct = 0
+        pairs.sort(key=lambda x: x["shared_grantee_count"], reverse=True)
+        top_funder_pairs = pairs[:cfg.TOP_N_FUNDER_PAIRS]
+        if top_funder_pairs:
+            max_funder_overlap_pct = max(p["overlap_pct"] for p in top_funder_pairs)
     
     # ==========================================================================
     # Governance metrics (from board edges)
