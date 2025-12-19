@@ -104,7 +104,7 @@ STRATEGIC_INTRO = (
 # =============================================================================
 # App Metadata
 # =============================================================================
-APP_VERSION = "1.0.0"
+APP_VERSION = "2.0.6"
 APP_NAME = "Insight Engine"
 GENERATOR_CREDIT = "C4C Network Insight Engine"
 
