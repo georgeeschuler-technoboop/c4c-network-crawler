@@ -4,7 +4,17 @@ Insight Engine — Report Generator
 Generates the canonical Markdown report from network metrics and narratives.
 Output matches the exact structure defined in the spec.
 
-Version: 1.0.0
+VERSION HISTORY:
+----------------
+v1.0.0 (2025-12-19): Initial release
+- ReportData container class
+- Table formatters for evidence sections
+- generate_report() producing canonical Markdown
+
+v1.0.1 (2025-12-19): Updated visibility display
+- Broker table now shows visibility_rank (lower = less visible)
+- Shows raw degree in parentheses to ground metric in real data
+- Updated footnote to explain calculation
 """
 
 from datetime import datetime
@@ -156,9 +166,11 @@ def format_brokers_table(brokers: List[Dict[str, Any]]) -> str:
     for b in brokers[:cfg.TOP_N_BROKERS]:
         name = b.get("org_name", "Unknown")
         betweenness = b.get("betweenness", 0)
-        visibility = b.get("visibility_percentile", 0)
+        visibility_rank = b.get("visibility_rank", b.get("visibility_percentile", 0))
+        degree = b.get("degree", 0)
         reason = b.get("broker_reason", "High structural importance, low visibility")
-        rows.append(f"| {name} | {betweenness:.3f} | {visibility:.0f}% | {reason} |")
+        # Show visibility rank with degree in parentheses for grounding
+        rows.append(f"| {name} | {betweenness:.3f} | {visibility_rank:.0f}% ({degree} connections) | {reason} |")
     
     return "\n".join(rows)
 
@@ -373,11 +385,11 @@ def generate_report(report_data: ReportData) -> str:
 
 **Evidence (Top {cfg.TOP_N_BROKERS} hidden brokers)**
 
-| Organization | Betweenness | Visibility (Degree %) | Why They Matter |
-|--------------|-------------|----------------------|-----------------|
+| Organization | Betweenness | Visibility | Why They Matter |
+|--------------|-------------|------------|-----------------|
 {broker_rows}
 
-*Visibility = degree percentile within node type. Lower = less visibly connected.*
+*Visibility shows what % of structurally important nodes have fewer connections than this one. Lower % = less visible. Raw connection count shown in parentheses.*
 
 ---
 
