@@ -8,6 +8,12 @@ The UI is an interface to the briefing, not the product itself.
 
 Version: 2.0.0
 Based on: insight-engine-spec.md (December 2025)
+
+INTEGRATION NOTE:
+This v2 app can load data from:
+1. v1 artifacts (project_summary.json, insight_cards.json) - adapts to v2 format
+2. v2 native format (network_metrics.json) - if available
+3. Raw CSVs (nodes.csv, edges.csv) - computes basic metrics only
 """
 
 import streamlit as st
@@ -49,7 +55,7 @@ REPO_ROOT = APP_DIR.parent
 DEMO_DATA_DIR = REPO_ROOT / "demo_data"
 
 st.set_page_config(
-    page_title="Insight Engine",
+    page_title="Insight Engine v2",
     page_icon="🔬",
     layout="wide",
     initial_sidebar_state="collapsed"
@@ -63,100 +69,125 @@ if "report_data" not in st.session_state:
     st.session_state.report_data = None
 if "generated_report" not in st.session_state:
     st.session_state.generated_report = None
+if "current_project_id" not in st.session_state:
+    st.session_state.current_project_id = None
 
 
 # =============================================================================
-# Data Loading
+# Project Discovery (matches v1)
 # =============================================================================
 
 def get_projects() -> list[dict]:
-    """Scan demo_data directory for available projects."""
-    projects = []
-    
+    """Discover available projects in demo_data/."""
     if not DEMO_DATA_DIR.exists():
-        return projects
+        return []
     
-    for folder in DEMO_DATA_DIR.iterdir():
-        if not folder.is_dir():
-            continue
-        
-        # Check for required files
-        has_nodes = (folder / "nodes.csv").exists()
-        has_edges = (folder / "edges.csv").exists()
-        has_metrics = (folder / "network_metrics.json").exists()
-        has_grants = (folder / "grants_detail.csv").exists()
-        
-        if has_nodes and has_edges:
-            projects.append({
-                "id": folder.name,
-                "path": folder,
-                "has_nodes": has_nodes,
-                "has_edges": has_edges,
-                "has_metrics": has_metrics,
-                "has_grants": has_grants,
-                "is_complete": has_nodes and has_edges and has_metrics
-            })
+    projects = []
+    for item in DEMO_DATA_DIR.iterdir():
+        if item.is_dir() and not item.name.startswith('.'):
+            # Check what files exist
+            has_nodes = (item / "nodes.csv").exists()
+            has_edges = (item / "edges.csv").exists()
+            has_grants_detail = (item / "grants_detail.csv").exists()
+            
+            # v1 pre-computed artifacts
+            has_summary = (item / "project_summary.json").exists()
+            has_cards = (item / "insight_cards.json").exists()
+            has_report = (item / "insight_report.md").exists()
+            has_metrics_csv = (item / "node_metrics.csv").exists()
+            
+            # v2 native format
+            has_network_metrics = (item / "network_metrics.json").exists()
+            
+            # Only show projects that have the required inputs
+            if has_nodes and has_edges:
+                projects.append({
+                    "id": item.name,
+                    "path": item,
+                    # Required inputs
+                    "has_nodes": has_nodes,
+                    "has_edges": has_edges,
+                    # Optional input
+                    "has_grants_detail": has_grants_detail,
+                    # v1 pre-computed outputs
+                    "has_summary": has_summary,
+                    "has_cards": has_cards,
+                    "has_report": has_report,
+                    "has_metrics_csv": has_metrics_csv,
+                    "has_v1_artifacts": has_summary and has_cards,
+                    # v2 native format
+                    "has_network_metrics": has_network_metrics,
+                    # Overall status
+                    "is_complete": has_summary and has_cards,
+                })
     
-    return sorted(projects, key=lambda x: x["id"])
+    # Sort alphabetically
+    projects.sort(key=lambda x: x["id"].lower())
+    return projects
 
 
-def load_metrics(project_path: Path) -> dict:
-    """Load network metrics from JSON file or compute from CSVs."""
-    metrics_path = project_path / "network_metrics.json"
+# =============================================================================
+# Data Loading & Adaptation
+# =============================================================================
+
+def load_v1_artifacts(project_path: Path) -> dict:
+    """Load v1 artifacts (project_summary.json, insight_cards.json)."""
+    artifacts = {
+        "project_summary": None,
+        "insight_cards": None,
+        "markdown_report": None,
+    }
     
-    if metrics_path.exists():
-        with open(metrics_path, 'r') as f:
-            return json.load(f)
+    summary_path = project_path / "project_summary.json"
+    if summary_path.exists():
+        with open(summary_path, 'r') as f:
+            artifacts["project_summary"] = json.load(f)
     
-    # Fallback: compute basic metrics from nodes/edges
-    return compute_basic_metrics(project_path)
+    cards_path = project_path / "insight_cards.json"
+    if cards_path.exists():
+        with open(cards_path, 'r') as f:
+            artifacts["insight_cards"] = json.load(f)
+    
+    report_path = project_path / "insight_report.md"
+    if report_path.exists():
+        with open(report_path, 'r') as f:
+            artifacts["markdown_report"] = f.read()
+    
+    return artifacts
 
 
-def compute_basic_metrics(project_path: Path) -> dict:
-    """Compute basic metrics from nodes.csv and edges.csv."""
-    nodes_df = pd.read_csv(project_path / "nodes.csv")
-    edges_df = pd.read_csv(project_path / "edges.csv")
+def adapt_v1_to_v2_metrics(project_summary: dict, insight_cards: dict) -> dict:
+    """
+    Adapt v1 data structures to v2 metrics format.
     
-    # Basic counts
-    node_count = len(nodes_df)
-    edge_count = len(edges_df)
+    v1 project_summary structure:
+    {
+        "node_counts": {"organizations": N, "people": N},
+        "edge_counts": {"grants": N, "board_memberships": N},
+        "funding": {"total_amount": N, "funder_count": N, "grantee_count": N, "top5_share": 0.xx},
+        "governance": {"multi_board_people": N}
+    }
     
-    # Node type counts
-    funder_count = len(nodes_df[nodes_df.get("node_type", "") == "funder"]) if "node_type" in nodes_df.columns else 0
-    grantee_count = len(nodes_df[nodes_df.get("node_type", "") == "grantee"]) if "node_type" in nodes_df.columns else 0
-    
-    # Funding totals
-    total_funding = edges_df["grant_amount"].sum() if "grant_amount" in edges_df.columns else 0
-    
-    # Multi-funder calculation
-    if "target_id" in edges_df.columns and "source_id" in edges_df.columns:
-        grantee_funder_counts = edges_df.groupby("target_id")["source_id"].nunique()
-        multi_funder_count = (grantee_funder_counts > 1).sum()
-        multi_funder_pct = (multi_funder_count / len(grantee_funder_counts) * 100) if len(grantee_funder_counts) > 0 else 0
-    else:
-        multi_funder_count = 0
-        multi_funder_pct = 0
-    
-    # Top 5 concentration
-    if "source_id" in edges_df.columns and "grant_amount" in edges_df.columns:
-        funder_totals = edges_df.groupby("source_id")["grant_amount"].sum().sort_values(ascending=False)
-        top5_funding = funder_totals.head(5).sum()
-        top5_share_pct = (top5_funding / total_funding * 100) if total_funding > 0 else 0
-    else:
-        top5_share_pct = 0
-    
-    return {
-        "node_count": node_count,
-        "edge_count": edge_count,
-        "funder_count": funder_count,
-        "grantee_count": grantee_count,
-        "total_funding": total_funding,
-        "multi_funder_count": multi_funder_count,
-        "multi_funder_pct": multi_funder_pct,
-        "top5_share_pct": top5_share_pct,
-        "connectivity_pct": 50,  # Placeholder - needs graph analysis
-        "network_health_score": 50,  # Placeholder
+    v1 insight_cards structure:
+    {
+        "health": {"score": N, "label": "...", "positive": [...], "risk": [...]},
+        "cards": [...]
+    }
+    """
+    metrics = {
+        # Default values
+        "node_count": 0,
+        "edge_count": 0,
+        "total_funding": 0,
+        "funder_count": 0,
+        "grantee_count": 0,
+        "multi_funder_pct": 0,
+        "multi_funder_count": 0,
+        "connectivity_pct": 50,  # Not in v1, use default
+        "top5_share_pct": 0,
+        "network_health_score": 50,
         "governance_data_available": False,
+        "governance_coverage_pct": 0,
         "shared_board_count": 0,
         "pct_with_interlocks": 0,
         "broker_count": 0,
@@ -165,34 +196,391 @@ def compute_basic_metrics(project_path: Path) -> dict:
         "top_funder_pairs": [],
         "top_brokers": [],
         "top_bridges": [],
-    }
-
-
-def load_evidence_data(project_path: Path, metrics: dict) -> dict:
-    """Load additional evidence data (shared grantees, pairs, etc.) if available."""
-    # Try to load pre-computed evidence files
-    evidence_files = {
-        "shared_grantees": "shared_grantees.json",
-        "funder_pairs": "funder_pairs.json",
-        "brokers": "brokers.json",
-        "bridges": "bridges.json",
+        "max_funder_overlap_pct": 0,
     }
     
-    for key, filename in evidence_files.items():
-        filepath = project_path / filename
-        if filepath.exists():
-            with open(filepath, 'r') as f:
-                data = json.load(f)
-                if key == "shared_grantees":
-                    metrics["top_shared_grantees"] = data
-                elif key == "funder_pairs":
-                    metrics["top_funder_pairs"] = data
-                elif key == "brokers":
-                    metrics["top_brokers"] = data
-                elif key == "bridges":
-                    metrics["top_bridges"] = data
+    # Extract from project_summary
+    if project_summary:
+        node_counts = project_summary.get("node_counts", {})
+        edge_counts = project_summary.get("edge_counts", {})
+        funding = project_summary.get("funding", {})
+        governance = project_summary.get("governance", {})
+        
+        metrics["node_count"] = node_counts.get("organizations", 0) + node_counts.get("people", 0)
+        metrics["edge_count"] = edge_counts.get("grants", 0) + edge_counts.get("board_memberships", 0)
+        metrics["total_funding"] = funding.get("total_amount", 0)
+        metrics["funder_count"] = funding.get("funder_count", 0)
+        metrics["grantee_count"] = funding.get("grantee_count", 0)
+        
+        # top5_share is stored as decimal in v1 (e.g., 0.62), convert to percentage
+        top5_share = funding.get("top5_share", 0)
+        metrics["top5_share_pct"] = top5_share * 100 if top5_share < 1 else top5_share
+        
+        # Governance
+        multi_board = governance.get("multi_board_people", 0)
+        metrics["shared_board_count"] = multi_board
+        metrics["governance_data_available"] = multi_board > 0
+        if multi_board > 0:
+            metrics["governance_coverage_pct"] = 0.5  # Assume moderate coverage if we have data
+            metrics["pct_with_interlocks"] = min(multi_board * 5, 50)  # Rough estimate
+    
+    # Extract from insight_cards
+    if insight_cards:
+        health = insight_cards.get("health", {})
+        metrics["network_health_score"] = health.get("score", 50)
+        
+        # Try to extract metrics from cards
+        cards = insight_cards.get("cards", [])
+        for card in cards:
+            title = card.get("title", "").lower()
+            ranked_rows = card.get("ranked_rows", [])
+            
+            # Multi-funder grantees card
+            if "anchor" in title or "multi-funder" in title or "shared" in title:
+                metrics["multi_funder_count"] = len(ranked_rows)
+                if metrics["grantee_count"] > 0:
+                    metrics["multi_funder_pct"] = (len(ranked_rows) / metrics["grantee_count"]) * 100
+                # Extract top shared grantees
+                for row in ranked_rows[:cfg.TOP_N_SHARED_GRANTEES]:
+                    grantee = {
+                        "grantee_name": row.get("grantee") or row.get("org") or row.get("node", "Unknown"),
+                        "funder_count": row.get("funders", 0),
+                        "total_received": row.get("amount", 0),
+                        "top_funders": [],
+                    }
+                    metrics["top_shared_grantees"].append(grantee)
+            
+            # Portfolio overlap / twins card
+            if "portfolio" in title or "twin" in title or "overlap" in title:
+                for row in ranked_rows[:cfg.TOP_N_FUNDER_PAIRS]:
+                    pair = {
+                        "funder_a": row.get("pair", "").split(" & ")[0] if " & " in row.get("pair", "") else row.get("funder_a", "Unknown"),
+                        "funder_b": row.get("pair", "").split(" & ")[1] if " & " in row.get("pair", "") else row.get("funder_b", "Unknown"),
+                        "shared_grantee_count": row.get("shared", 0),
+                        "overlap_pct": row.get("jaccard", 0) * 100 if row.get("jaccard", 0) < 1 else row.get("jaccard", 0),
+                    }
+                    metrics["top_funder_pairs"].append(pair)
+                    if pair["overlap_pct"] > metrics["max_funder_overlap_pct"]:
+                        metrics["max_funder_overlap_pct"] = pair["overlap_pct"]
+            
+            # Broker card
+            if "broker" in title:
+                metrics["broker_count"] = len(ranked_rows)
+                for row in ranked_rows[:cfg.TOP_N_BROKERS]:
+                    broker = {
+                        "org_name": row.get("org") or row.get("grantee") or row.get("node", "Unknown"),
+                        "betweenness": row.get("betweenness", 0),
+                        "visibility_percentile": 30,  # Not in v1, use default
+                        "broker_reason": row.get("narrative", "High structural importance"),
+                    }
+                    metrics["top_brokers"].append(broker)
+            
+            # Bridge / connector card
+            if "bridge" in title or "connector" in title or "critical" in title:
+                metrics["bridge_count"] = len(ranked_rows)
+                for row in ranked_rows[:cfg.TOP_N_BRIDGES]:
+                    bridge = {
+                        "node_name": row.get("org") or row.get("person") or row.get("node", "Unknown"),
+                        "node_type": "organization" if row.get("org") else "person",
+                        "impact_if_removed": row.get("narrative", "Network fragmentation"),
+                    }
+                    metrics["top_bridges"].append(bridge)
     
     return metrics
+
+
+def load_metrics(project: dict) -> dict:
+    """
+    Load metrics from available sources:
+    1. v2 native format (network_metrics.json)
+    2. v1 artifacts (project_summary.json + insight_cards.json) - adapted
+    3. Raw CSVs (nodes.csv, edges.csv) - basic computation only
+    """
+    project_path = project["path"]
+    
+    # Try v2 native format first
+    if project.get("has_network_metrics"):
+        with open(project_path / "network_metrics.json", 'r') as f:
+            return json.load(f)
+    
+    # Try v1 artifacts
+    if project.get("has_v1_artifacts"):
+        v1_data = load_v1_artifacts(project_path)
+        return adapt_v1_to_v2_metrics(
+            v1_data.get("project_summary"),
+            v1_data.get("insight_cards")
+        )
+    
+    # Fallback: compute basic metrics from CSVs
+    return compute_basic_metrics(project_path)
+
+
+def compute_basic_metrics(project_path: Path) -> dict:
+    """
+    Compute basic metrics from nodes.csv, edges.csv, and optionally grants_detail.csv.
+    
+    Expected schemas:
+    - nodes.csv: node_id, node_type (ORG/PERSON), label, ...
+    - edges.csv: edge_id, from_id, to_id, edge_type (GRANT/BOARD_MEMBERSHIP), amount, ...
+    - grants_detail.csv: foundation_name, grantee_name, grant_amount, ...
+    """
+    nodes_df = pd.read_csv(project_path / "nodes.csv")
+    edges_df = pd.read_csv(project_path / "edges.csv")
+    
+    # Check for grants_detail.csv (better source for funding data)
+    grants_path = project_path / "grants_detail.csv"
+    grants_df = None
+    if grants_path.exists():
+        grants_df = pd.read_csv(grants_path)
+    
+    # Basic counts
+    node_count = len(nodes_df)
+    edge_count = len(edges_df)
+    
+    # Node type counts
+    # Schema uses: node_type = "ORG" or "PERSON"
+    org_count = 0
+    person_count = 0
+    
+    if "node_type" in nodes_df.columns:
+        type_values = nodes_df["node_type"].str.upper()
+        org_count = (type_values == "ORG").sum()
+        person_count = (type_values == "PERSON").sum()
+    
+    # Edge type counts
+    # Schema uses: edge_type = "GRANT" or "BOARD_MEMBERSHIP"
+    grant_edge_count = 0
+    board_edge_count = 0
+    
+    if "edge_type" in edges_df.columns:
+        edge_types = edges_df["edge_type"].str.upper()
+        grant_edge_count = (edge_types == "GRANT").sum()
+        board_edge_count = (edge_types == "BOARD_MEMBERSHIP").sum()
+    
+    # Source/target columns - handle various naming conventions
+    source_col = None
+    target_col = None
+    for s, t in [("from_id", "to_id"), ("source_id", "target_id"), ("source", "target")]:
+        if s in edges_df.columns and t in edges_df.columns:
+            source_col = s
+            target_col = t
+            break
+    
+    # Amount column
+    amount_col = None
+    for col in ["amount", "grant_amount", "weight"]:
+        if col in edges_df.columns:
+            amount_col = col
+            break
+    
+    # ==========================================================================
+    # If grants_detail.csv exists, use it for funding metrics (more reliable)
+    # ==========================================================================
+    if grants_df is not None and not grants_df.empty:
+        # Funder and grantee counts from grants
+        funder_col = "foundation_name" if "foundation_name" in grants_df.columns else "funder_name"
+        grantee_col = "grantee_name"
+        amount_col_grants = "grant_amount"
+        
+        if funder_col in grants_df.columns:
+            funder_count = grants_df[funder_col].nunique()
+        else:
+            funder_count = 0
+        
+        if grantee_col in grants_df.columns:
+            grantee_count = grants_df[grantee_col].nunique()
+        else:
+            grantee_count = 0
+        
+        # Total funding
+        if amount_col_grants in grants_df.columns:
+            total_funding = pd.to_numeric(grants_df[amount_col_grants], errors="coerce").fillna(0).sum()
+        else:
+            total_funding = 0
+        
+        # Multi-funder grantees
+        if funder_col in grants_df.columns and grantee_col in grants_df.columns:
+            grantee_funder_counts = grants_df.groupby(grantee_col)[funder_col].nunique()
+            multi_funder_grantees = grantee_funder_counts[grantee_funder_counts > 1]
+            multi_funder_count = len(multi_funder_grantees)
+            multi_funder_pct = (multi_funder_count / grantee_count * 100) if grantee_count > 0 else 0
+            
+            # Top shared grantees
+            top_shared = multi_funder_grantees.sort_values(ascending=False).head(cfg.TOP_N_SHARED_GRANTEES)
+            top_shared_grantees = []
+            for grantee_name, funder_ct in top_shared.items():
+                grantee_grants = grants_df[grants_df[grantee_col] == grantee_name]
+                total_received = grantee_grants[amount_col_grants].sum() if amount_col_grants in grantee_grants.columns else 0
+                top_funders = grantee_grants[funder_col].unique().tolist()[:3]
+                top_shared_grantees.append({
+                    "grantee_name": grantee_name,
+                    "funder_count": int(funder_ct),
+                    "total_received": float(total_received),
+                    "top_funders": top_funders,
+                })
+        else:
+            multi_funder_count = 0
+            multi_funder_pct = 0
+            top_shared_grantees = []
+        
+        # Top 5 funder concentration
+        if funder_col in grants_df.columns and amount_col_grants in grants_df.columns:
+            funder_totals = grants_df.groupby(funder_col)[amount_col_grants].sum().sort_values(ascending=False)
+            top5_funding = funder_totals.head(5).sum()
+            top5_share_pct = (top5_funding / total_funding * 100) if total_funding > 0 else 0
+        else:
+            top5_share_pct = 0
+        
+        # Funder pair overlap (Portfolio Twins)
+        top_funder_pairs = []
+        max_funder_overlap_pct = 0
+        if funder_col in grants_df.columns and grantee_col in grants_df.columns:
+            # Build funder -> set of grantees mapping
+            funder_grantees = grants_df.groupby(funder_col)[grantee_col].apply(set).to_dict()
+            funders = list(funder_grantees.keys())
+            
+            pairs = []
+            for i, f1 in enumerate(funders):
+                for f2 in funders[i+1:]:
+                    shared = funder_grantees[f1] & funder_grantees[f2]
+                    if len(shared) > 0:
+                        union = funder_grantees[f1] | funder_grantees[f2]
+                        jaccard = len(shared) / len(union) * 100 if len(union) > 0 else 0
+                        pairs.append({
+                            "funder_a": f1,
+                            "funder_b": f2,
+                            "shared_grantee_count": len(shared),
+                            "overlap_pct": round(jaccard, 1),
+                        })
+            
+            # Sort by shared count and take top N
+            pairs.sort(key=lambda x: x["shared_grantee_count"], reverse=True)
+            top_funder_pairs = pairs[:cfg.TOP_N_FUNDER_PAIRS]
+            if top_funder_pairs:
+                max_funder_overlap_pct = max(p["overlap_pct"] for p in top_funder_pairs)
+    
+    else:
+        # ==========================================================================
+        # Fallback: compute from edges.csv only (less reliable)
+        # ==========================================================================
+        # Filter to grant edges only for funding metrics
+        if "edge_type" in edges_df.columns:
+            grant_edges = edges_df[edges_df["edge_type"].str.upper() == "GRANT"]
+        else:
+            grant_edges = edges_df
+        
+        # Estimate funder/grantee counts from edges
+        if source_col and target_col:
+            funder_count = grant_edges[source_col].nunique() if not grant_edges.empty else 0
+            grantee_count = grant_edges[target_col].nunique() if not grant_edges.empty else 0
+        else:
+            funder_count = 0
+            grantee_count = 0
+        
+        # Total funding from edge amounts
+        if amount_col and not grant_edges.empty:
+            total_funding = pd.to_numeric(grant_edges[amount_col], errors="coerce").fillna(0).sum()
+        else:
+            total_funding = 0
+        
+        # Multi-funder calculation
+        multi_funder_count = 0
+        multi_funder_pct = 0
+        top_shared_grantees = []
+        
+        if source_col and target_col and not grant_edges.empty:
+            grantee_funder_counts = grant_edges.groupby(target_col)[source_col].nunique()
+            multi_funder_count = (grantee_funder_counts > 1).sum()
+            multi_funder_pct = (multi_funder_count / len(grantee_funder_counts) * 100) if len(grantee_funder_counts) > 0 else 0
+        
+        # Top 5 concentration
+        top5_share_pct = 0
+        if source_col and amount_col and not grant_edges.empty:
+            funder_totals = grant_edges.groupby(source_col)[amount_col].sum().sort_values(ascending=False)
+            top5_funding = pd.to_numeric(funder_totals.head(5), errors="coerce").sum()
+            top5_share_pct = (top5_funding / total_funding * 100) if total_funding > 0 else 0
+        
+        top_funder_pairs = []
+        max_funder_overlap_pct = 0
+    
+    # ==========================================================================
+    # Governance metrics (from board edges)
+    # ==========================================================================
+    governance_data_available = board_edge_count > 0
+    shared_board_count = 0
+    pct_with_interlocks = 0
+    
+    if governance_data_available and "edge_type" in edges_df.columns:
+        board_edges = edges_df[edges_df["edge_type"].str.upper() == "BOARD_MEMBERSHIP"]
+        if not board_edges.empty and source_col and target_col:
+            # Count people serving on multiple boards
+            person_board_counts = board_edges.groupby(source_col)[target_col].nunique()
+            shared_board_count = (person_board_counts > 1).sum()
+            
+            # Estimate interlock percentage
+            if org_count > 0:
+                orgs_with_shared_people = board_edges[board_edges[source_col].isin(
+                    person_board_counts[person_board_counts > 1].index
+                )][target_col].nunique()
+                pct_with_interlocks = (orgs_with_shared_people / org_count * 100) if org_count > 0 else 0
+    
+    # ==========================================================================
+    # Compute network health score
+    # ==========================================================================
+    # Simple formula: weighted average of positive indicators
+    health_components = []
+    
+    # Multi-funder presence (max 30 points)
+    health_components.append(min(multi_funder_pct, 30))
+    
+    # Funding diversification (max 25 points) - inverse of concentration
+    concentration_penalty = max(0, top5_share_pct - 50) / 2  # Penalty if > 50%
+    health_components.append(max(0, 25 - concentration_penalty))
+    
+    # Governance connectivity (max 20 points)
+    if governance_data_available and shared_board_count > 0:
+        health_components.append(min(shared_board_count * 2, 20))
+    else:
+        health_components.append(0)
+    
+    # Base connectivity (25 points if we have edges)
+    if edge_count > 0:
+        health_components.append(25)
+    else:
+        health_components.append(0)
+    
+    network_health_score = sum(health_components)
+    
+    # Estimate connectivity percentage
+    connectivity_pct = min(100, (edge_count / max(node_count, 1)) * 10) if node_count > 0 else 0
+    
+    return {
+        "node_count": node_count,
+        "edge_count": edge_count,
+        "org_count": org_count,
+        "person_count": person_count,
+        "grant_edge_count": grant_edge_count,
+        "board_edge_count": board_edge_count,
+        "funder_count": funder_count,
+        "grantee_count": grantee_count,
+        "total_funding": total_funding,
+        "multi_funder_count": multi_funder_count,
+        "multi_funder_pct": multi_funder_pct,
+        "top5_share_pct": top5_share_pct,
+        "connectivity_pct": connectivity_pct,
+        "network_health_score": network_health_score,
+        "governance_data_available": governance_data_available,
+        "shared_board_count": shared_board_count,
+        "pct_with_interlocks": pct_with_interlocks,
+        "governance_coverage_pct": 0.5 if governance_data_available else 0,
+        "broker_count": 0,  # Requires graph analysis
+        "bridge_count": 0,  # Requires graph analysis
+        "top_shared_grantees": top_shared_grantees,
+        "top_funder_pairs": top_funder_pairs,
+        "top_brokers": [],  # Requires graph analysis
+        "top_bridges": [],  # Requires graph analysis
+        "max_funder_overlap_pct": max_funder_overlap_pct,
+    }
 
 
 # =============================================================================
@@ -234,9 +622,9 @@ def render_signal_section(
     if lens:
         st.markdown(f"### {title}")
         if lens == "opportunity":
-            st.info("**Lens: Opportunity**")
+            st.info("**Lens: Opportunity** — This signal suggests untapped potential.")
         elif lens == "risk":
-            st.warning("**Lens: Risk**")
+            st.warning("**Lens: Risk** — This signal identifies structural vulnerability.")
     else:
         st.markdown(f"### {title}")
     
@@ -266,7 +654,12 @@ def render_evidence(evidence: dict):
             display_cols = ["grantee_name", "funder_count", "total_received"]
             display_cols = [c for c in display_cols if c in df.columns]
             if display_cols:
-                st.dataframe(df[display_cols], use_container_width=True, hide_index=True)
+                show_df = df[display_cols].copy()
+                if "total_received" in show_df.columns:
+                    show_df["total_received"] = show_df["total_received"].apply(
+                        lambda x: format_currency(x) if pd.notna(x) and x > 0 else "—"
+                    )
+                st.dataframe(show_df, use_container_width=True, hide_index=True)
     
     if "top_funder_pairs" in evidence and evidence["top_funder_pairs"]:
         st.markdown("**Top Funder Pairs**")
@@ -293,7 +686,8 @@ def render_evidence(evidence: dict):
     simple_keys = ["total_funding", "funder_count", "grantee_count", "top5_share_pct", 
                    "multi_funder_count", "multi_funder_pct", "broker_count", "bridge_count"]
     
-    metrics_to_show = {k: v for k, v in evidence.items() if k in simple_keys and v is not None}
+    metrics_to_show = {k: v for k, v in evidence.items() 
+                       if k in simple_keys and v is not None and not (isinstance(v, (int, float)) and v == 0)}
     
     if metrics_to_show:
         cols = st.columns(min(4, len(metrics_to_show)))
@@ -314,8 +708,14 @@ def render_evidence(evidence: dict):
 
 def main():
     # Header
-    st.title("🔬 Insight Engine")
-    st.caption(f"Systems Briefing Generator • v{APP_VERSION}")
+    col_logo, col_title = st.columns([0.08, 0.92])
+    with col_logo:
+        st.image(C4C_LOGO_URL, width=60)
+    with col_title:
+        st.title("Insight Engine")
+    
+    st.markdown("Systems Briefing Generator")
+    st.caption(f"v{APP_VERSION}")
     
     # =========================================================================
     # Reading Contract Banner
@@ -354,6 +754,7 @@ def main():
     # Project Selection
     # =========================================================================
     st.markdown("### 🗂️ Project")
+    st.caption("Select a project folder containing nodes.csv and edges.csv (exported from OrgGraph).")
     
     projects = get_projects()
     
@@ -366,7 +767,7 @@ def main():
         Each project folder should contain:
         - `nodes.csv` (required)
         - `edges.csv` (required)
-        - `network_metrics.json` (recommended)
+        - `project_summary.json` + `insight_cards.json` (recommended, from v1)
         """)
         st.stop()
     
@@ -381,18 +782,28 @@ def main():
     
     project = project_options[selected_id]
     
-    # Status indicator
-    if project["is_complete"]:
-        st.success(f"📂 **{selected_id}** — Complete dataset with pre-computed metrics")
+    # Status indicators
+    st.markdown(f"**📂 {selected_id}**")
+    col1, col2, col3 = st.columns(3)
+    col1.markdown("✅ nodes.csv" if project["has_nodes"] else "❌ nodes.csv")
+    col2.markdown("✅ edges.csv" if project["has_edges"] else "❌ edges.csv")
+    
+    if project["has_v1_artifacts"]:
+        col3.markdown("✅ v1 artifacts (will adapt)")
+    elif project["has_network_metrics"]:
+        col3.markdown("✅ v2 metrics")
     else:
-        st.info(f"📂 **{selected_id}** — Basic dataset (some metrics will be estimated)")
+        col3.markdown("⚠️ Basic mode (limited data)")
     
     # Generate button
     if st.button("🚀 Generate Briefing", type="primary", use_container_width=True):
         with st.spinner("Generating systems briefing..."):
-            # Load metrics
-            metrics = load_metrics(project["path"])
-            metrics = load_evidence_data(project["path"], metrics)
+            # Load metrics (adapts from v1 if needed)
+            metrics = load_metrics(project)
+            
+            # Add metadata
+            metrics["data_sources"] = "OrgGraph export"
+            metrics["date_range"] = "See project metadata"
             
             # Generate report data
             report_data = ReportData(metrics, project_name=selected_id)
@@ -401,7 +812,8 @@ def main():
             # Store in session state
             st.session_state.report_data = report_data
             st.session_state.generated_report = report_markdown
-            st.session_state.project_id = selected_id
+            st.session_state.current_project_id = selected_id
+            st.session_state.metrics = metrics
         
         st.rerun()
     
@@ -409,7 +821,7 @@ def main():
     # Report Display
     # =========================================================================
     
-    if st.session_state.report_data is None:
+    if st.session_state.report_data is None or st.session_state.current_project_id != selected_id:
         st.info("👆 Select a project and click **Generate Briefing** to create your systems briefing.")
         st.stop()
     
@@ -417,7 +829,7 @@ def main():
     signals = report_data.signals
     summary = report_data.system_summary
     recommendations = report_data.recommendations
-    metrics = report_data.metrics
+    metrics = st.session_state.metrics
     
     st.divider()
     
@@ -459,44 +871,22 @@ def main():
     health_score = health.evidence.get("health_score", 50)
     health_label = health.evidence.get("health_label", "Moderate")
     
-    # Score display
-    col1, col2, col3 = st.columns([1, 2, 1])
-    with col2:
-        st.metric(
-            label="Overall Score",
-            value=f"{health_score:.0f} / 100",
-            delta=health_label
-        )
+    # Color based on score
+    if health_score >= 70:
+        health_color = "🟢"
+    elif health_score >= 40:
+        health_color = "🟡"
+    else:
+        health_color = "🔴"
     
-    # Key signals table
-    st.markdown("### Key Signals")
+    st.markdown(f"### {health_color} Overall Score: **{health_score:.0f}/100** — *{health_label}*")
     
-    health_data = {
-        "Metric": [
-            "Multi-Funder Grantees",
-            "Network Connectivity", 
-            "Funding Concentration (Top 5)",
-            "Governance Connectivity"
-        ],
-        "Value": [
-            f"{metrics.get('multi_funder_pct', 0):.0f}%",
-            f"{metrics.get('connectivity_pct', 0):.0f}%",
-            f"{metrics.get('top5_share_pct', 0):.0f}%",
-            "Available" if metrics.get("governance_data_available") else "Unavailable"
-        ],
-        "Status": [
-            "🟢" if metrics.get('multi_funder_pct', 0) > 30 else "🟡" if metrics.get('multi_funder_pct', 0) > 10 else "🔴",
-            "🟢" if metrics.get('connectivity_pct', 0) > 70 else "🟡" if metrics.get('connectivity_pct', 0) > 40 else "🔴",
-            "🟢" if metrics.get('top5_share_pct', 0) < 50 else "🟡" if metrics.get('top5_share_pct', 0) < 70 else "🔴",
-            "🟢" if metrics.get("governance_data_available") else "⚪"
-        ]
-    }
-    
-    st.dataframe(
-        pd.DataFrame(health_data),
-        use_container_width=True,
-        hide_index=True
-    )
+    # Key signals as metrics
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Multi-Funder %", f"{metrics.get('multi_funder_pct', 0):.0f}%")
+    col2.metric("Connectivity", f"{metrics.get('connectivity_pct', 0):.0f}%")
+    col3.metric("Top 5 Share", f"{metrics.get('top5_share_pct', 0):.0f}%")
+    col4.metric("Governance", "Available" if metrics.get("governance_data_available") else "Unavailable")
     
     st.markdown(f"**Why this matters**  \n{health.why_it_matters}")
     
@@ -575,7 +965,6 @@ def main():
         with st.container():
             st.markdown(f"**{i}. {rec.title}**")
             st.markdown(rec.text)
-            st.caption(f"Trigger: {rec.trigger}")
     
     st.divider()
     
@@ -583,16 +972,6 @@ def main():
     # 10. Appendix / Optional Deep Dive
     # =========================================================================
     st.markdown("## Appendix")
-    
-    # Grant Purpose Explorer (collapsed)
-    if project.get("has_grants"):
-        with st.expander("🎯 Grant Purpose Explorer (Optional Deep Dive)", expanded=False):
-            st.info("Grant purpose analysis available. This feature helps explore thematic patterns in funding.")
-            # Placeholder for Grant Purpose Explorer integration
-            grants_path = project["path"] / "grants_detail.csv"
-            if grants_path.exists():
-                grants_df = pd.read_csv(grants_path)
-                st.dataframe(grants_df.head(20), use_container_width=True, hide_index=True)
     
     # Method Notes
     with st.expander("📋 Method Notes", expanded=False):
@@ -611,11 +990,18 @@ the network graph.
     # Data Notes
     with st.expander("📊 Data Notes", expanded=False):
         st.markdown(f"""
-- **Data Sources:** {metrics.get('data_sources', 'IRS 990-PF filings')}
+- **Data Sources:** {metrics.get('data_sources', 'OrgGraph export')}
 - **Date Range:** {metrics.get('date_range', 'Not specified')}
 - **Processing Timestamp:** {report_data.generated_timestamp}
-- **Thresholds Applied:** TOP_N={cfg.TOP_N_BROKERS}, Concentration High={cfg.CONCENTRATION_HIGH_THRESHOLD}%
+- **Nodes:** {metrics.get('node_count', 0):,}
+- **Edges:** {metrics.get('edge_count', 0):,}
+- **Total Funding:** {format_currency(metrics.get('total_funding', 0))}
         """)
+    
+    # Technical Details (for debugging)
+    with st.expander("🛠️ Technical Details", expanded=False):
+        st.caption("Raw metrics used for report generation:")
+        st.json(metrics)
     
     st.divider()
     
@@ -634,7 +1020,7 @@ the network graph.
         st.download_button(
             label="📄 Download Executive Briefing",
             data=st.session_state.generated_report,
-            file_name=f"{selected_id}_insight_report.md",
+            file_name=f"{selected_id}_insight_report_v2.md",
             mime="text/markdown",
             help="Markdown format, convertible to PDF",
             use_container_width=True
@@ -648,7 +1034,7 @@ the network graph.
         st.download_button(
             label="📊 Download Metrics (JSON)",
             data=metrics_json,
-            file_name=f"{selected_id}_metrics.json",
+            file_name=f"{selected_id}_metrics_v2.json",
             mime="application/json",
             use_container_width=True
         )
@@ -659,21 +1045,15 @@ the network graph.
         # Create full package ZIP
         zip_buffer = BytesIO()
         with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
-            zf.writestr(f"{selected_id}_insight_report.md", st.session_state.generated_report)
-            zf.writestr(f"{selected_id}_metrics.json", metrics_json)
-            
-            # Add source files if available
-            for filename in ["nodes.csv", "edges.csv", "grants_detail.csv"]:
-                filepath = project["path"] / filename
-                if filepath.exists():
-                    zf.write(filepath, f"data/{filename}")
+            zf.writestr(f"{selected_id}_insight_report_v2.md", st.session_state.generated_report)
+            zf.writestr(f"{selected_id}_metrics_v2.json", metrics_json)
         
         zip_buffer.seek(0)
         
         st.download_button(
             label="📦 Download Full Package (ZIP)",
             data=zip_buffer,
-            file_name=f"{selected_id}_full_package.zip",
+            file_name=f"{selected_id}_v2_package.zip",
             mime="application/zip",
             use_container_width=True
         )
