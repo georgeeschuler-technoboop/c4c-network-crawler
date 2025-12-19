@@ -677,3 +677,4 @@ def generate_recommendations(
         recommendations.append(rec)
     
     return recommendations[:cfg.RECOMMENDATIONS_COUNT]
+
