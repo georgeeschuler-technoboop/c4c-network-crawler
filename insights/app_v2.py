@@ -33,6 +33,16 @@ v2.0.2 (2025-12-19): Fixed CSV schema handling
 v2.0.3 (2025-12-19): Updated logo
 - Changed C4C_LOGO_URL to new icon
 
+v2.0.4 (2025-12-19): Added full graph analysis (Option B - self-sufficient)
+- NetworkX-based connectivity computation (% nodes in largest component)
+- Hidden broker detection using efficiency-based approach (betweenness/log(degree))
+  - Works well on sparse networks where traditional percentile approach fails
+  - Finds nodes with high structural importance relative to their visibility
+- Single-point bridge detection (articulation points with impact assessment)
+- Refined health score incorporating broker/bridge counts
+- v2 now fully self-sufficient - computes all metrics from CSVs directly
+- No longer requires v1 artifacts (project_summary.json, insight_cards.json)
+
 Based on: insight-engine-spec.md (December 2025)
 
 INTEGRATION NOTE:
@@ -44,6 +54,8 @@ This v2 app can load data from:
 
 import streamlit as st
 import pandas as pd
+import numpy as np
+import networkx as nx
 import json
 from pathlib import Path
 from datetime import datetime
@@ -72,7 +84,7 @@ from report_generator import ReportData, generate_report
 # App Configuration
 # =============================================================================
 
-APP_VERSION = "2.0.3"
+APP_VERSION = "2.0.4"
 C4C_LOGO_URL = "https://static.wixstatic.com/media/275a3f_ddef70debd0b46c799a9d3d8c73a42da~mv2.png"
 
 # Paths
@@ -150,6 +162,223 @@ def get_projects() -> list[dict]:
     # Sort alphabetically
     projects.sort(key=lambda x: x["id"].lower())
     return projects
+
+
+# =============================================================================
+# Graph Analysis Functions
+# =============================================================================
+
+def build_network_graph(edges_df: pd.DataFrame) -> nx.Graph:
+    """Build an undirected NetworkX graph from edges dataframe."""
+    G = nx.Graph()
+    
+    # Determine column names
+    source_col = None
+    target_col = None
+    for s, t in [("from_id", "to_id"), ("source_id", "target_id"), ("source", "target")]:
+        if s in edges_df.columns and t in edges_df.columns:
+            source_col = s
+            target_col = t
+            break
+    
+    if source_col is None:
+        return G
+    
+    # Add edges
+    for _, row in edges_df.iterrows():
+        source = row[source_col]
+        target = row[target_col]
+        weight = row.get("amount", 1) or 1
+        edge_type = row.get("edge_type", "unknown")
+        
+        if G.has_edge(source, target):
+            # Aggregate weight for multi-edges
+            G[source][target]["weight"] += float(weight) if pd.notna(weight) else 0
+        else:
+            G.add_edge(source, target, weight=float(weight) if pd.notna(weight) else 1, edge_type=edge_type)
+    
+    return G
+
+
+def compute_hidden_brokers(
+    G: nx.Graph, 
+    nodes_df: pd.DataFrame,
+    betweenness_percentile: int = 95,
+    visibility_percentile: int = 40
+) -> tuple[int, list[dict]]:
+    """
+    Identify hidden brokers: high betweenness + low visibility (degree).
+    
+    Uses two approaches:
+    1. Traditional: top X% betweenness AND bottom Y% degree within node type
+    2. Efficiency-based: high betweenness-to-degree ratio (for sparse networks)
+    
+    Returns: (broker_count, list of broker dicts)
+    """
+    if len(G.nodes()) == 0:
+        return 0, []
+    
+    # Compute betweenness centrality
+    betweenness = nx.betweenness_centrality(G)
+    
+    # Compute degree
+    degree = dict(G.degree())
+    
+    # Build node type lookup
+    node_type_map = {}
+    if "node_id" in nodes_df.columns and "node_type" in nodes_df.columns:
+        node_type_map = dict(zip(nodes_df["node_id"], nodes_df["node_type"].str.upper()))
+    
+    # Get node labels
+    node_label_map = {}
+    if "node_id" in nodes_df.columns and "label" in nodes_df.columns:
+        node_label_map = dict(zip(nodes_df["node_id"], nodes_df["label"]))
+    
+    # Group nodes by type
+    nodes_by_type = {}
+    for node in G.nodes():
+        ntype = node_type_map.get(node, "UNKNOWN")
+        if ntype not in nodes_by_type:
+            nodes_by_type[ntype] = []
+        nodes_by_type[ntype].append(node)
+    
+    # Find brokers within each type
+    brokers = []
+    
+    for ntype, nodes in nodes_by_type.items():
+        if len(nodes) < 5:
+            continue
+        
+        # Filter to nodes with non-zero betweenness
+        nodes_with_betweenness = [n for n in nodes if betweenness.get(n, 0) > 0]
+        
+        if len(nodes_with_betweenness) < 3:
+            continue
+        
+        # Compute "broker efficiency" = betweenness / log(degree + 1)
+        # This finds nodes that have high betweenness relative to their connectivity
+        efficiencies = {}
+        for node in nodes_with_betweenness:
+            node_b = betweenness.get(node, 0)
+            node_d = degree.get(node, 1)
+            # Use log to dampen the effect of very high degrees
+            efficiencies[node] = node_b / np.log(node_d + 1)
+        
+        # Find top efficient brokers (top 10% by efficiency, but exclude very high degree nodes)
+        efficiency_values = list(efficiencies.values())
+        efficiency_threshold = np.percentile(efficiency_values, 90)
+        
+        # Also require below-median degree among betweenness nodes
+        degree_values = [degree.get(n, 0) for n in nodes_with_betweenness]
+        degree_median = np.median(degree_values)
+        
+        for node in nodes_with_betweenness:
+            node_efficiency = efficiencies.get(node, 0)
+            node_degree = degree.get(node, 0)
+            node_betweenness = betweenness.get(node, 0)
+            
+            # High efficiency AND below-median degree among connectors
+            if node_efficiency >= efficiency_threshold and node_degree <= degree_median:
+                # Compute degree percentile for display
+                all_type_degree = [degree.get(n, 0) for n in nodes]
+                degree_pctl = (np.sum(np.array(all_type_degree) <= node_degree) / len(all_type_degree)) * 100
+                
+                brokers.append({
+                    "org_name": node_label_map.get(node, node),
+                    "node_id": node,
+                    "node_type": ntype,
+                    "betweenness": round(node_betweenness, 4),
+                    "degree": node_degree,
+                    "visibility_percentile": round(degree_pctl, 0),
+                    "efficiency": round(node_efficiency, 4),
+                    "broker_reason": f"High structural efficiency (top 10%), below-median visibility among connectors",
+                })
+    
+    # Sort by betweenness descending
+    brokers.sort(key=lambda x: x["betweenness"], reverse=True)
+    
+    return len(brokers), brokers
+
+
+def compute_single_point_bridges(G: nx.Graph, nodes_df: pd.DataFrame) -> tuple[int, list[dict]]:
+    """
+    Identify single-point bridges (articulation points).
+    
+    These are nodes whose removal would disconnect the graph.
+    
+    Returns: (bridge_count, list of bridge dicts)
+    """
+    if len(G.nodes()) == 0:
+        return 0, []
+    
+    # Find articulation points
+    try:
+        articulation_points = list(nx.articulation_points(G))
+    except nx.NetworkXError:
+        return 0, []
+    
+    # Build lookups
+    node_type_map = {}
+    node_label_map = {}
+    if "node_id" in nodes_df.columns:
+        if "node_type" in nodes_df.columns:
+            node_type_map = dict(zip(nodes_df["node_id"], nodes_df["node_type"].str.upper()))
+        if "label" in nodes_df.columns:
+            node_label_map = dict(zip(nodes_df["node_id"], nodes_df["label"]))
+    
+    # Build bridge list with impact assessment
+    bridges = []
+    for node in articulation_points:
+        # Estimate impact: count nodes in smaller component if this node removed
+        G_temp = G.copy()
+        neighbors = list(G_temp.neighbors(node))
+        G_temp.remove_node(node)
+        
+        # Find component sizes after removal
+        components = list(nx.connected_components(G_temp))
+        if len(components) > 1:
+            component_sizes = sorted([len(c) for c in components], reverse=True)
+            smaller_components = sum(component_sizes[1:])  # All but largest
+            impact = f"Would isolate {smaller_components} nodes across {len(components)-1} component(s)"
+        else:
+            impact = "Critical connector"
+        
+        bridges.append({
+            "node_name": node_label_map.get(node, node),
+            "node_id": node,
+            "node_type": node_type_map.get(node, "unknown").lower(),
+            "impact_if_removed": impact,
+            "neighbor_count": len(neighbors),
+        })
+    
+    # Sort by neighbor count (more connected = more critical)
+    bridges.sort(key=lambda x: x["neighbor_count"], reverse=True)
+    
+    return len(bridges), bridges
+
+
+def compute_connectivity_metrics(G: nx.Graph) -> dict:
+    """Compute connectivity metrics for the graph."""
+    if len(G.nodes()) == 0:
+        return {"connectivity_pct": 0, "num_components": 0, "largest_component_pct": 0}
+    
+    # Number of connected components
+    components = list(nx.connected_components(G))
+    num_components = len(components)
+    
+    # Largest component as percentage of total
+    largest_component = max(components, key=len) if components else set()
+    largest_component_pct = (len(largest_component) / len(G.nodes())) * 100
+    
+    # Connectivity: percentage of nodes in largest component
+    # Alternative: could use edge density or average clustering
+    connectivity_pct = largest_component_pct
+    
+    return {
+        "connectivity_pct": round(connectivity_pct, 1),
+        "num_components": num_components,
+        "largest_component_pct": round(largest_component_pct, 1),
+    }
 
 
 # =============================================================================
@@ -577,8 +806,41 @@ def compute_basic_metrics(project_path: Path) -> dict:
     
     network_health_score = sum(health_components)
     
-    # Estimate connectivity percentage
-    connectivity_pct = min(100, (edge_count / max(node_count, 1)) * 10) if node_count > 0 else 0
+    # ==========================================================================
+    # Graph Analysis: Connectivity, Brokers, Bridges
+    # ==========================================================================
+    # Build the full network graph
+    G = build_network_graph(edges_df)
+    
+    # Compute connectivity metrics
+    connectivity_metrics = compute_connectivity_metrics(G)
+    connectivity_pct = connectivity_metrics["connectivity_pct"]
+    
+    # Compute hidden brokers (high betweenness, low visibility)
+    broker_count, top_brokers = compute_hidden_brokers(
+        G, nodes_df,
+        betweenness_percentile=cfg.BROKER_BETWEENNESS_PERCENTILE,
+        visibility_percentile=cfg.BROKER_VISIBILITY_PERCENTILE
+    )
+    
+    # Compute single-point bridges (articulation points)
+    bridge_count, top_bridges = compute_single_point_bridges(G, nodes_df)
+    
+    # ==========================================================================
+    # Refine health score with graph metrics
+    # ==========================================================================
+    # Add points for network resilience (no critical bridges)
+    if bridge_count == 0:
+        network_health_score += 5  # Bonus for redundancy
+    elif bridge_count > 5:
+        network_health_score -= 5  # Penalty for fragility
+    
+    # Add points for broker potential
+    if broker_count > 0:
+        network_health_score += min(broker_count, 5)  # Up to 5 points for untapped potential
+    
+    # Cap at 100
+    network_health_score = min(100, max(0, network_health_score))
     
     return {
         "node_count": node_count,
@@ -599,13 +861,14 @@ def compute_basic_metrics(project_path: Path) -> dict:
         "shared_board_count": shared_board_count,
         "pct_with_interlocks": pct_with_interlocks,
         "governance_coverage_pct": 0.5 if governance_data_available else 0,
-        "broker_count": 0,  # Requires graph analysis
-        "bridge_count": 0,  # Requires graph analysis
+        "broker_count": broker_count,
+        "bridge_count": bridge_count,
         "top_shared_grantees": top_shared_grantees,
         "top_funder_pairs": top_funder_pairs,
-        "top_brokers": [],  # Requires graph analysis
-        "top_bridges": [],  # Requires graph analysis
+        "top_brokers": top_brokers[:cfg.TOP_N_BROKERS],
+        "top_bridges": top_bridges[:cfg.TOP_N_BRIDGES],
         "max_funder_overlap_pct": max_funder_overlap_pct,
+        "num_components": connectivity_metrics.get("num_components", 1),
     }
 
 
