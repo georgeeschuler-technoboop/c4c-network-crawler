@@ -630,7 +630,7 @@ def generate_recommendations(
                 "Regular information exchange between funders and key grantees can surface "
                 "coordination opportunities without requiring formal structures."
             ),
-            trigger="default"
+            trigger="default_info_sharing"
         ),
         Recommendation(
             title="Map Thematic Alignment",
@@ -638,7 +638,7 @@ def generate_recommendations(
                 "Analyze grant purposes to identify thematic clusters where coordination "
                 "could amplify impact across multiple funders."
             ),
-            trigger="default"
+            trigger="default_thematic"
         ),
         Recommendation(
             title="Invest in Network Visibility",
@@ -646,7 +646,7 @@ def generate_recommendations(
                 "This analysis provides a structural view. Consider complementing it with "
                 "stakeholder interviews to surface relationship dynamics not visible in data."
             ),
-            trigger="default"
+            trigger="default_visibility"
         ),
         Recommendation(
             title="Monitor Network Evolution",
@@ -654,7 +654,7 @@ def generate_recommendations(
                 "Network structure changes over time. Consider repeating this analysis "
                 "periodically to track progress and identify emerging patterns."
             ),
-            trigger="default"
+            trigger="default_evolution"
         )
     ]
     
@@ -662,8 +662,6 @@ def generate_recommendations(
     for rec in default_recommendations:
         if len(recommendations) >= cfg.RECOMMENDATIONS_COUNT:
             break
-        # Avoid duplicates by trigger
-        if rec.trigger not in [r.trigger for r in recommendations]:
-            recommendations.append(rec)
+        recommendations.append(rec)
     
     return recommendations[:cfg.RECOMMENDATIONS_COUNT]
