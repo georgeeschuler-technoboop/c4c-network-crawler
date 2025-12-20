@@ -31,15 +31,15 @@ import plotly.graph_objects as go
 # APP VERSION
 # ============================================================================
 
-APP_VERSION = "0.3.11"
+APP_VERSION = "0.3.12"
 
 VERSION_HISTORY = [
+    "HARDENED v0.3.12: Name canonicalization (Unicode NFKC, whitespace, quotes, hyphens); post-export validation for Polinode",
     "FIXED v0.3.11: Polinode edges now use display Names (not IDs); duplicate node names deduplicated (prefer seed)",
     "FIXED v0.3.10: URL parser now handles /about/, /jobs/, /people/ suffixes and properly extracts company IDs",
     "UPDATED v0.3.9: Separate C4C and Polinode schema outputs (nodes.csv + nodes_polinode.csv, edges.csv + edges_polinode.csv)",
     "FIXED v0.3.8: City/Region/Country now populated from API response and parsed from location strings",
     "UPDATED v0.3.7: Polinode company fields (Website, Industry, Company Size, Founded Year); nan name handling; edge_type=similar_companies for company crawls",
-    "FIXED v0.3.6: Validation now exclusive by crawl_type with positive pattern matching; company columns prioritized separately",
 ]
 
 
@@ -1776,6 +1776,28 @@ def generate_nodes_csv(seen_profiles: Dict, max_degree: int, max_edges: int, max
     return meta + csv_body
 
 
+def canonicalize_name(name: str) -> str:
+    """Canonicalize a display name for Polinode consistency.
+    
+    - Unicode normalize (NFKC)
+    - Strip whitespace
+    - Collapse multiple spaces
+    - Normalize quotes and hyphens
+    """
+    import unicodedata
+    if not name:
+        return name
+    # Unicode normalize
+    name = unicodedata.normalize('NFKC', str(name))
+    # Normalize curly quotes to straight
+    name = name.replace('"', '"').replace('"', '"').replace(''', "'").replace(''', "'")
+    # Normalize various hyphens/dashes to standard hyphen
+    name = name.replace('–', '-').replace('—', '-').replace('−', '-')
+    # Strip and collapse whitespace
+    name = ' '.join(name.split())
+    return name
+
+
 def generate_nodes_polinode_csv(seen_profiles: Dict, max_degree: int, max_edges: int, max_nodes: int, network_metrics: Dict = None) -> Tuple[str, Dict[str, str]]:
     """Generate nodes_polinode.csv in Polinode-ready schema.
     
@@ -1786,12 +1808,12 @@ def generate_nodes_polinode_csv(seen_profiles: Dict, max_degree: int, max_edges:
     node_metrics = network_metrics.get('node_metrics', {}) if network_metrics else {}
     
     # Build mapping and handle duplicate names
-    id_to_name = {}  # Maps internal ID to display name
+    id_to_name = {}  # Maps internal ID to canonicalized display name
     name_to_node = {}  # Track which node owns each name (prefer seeds)
     
     for node in seen_profiles.values():
         node_id = node['id']
-        display_name = node.get('name', node_id)
+        display_name = canonicalize_name(node.get('name', node_id))
         
         # Handle duplicate names: prefer seed over discovered
         if display_name in name_to_node:
@@ -1904,6 +1926,45 @@ def generate_edges_polinode_csv(edges: List, id_to_name: Dict[str, str]) -> str:
     csv_body = df.to_csv(index=False)
     meta = f"# Polinode import | generated_at={datetime.now(timezone.utc).isoformat()}\n"
     return meta + csv_body
+
+
+def validate_polinode_export(nodes_csv: str, edges_csv: str) -> Tuple[bool, List[str]]:
+    """Validate Polinode export for consistency before saving.
+    
+    Returns:
+        Tuple of (is_valid, list_of_errors)
+    """
+    errors = []
+    
+    # Parse CSVs (skip comment header)
+    from io import StringIO
+    nodes_lines = [l for l in nodes_csv.split('\n') if l and not l.startswith('#')]
+    edges_lines = [l for l in edges_csv.split('\n') if l and not l.startswith('#')]
+    
+    nodes_df = pd.read_csv(StringIO('\n'.join(nodes_lines)))
+    edges_df = pd.read_csv(StringIO('\n'.join(edges_lines)))
+    
+    # Check 1: Node names must be unique
+    if 'Name' in nodes_df.columns:
+        duplicates = nodes_df[nodes_df.duplicated(subset='Name', keep=False)]['Name'].unique()
+        if len(duplicates) > 0:
+            errors.append(f"Duplicate node names ({len(duplicates)}): {', '.join(str(d) for d in duplicates[:5])}")
+    
+    # Check 2: All edge sources must exist in nodes
+    if 'Name' in nodes_df.columns and 'Source' in edges_df.columns:
+        node_names = set(nodes_df['Name'].dropna())
+        edge_sources = set(edges_df['Source'].dropna())
+        edge_targets = set(edges_df['Target'].dropna())
+        
+        missing_sources = edge_sources - node_names
+        missing_targets = edge_targets - node_names
+        
+        if missing_sources:
+            errors.append(f"Edge sources not in nodes ({len(missing_sources)}): {', '.join(str(s) for s in list(missing_sources)[:5])}")
+        if missing_targets:
+            errors.append(f"Edge targets not in nodes ({len(missing_targets)}): {', '.join(str(t) for t in list(missing_targets)[:5])}")
+    
+    return len(errors) == 0, errors
 
 
 def generate_raw_json(raw_profiles: List) -> str:
@@ -2429,6 +2490,13 @@ def main():
         # Generate Polinode schema files (nodes returns id_to_name mapping for edges)
         nodes_polinode_csv, id_to_name = generate_nodes_polinode_csv(seen_profiles, max_degree=was_max_degree, max_edges=10000, max_nodes=7500, network_metrics=network_metrics)
         edges_polinode_csv = generate_edges_polinode_csv(edges, id_to_name)
+        
+        # Validate Polinode export
+        is_valid, validation_errors = validate_polinode_export(nodes_polinode_csv, edges_polinode_csv)
+        if not is_valid:
+            st.error("⚠️ **Polinode Export Validation Failed**")
+            for err in validation_errors:
+                st.warning(f"• {err}")
         
         raw_json = generate_raw_json(raw_profiles)
         
