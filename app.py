@@ -31,9 +31,10 @@ import plotly.graph_objects as go
 # APP VERSION
 # ============================================================================
 
-APP_VERSION = "0.3.1"
+APP_VERSION = "0.3.2"
 
 VERSION_HISTORY = [
+    "FIXED v0.3.2: Corrected indentation bug causing blank page (UI code was inside collapsed expander)",
     "UPDATED v0.3.1: Seed-file auto-detect (people vs company), max-10 enforcement, cleaner Polinode node fields for companies, and crawl-type KPIs",
     "UPDATED v0.3.0: Company crawl path, Polinode export baseline, KPI panel + downloadables",
 ]
@@ -1606,58 +1607,7 @@ def create_brokerage_role_chart(brokerage_roles: Dict[str, str]) -> 'go.Figure':
 # STREAMLIT UI
 # ============================================================================
 
-def main():
-    st.set_page_config(
-        page_title="ActorGraph",
-        page_icon="https://static.wixstatic.com/media/275a3f_5747a8179bda42ab9b268accbdaf4ac2~mv2.png",
-        layout="wide"
-    )
-    
-    if 'crawl_results' not in st.session_state:
-        st.session_state.crawl_results = None
-    
-    # Header with C4C logo
-    col1, col2 = st.columns([1, 9])
-    with col1:
-        st.image("https://static.wixstatic.com/media/275a3f_5747a8179bda42ab9b268accbdaf4ac2~mv2.png", width=80)
-    with col2:
-        st.title("ActorGraph")
-        st.markdown("People-centered network graphs from public profile data.")
-        st.caption(f"v{APP_VERSION}")
-with st.expander("Version history"):
-    for item in VERSION_HISTORY:
-        st.markdown(f"- {item}")
-    
-    st.markdown("---")
-    
-    # MODE SELECTION
-    st.subheader("🎛️ Select Mode")
-    
-    col1, col2, col3 = st.columns([2, 1, 2])
-    with col2:
-        advanced_mode = st.toggle("mode_toggle", value=False, label_visibility="collapsed", key="_advanced_mode")
-    with col1:
-        st.markdown("**📊 Seed Crawler**" if not advanced_mode else "📊 Seed Crawler")
-    with col3:
-        st.markdown("**🔬 Intelligence Engine**" if advanced_mode else "🔬 Intelligence Engine")
-    
-    if advanced_mode:
-        st.info("**🔬 Network Intelligence Engine** — Full strategic analysis with centrality metrics, communities, and brokerage roles.")
-    else:
-        st.success("**📊 Network Seed Crawler** — Quick network mapping. Crawl, export, import to Polinode.")
-    
-    st.markdown("---")
-    
-    # INPUT SECTION
-    st.header("📥 Input")
-    
-    col1, col2 = st.columns([2, 1])
-    
-    with col1:
-        st.subheader("1. Upload Seed Profiles")
-        uploaded_file = st.file_uploader("Upload a CSV file", type=["csv"])
-
-def _detect_seed_mode(df: pd.DataFrame) -> tuple[str, str, str]:
+def _detect_seed_mode(df: pd.DataFrame) -> tuple:
     """Return (mode, name_col, url_col) where mode is 'people' or 'company'. Raises ValueError on invalid/mixed."""
     cols = {c.strip().lower(): c for c in df.columns}
     url_candidates = ["linkedin_profile_url", "profile_url", "linkedin_url", "url"]
@@ -1693,46 +1643,99 @@ def _detect_seed_mode(df: pd.DataFrame) -> tuple[str, str, str]:
 
     raise ValueError("Could not detect seed type: LinkedIn URLs must contain '/in/' (people) or '/company/' (company).")
 
-seeds = []
-seed_mode = None
 
-if uploaded_file is not None:
-    try:
-        seed_df = pd.read_csv(uploaded_file)
-
-        seed_mode, name_col, url_col = _detect_seed_mode(seed_df)
-
-        # Drop rows with missing URLs (explicit user requirement)
-        seed_df[url_col] = seed_df[url_col].astype(str).str.strip()
-        seed_df = seed_df[seed_df[url_col].notna() & (seed_df[url_col] != "") & (seed_df[url_col].str.lower() != "nan")]
-
-        # Enforce max 10 seed rows (truncate with warning)
-        if len(seed_df) > 10:
-            st.warning(f"Seed file has {len(seed_df)} rows. Only the first 10 will be used for this run.")
-            seed_df = seed_df.head(10)
-
-        # Standardize to internal seed dicts used by crawl logic
-        for _, row in seed_df.iterrows():
-            name_val = str(row.get(name_col, "")).strip() or "Unknown"
-            url_val = str(row.get(url_col, "")).strip()
-            seeds.append({
-                "name": name_val,
-                "profile_url": url_val,
-                "seed_mode": seed_mode,
-                # keep optional location fields if present (helps Polinode outputs)
-                "geography": row.get("geography") if "geography" in seed_df.columns else None,
-                "city": row.get("city") if "city" in seed_df.columns else None,
-                "state": row.get("state") if "state" in seed_df.columns else None,
-                "country": row.get("country") if "country" in seed_df.columns else None,
-            })
-
-        st.success(f"Loaded {len(seeds)} seed profiles ({seed_mode})")
-        st.dataframe(seed_df, use_container_width=True)
-
-    except Exception as e:
-        st.error(f"Error reading seed file: {e}")
+def main():
+    st.set_page_config(
+        page_title="ActorGraph",
+        page_icon="https://static.wixstatic.com/media/275a3f_5747a8179bda42ab9b268accbdaf4ac2~mv2.png",
+        layout="wide"
+    )
     
+    if 'crawl_results' not in st.session_state:
+        st.session_state.crawl_results = None
+    
+    # Header with C4C logo
+    col1, col2 = st.columns([1, 9])
+    with col1:
+        st.image("https://static.wixstatic.com/media/275a3f_5747a8179bda42ab9b268accbdaf4ac2~mv2.png", width=80)
     with col2:
+        st.title("ActorGraph")
+        st.markdown("People-centered network graphs from public profile data.")
+        st.caption(f"v{APP_VERSION}")
+    
+    with st.expander("Version history"):
+        for item in VERSION_HISTORY:
+            st.markdown(f"- {item}")
+
+    st.markdown("---")
+
+    # MODE SELECTION
+    st.subheader("🎛️ Select Mode")
+
+    mode_col1, mode_col2, mode_col3 = st.columns([2, 1, 2])
+    with mode_col2:
+        advanced_mode = st.toggle("mode_toggle", value=False, label_visibility="collapsed", key="_advanced_mode")
+    with mode_col1:
+        st.markdown("**📊 Seed Crawler**" if not advanced_mode else "📊 Seed Crawler")
+    with mode_col3:
+        st.markdown("**🔬 Intelligence Engine**" if advanced_mode else "🔬 Intelligence Engine")
+
+    if advanced_mode:
+        st.info("**🔬 Network Intelligence Engine** — Full strategic analysis with centrality metrics, communities, and brokerage roles.")
+    else:
+        st.success("**📊 Network Seed Crawler** — Quick network mapping. Crawl, export, import to Polinode.")
+
+    st.markdown("---")
+
+    # INPUT SECTION
+    st.header("📥 Input")
+
+    input_col1, input_col2 = st.columns([2, 1])
+
+    with input_col1:
+        st.subheader("1. Upload Seed Profiles")
+        uploaded_file = st.file_uploader("Upload a CSV file", type=["csv"])
+
+    seeds = []
+    seed_mode = None
+
+    if uploaded_file is not None:
+        try:
+            seed_df = pd.read_csv(uploaded_file)
+
+            seed_mode, name_col, url_col = _detect_seed_mode(seed_df)
+
+            # Drop rows with missing URLs (explicit user requirement)
+            seed_df[url_col] = seed_df[url_col].astype(str).str.strip()
+            seed_df = seed_df[seed_df[url_col].notna() & (seed_df[url_col] != "") & (seed_df[url_col].str.lower() != "nan")]
+
+            # Enforce max 10 seed rows (truncate with warning)
+            if len(seed_df) > 10:
+                st.warning(f"Seed file has {len(seed_df)} rows. Only the first 10 will be used for this run.")
+                seed_df = seed_df.head(10)
+
+            # Standardize to internal seed dicts used by crawl logic
+            for _, row in seed_df.iterrows():
+                name_val = str(row.get(name_col, "")).strip() or "Unknown"
+                url_val = str(row.get(url_col, "")).strip()
+                seeds.append({
+                    "name": name_val,
+                    "profile_url": url_val,
+                    "seed_mode": seed_mode,
+                    # keep optional location fields if present (helps Polinode outputs)
+                    "geography": row.get("geography") if "geography" in seed_df.columns else None,
+                    "city": row.get("city") if "city" in seed_df.columns else None,
+                    "state": row.get("state") if "state" in seed_df.columns else None,
+                    "country": row.get("country") if "country" in seed_df.columns else None,
+                })
+
+            st.success(f"Loaded {len(seeds)} seed profiles ({seed_mode})")
+            st.dataframe(seed_df, use_container_width=True)
+
+        except Exception as e:
+            st.error(f"Error reading seed file: {e}")
+
+    with input_col2:
         st.subheader("2. EnrichLayer API Token")
         
         default_token = ""
@@ -1755,37 +1758,37 @@ if uploaded_file is not None:
         
         if mock_mode:
             st.info("🧪 **MOCK MODE** - No real API calls, no credits used!")
-    
+
     # CONFIGURATION
     st.header("⚙️ Crawl Configuration")
-    
-    col1, col2 = st.columns(2)
-    
-    with col1:
+
+    config_col1, config_col2 = st.columns(2)
+
+    with config_col1:
         max_degree = st.radio("Maximum Degree (hops)", options=[1, 2], index=0)
         if max_degree == 2:
             st.error("**⚠️ Degree 2 Warning** — 10-50x more API calls. Start with Degree 1!")
         else:
             st.success("**✅ Degree 1 Selected** — Direct connections only. Fast and reliable.")
-    
-    with col2:
+
+    with config_col2:
         st.markdown("**Crawl Limits:**")
         st.metric("Max Edges", 10000)
         st.metric("Max Nodes", 7500)
-    
+
     st.caption(f"⏱️ API pacing: up to **{PER_MIN_LIMIT} requests/minute**")
-    
+
     # RUN BUTTON
     can_run = len(seeds) > 0 and (api_token or mock_mode)
-    
+
     if not can_run:
         if len(seeds) == 0:
             st.warning("⚠️ Please upload a valid seed CSV to continue.")
         elif not api_token and not mock_mode:
             st.warning("⚠️ Please enter your EnrichLayer API token to continue.")
-    
+
     run_button = st.button("🚀 Run Crawl", disabled=not can_run, type="primary", use_container_width=True)
-    
+
     # CRAWL EXECUTION
     if run_button:
         st.header("🔄 Crawl Progress")
@@ -1816,7 +1819,7 @@ if uploaded_file is not None:
             'stats': stats, 'max_degree': max_degree, 'advanced_mode': advanced_mode,
             'mock_mode': mock_mode, 'network_metrics': network_metrics
         }
-    
+
     # DISPLAY RESULTS
     if st.session_state.crawl_results is not None:
         results = st.session_state.crawl_results
@@ -1831,23 +1834,23 @@ if uploaded_file is not None:
         
         st.header("📊 Results Summary")
         
-        col1, col2, col3, col4 = st.columns(4)
-        col1.metric("Total Nodes", len(seen_profiles))
-        col2.metric("Total Edges", len(edges))
-        col3.metric("Max Degree", stats['max_degree_reached'])
-        col4.metric("API Calls", stats['api_calls'])
+        res_col1, res_col2, res_col3, res_col4 = st.columns(4)
+        res_col1.metric("Total Nodes", len(seen_profiles))
+        res_col2.metric("Total Edges", len(edges))
+        res_col3.metric("Max Degree", stats['max_degree_reached'])
+        res_col4.metric("API Calls", stats['api_calls'])
         
-        col5, col6, col7, col8 = st.columns(4)
-        col5.metric("Successful", stats['successful_calls'])
-        col6.metric("Failed", stats['failed_calls'])
-        col7.metric("No Neighbors", stats['profiles_with_no_neighbors'])
+        res_col5, res_col6, res_col7, res_col8 = st.columns(4)
+        res_col5.metric("Successful", stats['successful_calls'])
+        res_col6.metric("Failed", stats['failed_calls'])
+        res_col7.metric("No Neighbors", stats['profiles_with_no_neighbors'])
         
         if stats['stopped_reason'] == 'completed':
-            col8.success("✅ Completed")
+            res_col8.success("✅ Completed")
         elif stats['stopped_reason'] in ('edge_limit', 'node_limit'):
-            col8.warning(f"⚠️ {stats['stopped_reason'].replace('_', ' ').title()}")
+            res_col8.warning(f"⚠️ {stats['stopped_reason'].replace('_', ' ').title()}")
         else:
-            col8.error(f"❌ {stats['stopped_reason']}")
+            res_col8.error(f"❌ {stats['stopped_reason']}")
         
         # ADVANCED ANALYTICS
         if was_advanced_mode and network_metrics and network_metrics.get('top_nodes'):
@@ -1889,9 +1892,9 @@ if uploaded_file is not None:
             stats_cols[4].metric("Avg Clustering", f"{network_stats.get('avg_clustering', 0):.4f}")
             
             st.markdown("---")
-            col1, col2 = st.columns(2)
+            analytics_col1, analytics_col2 = st.columns(2)
             
-            with col1:
+            with analytics_col1:
                 st.markdown("**🔗 Top Connectors** (by Degree)")
                 if 'degree' in top_nodes and deg_bp:
                     for i, (node_id, score) in enumerate(top_nodes['degree'][:5], 1):
@@ -1902,7 +1905,7 @@ if uploaded_file is not None:
                         badge = render_badge("degree", level, small=True)
                         st.markdown(f"{i}. **{name}** ({org}) — {connections} connections {badge}", unsafe_allow_html=True)
             
-            with col2:
+            with analytics_col2:
                 st.markdown("**🌉 Top Brokers** (by Betweenness)")
                 if 'betweenness' in top_nodes and btw_bp:
                     for i, (node_id, score) in enumerate(top_nodes['betweenness'][:5], 1):
@@ -1964,24 +1967,24 @@ if uploaded_file is not None:
         
         zip_data = create_download_zip(nodes_csv, edges_csv, raw_json, analysis_json, None, crawl_log)
         
-        col1, col2 = st.columns([3, 1])
-        with col1:
+        dl_col1, dl_col2 = st.columns([3, 1])
+        with dl_col1:
             st.download_button("⬇️ Download All as ZIP", data=zip_data, file_name="actorgraph_network.zip",
                               mime="application/zip", type="primary", use_container_width=True)
-        with col2:
+        with dl_col2:
             if st.button("🗑️ Clear Results", use_container_width=True):
                 st.session_state.crawl_results = None
                 st.rerun()
         
         st.markdown("### 📄 Individual Files")
-        col1, col2, col3, col4 = st.columns(4)
-        with col1:
+        file_col1, file_col2, file_col3, file_col4 = st.columns(4)
+        with file_col1:
             st.download_button("📥 nodes.csv", data=nodes_csv, file_name="nodes.csv", mime="text/csv", use_container_width=True)
-        with col2:
+        with file_col2:
             st.download_button("📥 edges.csv", data=edges_csv, file_name="edges.csv", mime="text/csv", use_container_width=True)
-        with col3:
+        with file_col3:
             st.download_button("📥 raw_profiles.json", data=raw_json, file_name="raw_profiles.json", mime="application/json", use_container_width=True)
-        with col4:
+        with file_col4:
             st.download_button("📥 crawl_log.json", data=crawl_log, file_name="crawl_log.json", mime="application/json", use_container_width=True)
         
         with st.expander("👀 Preview Nodes"):
