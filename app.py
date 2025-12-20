@@ -31,15 +31,15 @@ import plotly.graph_objects as go
 # APP VERSION
 # ============================================================================
 
-APP_VERSION = "0.3.6"
+APP_VERSION = "0.3.7"
 
 VERSION_HISTORY = [
+    "UPDATED v0.3.7: Polinode company fields (Website, Industry, Company Size, Founded Year); nan name handling; edge_type=similar_companies for company crawls",
     "FIXED v0.3.6: Validation now exclusive by crawl_type with positive pattern matching; company columns prioritized separately",
     "FIXED v0.3.5: Crawl-type-aware column detection, fixed compute_percentiles O(n²) bug, hardened company response parsing",
     "UPDATED v0.3.4: Explicit crawl type selector (People vs Company) - no more auto-detection issues",
     "FIXED v0.3.3: Company crawls now use correct API endpoint (/api/v2/company vs /api/v2/profile)",
     "FIXED v0.3.2: Corrected indentation bug causing blank page (UI code was inside collapsed expander)",
-    "UPDATED v0.3.1: Seed-file auto-detect (people vs company), max-10 enforcement, cleaner Polinode node fields for companies, and crawl-type KPIs",
 ]
 
 
@@ -1429,6 +1429,23 @@ def run_crawler(
         current_node['headline'] = response.get('headline', '')
         current_node['location'] = response.get('location_str') or response.get('location', '')
         
+        # Store company-specific fields if present (for Polinode export)
+        if response.get('is_company'):
+            current_node['is_company'] = True
+            current_node['website'] = response.get('website', '')
+            current_node['industry'] = response.get('industry', '')
+            current_node['company_size'] = response.get('company_size')
+            current_node['founded_year'] = response.get('founded_year')
+            current_node['company_type'] = response.get('company_type', '')
+        
+        # Store location components if available
+        if response.get('city'):
+            current_node['city'] = response.get('city', '')
+        if response.get('state'):
+            current_node['state'] = response.get('state', '')
+        if response.get('country'):
+            current_node['country'] = response.get('country', '')
+        
         if advanced_mode:
             occupation = response.get('occupation', '')
             experiences = response.get('experiences', [])
@@ -1461,7 +1478,9 @@ def run_crawler(
             
             neighbor_id = neighbor.get('public_identifier', canonical_id_from_url(neighbor_url))
             
-            edges.append({'source_id': current_id, 'target_id': neighbor_id, 'edge_type': 'people_also_viewed'})
+            # Use appropriate edge type based on crawl type
+            edge_type = 'similar_companies' if crawl_type == 'company' else 'people_also_viewed'
+            edges.append({'source_id': current_id, 'target_id': neighbor_id, 'edge_type': edge_type})
             stats['edges_added'] += 1
             
             if neighbor_id in seen_profiles:
@@ -1474,6 +1493,11 @@ def run_crawler(
                 'headline': neighbor_headline, 'location': neighbor.get('location', ''),
                 'degree': current_node['degree'] + 1, 'source_type': 'discovered'
             }
+            
+            # For company crawls, mark discovered nodes as companies and store industry
+            if crawl_type == 'company':
+                neighbor_node['is_company'] = True
+                neighbor_node['industry'] = neighbor.get('summary') or neighbor.get('industry', '')
             
             if advanced_mode:
                 extracted_org = extract_org_from_summary(neighbor_headline)
@@ -1641,6 +1665,24 @@ def generate_nodes_csv(seen_profiles: Dict, max_degree: int, max_edges: int, max
             'Region': node.get('state', ''),
             'Country': node.get('country', ''),
         }
+        
+        # Add company-specific Polinode fields
+        if node.get('is_company') or node_type == "Company":
+            node_dict['Website'] = node.get('website', '')
+            node_dict['Industry'] = node.get('industry', '')
+            # Format company size as "11-50" style string
+            company_size = node.get('company_size')
+            if company_size and isinstance(company_size, (list, tuple)) and len(company_size) >= 2:
+                if company_size[1]:
+                    node_dict['Company Size'] = f"{company_size[0]}-{company_size[1]}"
+                else:
+                    node_dict['Company Size'] = f"{company_size[0]}+"
+            elif company_size:
+                node_dict['Company Size'] = str(company_size)
+            else:
+                node_dict['Company Size'] = ''
+            node_dict['Founded Year'] = node.get('founded_year', '') or ''
+        
         if 'organization' in node:
             node_dict['organization'] = node.get('organization', '')
         if 'sector' in node:
@@ -1932,7 +1974,10 @@ def main():
 
             # Standardize to internal seed dicts used by crawl logic
             for _, row in seed_df.iterrows():
-                name_val = str(row.get(name_col, "")).strip() or "Unknown"
+                name_val = str(row.get(name_col, "")).strip()
+                # Treat "nan" string as blank
+                if name_val.lower() == "nan" or not name_val:
+                    name_val = "Unknown"
                 url_val = str(row.get(url_col, "")).strip()
                 seeds.append({
                     "name": name_val,
