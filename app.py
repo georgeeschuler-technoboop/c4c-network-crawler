@@ -31,14 +31,15 @@ import plotly.graph_objects as go
 # APP VERSION
 # ============================================================================
 
-APP_VERSION = "0.3.4"
+APP_VERSION = "0.3.6"
 
 VERSION_HISTORY = [
+    "FIXED v0.3.6: Validation now exclusive by crawl_type with positive pattern matching; company columns prioritized separately",
+    "FIXED v0.3.5: Crawl-type-aware column detection, fixed compute_percentiles O(n²) bug, hardened company response parsing",
     "UPDATED v0.3.4: Explicit crawl type selector (People vs Company) - no more auto-detection issues",
     "FIXED v0.3.3: Company crawls now use correct API endpoint (/api/v2/company vs /api/v2/profile)",
     "FIXED v0.3.2: Corrected indentation bug causing blank page (UI code was inside collapsed expander)",
     "UPDATED v0.3.1: Seed-file auto-detect (people vs company), max-10 enforcement, cleaner Polinode node fields for companies, and crawl-type KPIs",
-    "UPDATED v0.3.0: Company crawl path, Polinode export baseline, KPI panel + downloadables",
 ]
 
 
@@ -737,16 +738,19 @@ def describe_node_narrative(
 
 
 def compute_percentiles(values: Dict[str, float]) -> Dict[str, float]:
-    """Convert raw metric values to percentiles (0-1)."""
+    """Convert raw metric values to percentiles (0-1).
+    
+    Uses numpy argsort for O(n log n) performance and correct tie handling.
+    """
     if not values:
         return {}
-    sorted_values = sorted(values.values())
-    n = len(sorted_values)
-    percentiles = {}
-    for node_id, value in values.items():
-        rank = sorted_values.index(value)
-        percentiles[node_id] = rank / max(n - 1, 1)
-    return percentiles
+    items = list(values.items())
+    vals = np.array([v for _, v in items], dtype=float)
+    order = np.argsort(vals)
+    ranks = np.empty_like(order, dtype=float)
+    ranks[order] = np.arange(len(vals), dtype=float)
+    denom = max(len(vals) - 1, 1)
+    return {items[i][0]: float(ranks[i] / denom) for i in range(len(items))}
 
 
 def describe_broker_role(name: str, org: str, role: str, betweenness_level: str) -> str:
@@ -1109,12 +1113,15 @@ def call_enrichlayer_api(api_token: str, profile_url: str, crawl_type: str = "pe
 
 
 def normalize_company_response(company_data: Dict) -> Dict:
-    """Normalize company API response to match person profile format for crawler compatibility."""
+    """Normalize company API response to match person profile format for crawler compatibility.
+    
+    Handles various field name conventions (snake_case, camelCase) that EnrichLayer may return.
+    """
     # Company responses don't have people_also_viewed, but may have similar_companies
     # We adapt the response so the crawler can process it uniformly
     
     normalized = {
-        "public_identifier": company_data.get("universal_name_id", ""),
+        "public_identifier": company_data.get("universal_name_id") or company_data.get("universalNameId") or "",
         "full_name": company_data.get("name", ""),
         "headline": company_data.get("tagline", "") or company_data.get("industry", ""),
         "occupation": company_data.get("industry", ""),
@@ -1122,16 +1129,16 @@ def normalize_company_response(company_data: Dict) -> Dict:
         "summary": company_data.get("description", ""),
         "is_company": True,
         # Preserve original company fields
-        "company_size": company_data.get("company_size"),
-        "company_type": company_data.get("company_type"),
-        "founded_year": company_data.get("founded_year"),
+        "company_size": company_data.get("company_size") or company_data.get("companySize"),
+        "company_type": company_data.get("company_type") or company_data.get("companyType"),
+        "founded_year": company_data.get("founded_year") or company_data.get("foundedYear"),
         "website": company_data.get("website"),
         "industry": company_data.get("industry"),
-        "specialities": company_data.get("specialities", []),
+        "specialities": company_data.get("specialities") or company_data.get("specialties") or [],
     }
     
     # Build location from HQ if available
-    hq = company_data.get("hq", {})
+    hq = company_data.get("hq") or company_data.get("headquarters") or {}
     if hq:
         loc_parts = [hq.get("city", ""), hq.get("state", ""), hq.get("country", "")]
         normalized["location_str"] = ", ".join(p for p in loc_parts if p)
@@ -1140,20 +1147,40 @@ def normalize_company_response(company_data: Dict) -> Dict:
         normalized["country"] = hq.get("country", "")
     
     # Company profiles don't have people_also_viewed - they have similar_companies
-    # For network building, we could potentially use similar_companies or affiliated_companies
-    similar = company_data.get("similar_companies", []) or []
-    affiliated = company_data.get("affiliated_companies", []) or []
+    # For network building, we use similar_companies or affiliated_companies
+    # Handle both snake_case and camelCase field names
+    similar = (
+        company_data.get("similar_companies") or 
+        company_data.get("similarCompanies") or 
+        []
+    )
+    affiliated = (
+        company_data.get("affiliated_companies") or 
+        company_data.get("affiliatedCompanies") or
+        company_data.get("affiliates") or
+        []
+    )
     
     # Convert similar/affiliated companies to people_also_viewed format for crawler compatibility
     people_also_viewed = []
     for comp in (similar + affiliated)[:20]:  # Limit to 20
-        if isinstance(comp, dict) and comp.get("link"):
-            people_also_viewed.append({
-                "link": comp.get("link", ""),
-                "name": comp.get("name", ""),
-                "summary": comp.get("industry", ""),
-                "location": comp.get("location", "")
-            })
+        if isinstance(comp, dict):
+            # Try multiple field names for the link
+            link = (
+                comp.get("link") or 
+                comp.get("url") or 
+                comp.get("linkedin_url") or 
+                comp.get("linkedinUrl") or
+                comp.get("profile_url") or
+                ""
+            )
+            if link:
+                people_also_viewed.append({
+                    "link": link,
+                    "name": comp.get("name", ""),
+                    "summary": comp.get("industry") or comp.get("description") or "",
+                    "location": comp.get("location") or comp.get("hq", {}).get("city", "") or ""
+                })
     
     normalized["people_also_viewed"] = people_also_viewed
     
@@ -1594,7 +1621,6 @@ def generate_nodes_csv(seen_profiles: Dict, max_degree: int, max_edges: int, max
     
     for node in seen_profiles.values():
         node_type = "Company" if "/company/" in str(node.get('profile_url','')).lower() else "Person"
-        node_type = "Company" if "/company/" in str(node.get('profile_url','')).lower() else "Person"
         node_dict = {
             # Core / internal fields
             'id': node['id'],
@@ -1837,36 +1863,66 @@ def main():
         try:
             seed_df = pd.read_csv(uploaded_file)
 
-            # Find columns
+            # Find columns - STRICTLY prefer columns appropriate for the selected crawl type
             cols = {c.strip().lower(): c for c in seed_df.columns}
-            url_candidates = ["linkedin_profile_url", "profile_url", "linkedin_url", "url"]
-            url_col = next((cols[c] for c in url_candidates if c in cols), None)
-            if not url_col:
-                raise ValueError(f"Missing URL column. Expected one of: {', '.join(url_candidates)}")
             
-            name_candidates = ["org_name", "name"]
+            # URL column candidates - SEPARATE lists, no overlap for clarity
+            if crawl_type == "company":
+                # Company mode: prioritize company-specific columns, then generic
+                url_candidates_primary = ["linkedin_company_url", "company_url", "org_url", "organization_url"]
+                url_candidates_fallback = ["linkedin_profile_url", "profile_url", "linkedin_url", "url"]
+                name_candidates = ["org_name", "company_name", "organization", "name"]
+                
+                # Try primary first
+                url_col = next((cols[c] for c in url_candidates_primary if c in cols), None)
+                if not url_col:
+                    # Fall back to generic columns
+                    url_col = next((cols[c] for c in url_candidates_fallback if c in cols), None)
+                    if url_col:
+                        st.info(f"ℹ️ Using generic column `{url_col}` for company URLs. Consider renaming to `company_url` for clarity.")
+                
+                if not url_col:
+                    raise ValueError(f"Missing URL column. Expected one of: {', '.join(url_candidates_primary + url_candidates_fallback)}")
+            
+            else:  # people
+                url_candidates = ["linkedin_profile_url", "profile_url", "linkedin_url", "url"]
+                name_candidates = ["name", "full_name", "person_name"]
+                
+                url_col = next((cols[c] for c in url_candidates if c in cols), None)
+                if not url_col:
+                    raise ValueError(f"Missing URL column. Expected one of: {', '.join(url_candidates)}")
+            
             name_col = next((cols[c] for c in name_candidates if c in cols), None)
             if not name_col:
-                raise ValueError("Missing name column. Expected 'name' (people) or 'org_name' (companies).")
+                raise ValueError(f"Missing name column. Expected one of: {', '.join(name_candidates)}")
 
-            # Clean URLs
+            # Clean URLs - only look at the selected URL column
             seed_df[url_col] = seed_df[url_col].astype(str).str.strip()
             seed_df = seed_df[seed_df[url_col].notna() & (seed_df[url_col] != "") & (seed_df[url_col].str.lower() != "nan")]
             
             if seed_df.empty:
                 raise ValueError("No usable LinkedIn URLs found (all URL cells are blank).")
 
-            # Validate URLs match selected crawl type
+            # =========================================================================
+            # VALIDATION: Exclusive, positive pattern matching based on crawl_type
+            # Only inspect the selected URL column, not the entire CSV
+            # =========================================================================
             urls = seed_df[url_col]
-            if crawl_type == "people":
-                wrong_type = urls.str.contains(r"/company/", case=False, regex=True)
-                if wrong_type.any():
-                    st.error(f"⚠️ **Crawl type mismatch!** You selected **People** crawl but {wrong_type.sum()} URLs contain `/company/`. Either change crawl type to **Company** or fix your seed file.")
+            
+            if crawl_type == "company":
+                # COMPANY MODE: URLs must contain /company/
+                valid_pattern = urls.str.contains(r"/company/", case=False, regex=True)
+                invalid_count = (~valid_pattern).sum()
+                if invalid_count > 0:
+                    st.error(f"⚠️ **Invalid company URLs!** {invalid_count} URLs in `{url_col}` don't contain `/company/`. Company crawls require LinkedIn company URLs (e.g., `linkedin.com/company/...`).")
                     seed_validation_ok = False
-            else:  # company
-                wrong_type = urls.str.contains(r"/in/", case=False, regex=True)
-                if wrong_type.any():
-                    st.error(f"⚠️ **Crawl type mismatch!** You selected **Company** crawl but {wrong_type.sum()} URLs contain `/in/`. Either change crawl type to **People** or fix your seed file.")
+            
+            else:  # people
+                # PEOPLE MODE: URLs must contain /in/
+                valid_pattern = urls.str.contains(r"/in/", case=False, regex=True)
+                invalid_count = (~valid_pattern).sum()
+                if invalid_count > 0:
+                    st.error(f"⚠️ **Invalid people URLs!** {invalid_count} URLs in `{url_col}` don't contain `/in/`. People crawls require LinkedIn profile URLs (e.g., `linkedin.com/in/...`).")
                     seed_validation_ok = False
 
             # Enforce max 10 seed rows (truncate with warning)
@@ -1881,7 +1937,6 @@ def main():
                 seeds.append({
                     "name": name_val,
                     "profile_url": url_val,
-                    "crawl_type": crawl_type,  # Explicit crawl type from UI selection
                     # keep optional location fields if present (helps Polinode outputs)
                     "geography": row.get("geography") if "geography" in seed_df.columns else None,
                     "city": row.get("city") if "city" in seed_df.columns else None,
