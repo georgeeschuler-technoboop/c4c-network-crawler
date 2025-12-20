@@ -31,15 +31,15 @@ import plotly.graph_objects as go
 # APP VERSION
 # ============================================================================
 
-APP_VERSION = "0.3.8"
+APP_VERSION = "0.3.9"
 
 VERSION_HISTORY = [
+    "UPDATED v0.3.9: Separate C4C and Polinode schema outputs (nodes.csv + nodes_polinode.csv, edges.csv + edges_polinode.csv)",
     "FIXED v0.3.8: City/Region/Country now populated from API response and parsed from location strings",
     "UPDATED v0.3.7: Polinode company fields (Website, Industry, Company Size, Founded Year); nan name handling; edge_type=similar_companies for company crawls",
     "FIXED v0.3.6: Validation now exclusive by crawl_type with positive pattern matching; company columns prioritized separately",
     "FIXED v0.3.5: Crawl-type-aware column detection, fixed compute_percentiles O(n²) bug, hardened company response parsing",
     "UPDATED v0.3.4: Explicit crawl type selector (People vs Company) - no more auto-detection issues",
-    "FIXED v0.3.3: Company crawls now use correct API endpoint (/api/v2/company vs /api/v2/profile)",
 ]
 
 
@@ -1710,54 +1710,41 @@ def calculate_network_metrics(seen_profiles: Dict, edges: List) -> Dict:
 # ============================================================================
 
 def generate_nodes_csv(seen_profiles: Dict, max_degree: int, max_edges: int, max_nodes: int, network_metrics: Dict = None) -> str:
-    """Generate nodes.csv content."""
+    """Generate nodes.csv in C4C internal schema."""
     nodes_data = []
     node_metrics = network_metrics.get('node_metrics', {}) if network_metrics else {}
     
     for node in seen_profiles.values():
-        node_type = "Company" if "/company/" in str(node.get('profile_url','')).lower() else "Person"
         node_dict = {
-            # Core / internal fields
             'id': node['id'],
             'name': node.get('name', ''),
             'profile_url': node.get('profile_url', ''),
             'headline': node.get('headline', ''),
             'location': node.get('location', ''),
+            'city': node.get('city', ''),
+            'state': node.get('state', ''),
+            'country': node.get('country', ''),
             'degree': node.get('degree', 0),
             'source_type': node.get('source_type', ''),
-
-            # Polinode-friendly fields (extra columns are OK)
-            '!Internal ID': node['id'],
-            'Name': node.get('name', ''),
-            'Type': node_type,
-            'LinkedIn URL': node.get('profile_url', ''),
-            'Seed vs Discovered': node.get('source_type', ''),
-            'City': node.get('city', ''),
-            'Region': node.get('state', ''),
-            'Country': node.get('country', ''),
+            'is_company': node.get('is_company', False),
+            'website': node.get('website', ''),
+            'industry': node.get('industry', ''),
+            'founded_year': node.get('founded_year', ''),
         }
         
-        # Add company-specific Polinode fields
-        if node.get('is_company') or node_type == "Company":
-            node_dict['Website'] = node.get('website', '')
-            node_dict['Industry'] = node.get('industry', '')
-            # Format company size as "11-50" style string
-            company_size = node.get('company_size')
-            if company_size and isinstance(company_size, (list, tuple)) and len(company_size) >= 2:
-                if company_size[1]:
-                    node_dict['Company Size'] = f"{company_size[0]}-{company_size[1]}"
-                else:
-                    node_dict['Company Size'] = f"{company_size[0]}+"
-            elif company_size:
-                node_dict['Company Size'] = str(company_size)
-            else:
-                node_dict['Company Size'] = ''
-            node_dict['Founded Year'] = node.get('founded_year', '') or ''
+        # Format company size
+        company_size = node.get('company_size')
+        if company_size and isinstance(company_size, (list, tuple)) and len(company_size) >= 2:
+            node_dict['company_size'] = f"{company_size[0]}-{company_size[1]}" if company_size[1] else f"{company_size[0]}+"
+        else:
+            node_dict['company_size'] = str(company_size) if company_size else ''
         
         if 'organization' in node:
             node_dict['organization'] = node.get('organization', '')
         if 'sector' in node:
             node_dict['sector'] = node.get('sector', '')
+        
+        # Add network metrics if available
         if node['id'] in node_metrics:
             metrics = node_metrics[node['id']]
             node_dict['connections'] = metrics.get('degree', 0)
@@ -1765,19 +1752,97 @@ def generate_nodes_csv(seen_profiles: Dict, max_degree: int, max_edges: int, max
             node_dict['betweenness_centrality'] = metrics.get('betweenness_centrality', 0)
             node_dict['eigenvector_centrality'] = metrics.get('eigenvector_centrality', 0)
             node_dict['closeness_centrality'] = metrics.get('closeness_centrality', 0)
+        
         nodes_data.append(node_dict)
     
     df = pd.DataFrame(nodes_data)
     csv_body = df.to_csv(index=False)
-    meta = f"# generated_at={datetime.now(timezone.utc).isoformat()}; max_degree={max_degree}; max_edges={max_edges}; max_nodes={max_nodes}\n"
+    meta = f"# C4C ActorGraph nodes | generated_at={datetime.now(timezone.utc).isoformat()}; max_degree={max_degree}; max_edges={max_edges}; max_nodes={max_nodes}\n"
+    return meta + csv_body
+
+
+def generate_nodes_polinode_csv(seen_profiles: Dict, max_degree: int, max_edges: int, max_nodes: int, network_metrics: Dict = None) -> str:
+    """Generate nodes_polinode.csv in Polinode-ready schema."""
+    nodes_data = []
+    node_metrics = network_metrics.get('node_metrics', {}) if network_metrics else {}
+    
+    for node in seen_profiles.values():
+        node_type = "Company" if "/company/" in str(node.get('profile_url','')).lower() else "Person"
+        
+        # Format company size
+        company_size = node.get('company_size')
+        if company_size and isinstance(company_size, (list, tuple)) and len(company_size) >= 2:
+            size_str = f"{company_size[0]}-{company_size[1]}" if company_size[1] else f"{company_size[0]}+"
+        else:
+            size_str = str(company_size) if company_size else ''
+        
+        node_dict = {
+            # Polinode required fields
+            '!Internal ID': node['id'],
+            'Name': node.get('name', ''),
+            'Type': node_type,
+            
+            # Polinode optional fields
+            'LinkedIn URL': node.get('profile_url', ''),
+            'Headline': node.get('headline', ''),
+            'Seed vs Discovered': node.get('source_type', ''),
+            'City': node.get('city', ''),
+            'Region': node.get('state', ''),
+            'Country': node.get('country', ''),
+        }
+        
+        # Add company-specific fields
+        if node.get('is_company') or node_type == "Company":
+            node_dict['Website'] = node.get('website', '')
+            node_dict['Industry'] = node.get('industry', '')
+            node_dict['Company Size'] = size_str
+            node_dict['Founded Year'] = node.get('founded_year', '') or ''
+        
+        # Add organization/sector if present (people crawls)
+        if 'organization' in node:
+            node_dict['Organization'] = node.get('organization', '')
+        if 'sector' in node:
+            node_dict['Sector'] = node.get('sector', '')
+        
+        # Add network metrics if available
+        if node['id'] in node_metrics:
+            metrics = node_metrics[node['id']]
+            node_dict['Connections'] = metrics.get('degree', 0)
+            node_dict['Degree Centrality'] = round(metrics.get('degree_centrality', 0), 4)
+            node_dict['Betweenness Centrality'] = round(metrics.get('betweenness_centrality', 0), 4)
+            node_dict['Eigenvector Centrality'] = round(metrics.get('eigenvector_centrality', 0), 4)
+            node_dict['Closeness Centrality'] = round(metrics.get('closeness_centrality', 0), 4)
+        
+        nodes_data.append(node_dict)
+    
+    df = pd.DataFrame(nodes_data)
+    csv_body = df.to_csv(index=False)
+    meta = f"# Polinode import | generated_at={datetime.now(timezone.utc).isoformat()}\n"
     return meta + csv_body
 
 
 def generate_edges_csv(edges: List, max_degree: int, max_edges: int, max_nodes: int) -> str:
-    """Generate edges.csv content."""
+    """Generate edges.csv in C4C internal schema."""
     df = pd.DataFrame(edges)
     csv_body = df.to_csv(index=False)
-    meta = f"# generated_at={datetime.now(timezone.utc).isoformat()}; max_degree={max_degree}; max_edges={max_edges}; max_nodes={max_nodes}\n"
+    meta = f"# C4C ActorGraph edges | generated_at={datetime.now(timezone.utc).isoformat()}; max_degree={max_degree}; max_edges={max_edges}; max_nodes={max_nodes}\n"
+    return meta + csv_body
+
+
+def generate_edges_polinode_csv(edges: List) -> str:
+    """Generate edges_polinode.csv in Polinode-ready schema."""
+    # Polinode expects: Source, Target, (optional) Type/Weight
+    edges_data = []
+    for edge in edges:
+        edges_data.append({
+            'Source': edge['source_id'],
+            'Target': edge['target_id'],
+            'Type': edge.get('edge_type', 'connection'),
+        })
+    
+    df = pd.DataFrame(edges_data)
+    csv_body = df.to_csv(index=False)
+    meta = f"# Polinode import | generated_at={datetime.now(timezone.utc).isoformat()}\n"
     return meta + csv_body
 
 
@@ -1842,13 +1907,21 @@ def generate_crawl_log(stats: Dict, seen_profiles: Dict, edges: List, max_degree
     return json.dumps(log_data, indent=2)
 
 
-def create_download_zip(nodes_csv: str, edges_csv: str, raw_json: str, analysis_json: str = None,
+def create_download_zip(nodes_csv: str, edges_csv: str, nodes_polinode_csv: str, edges_polinode_csv: str,
+                        raw_json: str, analysis_json: str = None,
                         insights_report: str = None, crawl_log: str = None) -> bytes:
-    """Create a ZIP file containing all output files."""
+    """Create a ZIP file containing all output files in both C4C and Polinode schemas."""
     zip_buffer = BytesIO()
     with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
-        zip_file.writestr('nodes.csv', nodes_csv)
-        zip_file.writestr('edges.csv', edges_csv)
+        # C4C schema files
+        zip_file.writestr('c4c_schema/nodes.csv', nodes_csv)
+        zip_file.writestr('c4c_schema/edges.csv', edges_csv)
+        
+        # Polinode schema files
+        zip_file.writestr('polinode_schema/nodes_polinode.csv', nodes_polinode_csv)
+        zip_file.writestr('polinode_schema/edges_polinode.csv', edges_polinode_csv)
+        
+        # Raw data and logs
         zip_file.writestr('raw_profiles.json', raw_json)
         if analysis_json:
             zip_file.writestr('network_analysis.json', analysis_json)
@@ -2289,8 +2362,14 @@ def main():
         # DOWNLOAD SECTION
         st.header("💾 Download Results")
         
+        # Generate C4C schema files
         nodes_csv = generate_nodes_csv(seen_profiles, max_degree=was_max_degree, max_edges=10000, max_nodes=7500, network_metrics=network_metrics)
         edges_csv = generate_edges_csv(edges, max_degree=was_max_degree, max_edges=10000, max_nodes=7500)
+        
+        # Generate Polinode schema files
+        nodes_polinode_csv = generate_nodes_polinode_csv(seen_profiles, max_degree=was_max_degree, max_edges=10000, max_nodes=7500, network_metrics=network_metrics)
+        edges_polinode_csv = generate_edges_polinode_csv(edges)
+        
         raw_json = generate_raw_json(raw_profiles)
         
         analysis_json = None
@@ -2304,7 +2383,7 @@ def main():
             mock_mode=was_mock_mode
         )
         
-        zip_data = create_download_zip(nodes_csv, edges_csv, raw_json, analysis_json, None, crawl_log)
+        zip_data = create_download_zip(nodes_csv, edges_csv, nodes_polinode_csv, edges_polinode_csv, raw_json, analysis_json, None, crawl_log)
         
         dl_col1, dl_col2 = st.columns([3, 1])
         with dl_col1:
@@ -2315,16 +2394,25 @@ def main():
                 st.session_state.crawl_results = None
                 st.rerun()
         
-        st.markdown("### 📄 Individual Files")
-        file_col1, file_col2, file_col3, file_col4 = st.columns(4)
-        with file_col1:
+        # C4C Schema Downloads
+        st.markdown("### 📄 C4C Schema Files")
+        c4c_col1, c4c_col2, c4c_col3, c4c_col4 = st.columns(4)
+        with c4c_col1:
             st.download_button("📥 nodes.csv", data=nodes_csv, file_name="nodes.csv", mime="text/csv", use_container_width=True)
-        with file_col2:
+        with c4c_col2:
             st.download_button("📥 edges.csv", data=edges_csv, file_name="edges.csv", mime="text/csv", use_container_width=True)
-        with file_col3:
+        with c4c_col3:
             st.download_button("📥 raw_profiles.json", data=raw_json, file_name="raw_profiles.json", mime="application/json", use_container_width=True)
-        with file_col4:
+        with c4c_col4:
             st.download_button("📥 crawl_log.json", data=crawl_log, file_name="crawl_log.json", mime="application/json", use_container_width=True)
+        
+        # Polinode Schema Downloads
+        st.markdown("### 🔗 Polinode Import Files")
+        poli_col1, poli_col2 = st.columns(2)
+        with poli_col1:
+            st.download_button("📥 nodes_polinode.csv", data=nodes_polinode_csv, file_name="nodes_polinode.csv", mime="text/csv", use_container_width=True)
+        with poli_col2:
+            st.download_button("📥 edges_polinode.csv", data=edges_polinode_csv, file_name="edges_polinode.csv", mime="text/csv", use_container_width=True)
         
         with st.expander("👀 Preview Nodes"):
             st.dataframe(pd.DataFrame([node for node in seen_profiles.values()]))
