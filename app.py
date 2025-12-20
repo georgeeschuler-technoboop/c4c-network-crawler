@@ -31,15 +31,15 @@ import plotly.graph_objects as go
 # APP VERSION
 # ============================================================================
 
-APP_VERSION = "0.3.10"
+APP_VERSION = "0.3.11"
 
 VERSION_HISTORY = [
+    "FIXED v0.3.11: Polinode edges now use display Names (not IDs); duplicate node names deduplicated (prefer seed)",
     "FIXED v0.3.10: URL parser now handles /about/, /jobs/, /people/ suffixes and properly extracts company IDs",
     "UPDATED v0.3.9: Separate C4C and Polinode schema outputs (nodes.csv + nodes_polinode.csv, edges.csv + edges_polinode.csv)",
     "FIXED v0.3.8: City/Region/Country now populated from API response and parsed from location strings",
     "UPDATED v0.3.7: Polinode company fields (Website, Industry, Company Size, Founded Year); nan name handling; edge_type=similar_companies for company crawls",
     "FIXED v0.3.6: Validation now exclusive by crawl_type with positive pattern matching; company columns prioritized separately",
-    "FIXED v0.3.5: Crawl-type-aware column detection, fixed compute_percentiles O(n²) bug, hardened company response parsing",
 ]
 
 
@@ -1776,12 +1776,41 @@ def generate_nodes_csv(seen_profiles: Dict, max_degree: int, max_edges: int, max
     return meta + csv_body
 
 
-def generate_nodes_polinode_csv(seen_profiles: Dict, max_degree: int, max_edges: int, max_nodes: int, network_metrics: Dict = None) -> str:
-    """Generate nodes_polinode.csv in Polinode-ready schema."""
+def generate_nodes_polinode_csv(seen_profiles: Dict, max_degree: int, max_edges: int, max_nodes: int, network_metrics: Dict = None) -> Tuple[str, Dict[str, str]]:
+    """Generate nodes_polinode.csv in Polinode-ready schema.
+    
+    Returns:
+        Tuple of (csv_content, id_to_name_map) for edge generation
+    """
     nodes_data = []
     node_metrics = network_metrics.get('node_metrics', {}) if network_metrics else {}
     
+    # Build mapping and handle duplicate names
+    id_to_name = {}  # Maps internal ID to display name
+    name_to_node = {}  # Track which node owns each name (prefer seeds)
+    
     for node in seen_profiles.values():
+        node_id = node['id']
+        display_name = node.get('name', node_id)
+        
+        # Handle duplicate names: prefer seed over discovered
+        if display_name in name_to_node:
+            existing = name_to_node[display_name]
+            # If existing is discovered and this one is seed, replace
+            if existing.get('source_type') == 'discovered' and node.get('source_type') == 'seed':
+                name_to_node[display_name] = node
+                id_to_name[node_id] = display_name
+                # Also map the old ID to this name so edges still work
+                id_to_name[existing['id']] = display_name
+            else:
+                # Map this ID to the existing name (merge)
+                id_to_name[node_id] = display_name
+        else:
+            name_to_node[display_name] = node
+            id_to_name[node_id] = display_name
+    
+    # Generate CSV from deduplicated nodes
+    for display_name, node in name_to_node.items():
         node_type = "Company" if "/company/" in str(node.get('profile_url','')).lower() else "Person"
         
         # Format company size
@@ -1792,12 +1821,11 @@ def generate_nodes_polinode_csv(seen_profiles: Dict, max_degree: int, max_edges:
             size_str = str(company_size) if company_size else ''
         
         node_dict = {
-            # Polinode required fields
-            '!Internal ID': node['id'],
-            'Name': node.get('name', ''),
+            # Polinode uses Name as the key
+            'Name': display_name,
             'Type': node_type,
             
-            # Polinode optional fields
+            # Additional attributes
             'LinkedIn URL': node.get('profile_url', ''),
             'Headline': node.get('headline', ''),
             'Seed vs Discovered': node.get('source_type', ''),
@@ -1833,7 +1861,7 @@ def generate_nodes_polinode_csv(seen_profiles: Dict, max_degree: int, max_edges:
     df = pd.DataFrame(nodes_data)
     csv_body = df.to_csv(index=False)
     meta = f"# Polinode import | generated_at={datetime.now(timezone.utc).isoformat()}\n"
-    return meta + csv_body
+    return meta + csv_body, id_to_name
 
 
 def generate_edges_csv(edges: List, max_degree: int, max_edges: int, max_nodes: int) -> str:
@@ -1844,18 +1872,35 @@ def generate_edges_csv(edges: List, max_degree: int, max_edges: int, max_nodes: 
     return meta + csv_body
 
 
-def generate_edges_polinode_csv(edges: List) -> str:
-    """Generate edges_polinode.csv in Polinode-ready schema."""
-    # Polinode expects: Source, Target, (optional) Type/Weight
+def generate_edges_polinode_csv(edges: List, id_to_name: Dict[str, str]) -> str:
+    """Generate edges_polinode.csv in Polinode-ready schema.
+    
+    Args:
+        edges: List of edge dicts with source_id, target_id, edge_type
+        id_to_name: Mapping from internal IDs to display names
+    """
+    # Polinode expects: Source, Target match Name column in nodes
     edges_data = []
+    skipped = 0
+    
     for edge in edges:
+        source_name = id_to_name.get(edge['source_id'])
+        target_name = id_to_name.get(edge['target_id'])
+        
+        # Skip edges where we can't resolve the name
+        if not source_name or not target_name:
+            skipped += 1
+            continue
+        
         edges_data.append({
-            'Source': edge['source_id'],
-            'Target': edge['target_id'],
+            'Source': source_name,
+            'Target': target_name,
             'Type': edge.get('edge_type', 'connection'),
         })
     
     df = pd.DataFrame(edges_data)
+    # Remove duplicate edges (can happen when nodes are merged by name)
+    df = df.drop_duplicates()
     csv_body = df.to_csv(index=False)
     meta = f"# Polinode import | generated_at={datetime.now(timezone.utc).isoformat()}\n"
     return meta + csv_body
@@ -2381,9 +2426,9 @@ def main():
         nodes_csv = generate_nodes_csv(seen_profiles, max_degree=was_max_degree, max_edges=10000, max_nodes=7500, network_metrics=network_metrics)
         edges_csv = generate_edges_csv(edges, max_degree=was_max_degree, max_edges=10000, max_nodes=7500)
         
-        # Generate Polinode schema files
-        nodes_polinode_csv = generate_nodes_polinode_csv(seen_profiles, max_degree=was_max_degree, max_edges=10000, max_nodes=7500, network_metrics=network_metrics)
-        edges_polinode_csv = generate_edges_polinode_csv(edges)
+        # Generate Polinode schema files (nodes returns id_to_name mapping for edges)
+        nodes_polinode_csv, id_to_name = generate_nodes_polinode_csv(seen_profiles, max_degree=was_max_degree, max_edges=10000, max_nodes=7500, network_metrics=network_metrics)
+        edges_polinode_csv = generate_edges_polinode_csv(edges, id_to_name)
         
         raw_json = generate_raw_json(raw_profiles)
         
