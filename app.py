@@ -31,15 +31,15 @@ import plotly.graph_objects as go
 # APP VERSION
 # ============================================================================
 
-APP_VERSION = "0.3.7"
+APP_VERSION = "0.3.8"
 
 VERSION_HISTORY = [
+    "FIXED v0.3.8: City/Region/Country now populated from API response and parsed from location strings",
     "UPDATED v0.3.7: Polinode company fields (Website, Industry, Company Size, Founded Year); nan name handling; edge_type=similar_companies for company crawls",
     "FIXED v0.3.6: Validation now exclusive by crawl_type with positive pattern matching; company columns prioritized separately",
     "FIXED v0.3.5: Crawl-type-aware column detection, fixed compute_percentiles O(n²) bug, hardened company response parsing",
     "UPDATED v0.3.4: Explicit crawl type selector (People vs Company) - no more auto-detection issues",
     "FIXED v0.3.3: Company crawls now use correct API endpoint (/api/v2/company vs /api/v2/profile)",
-    "FIXED v0.3.2: Corrected indentation bug causing blank page (UI code was inside collapsed expander)",
 ]
 
 
@@ -939,6 +939,63 @@ def extract_org_from_summary(summary: str) -> str:
     return ''
 
 
+def parse_location_string(location: str) -> dict:
+    """Parse a location string like 'Chicago, Illinois' into city/state/country components."""
+    result = {'city': '', 'state': '', 'country': ''}
+    if not location:
+        return result
+    
+    # Common US state abbreviations
+    us_states = {
+        'AL', 'AK', 'AZ', 'AR', 'CA', 'CO', 'CT', 'DE', 'FL', 'GA', 'HI', 'ID', 'IL', 'IN', 'IA',
+        'KS', 'KY', 'LA', 'ME', 'MD', 'MA', 'MI', 'MN', 'MS', 'MO', 'MT', 'NE', 'NV', 'NH', 'NJ',
+        'NM', 'NY', 'NC', 'ND', 'OH', 'OK', 'OR', 'PA', 'RI', 'SC', 'SD', 'TN', 'TX', 'UT', 'VT',
+        'VA', 'WA', 'WV', 'WI', 'WY', 'DC'
+    }
+    us_state_names = {
+        'Alabama', 'Alaska', 'Arizona', 'Arkansas', 'California', 'Colorado', 'Connecticut',
+        'Delaware', 'Florida', 'Georgia', 'Hawaii', 'Idaho', 'Illinois', 'Indiana', 'Iowa',
+        'Kansas', 'Kentucky', 'Louisiana', 'Maine', 'Maryland', 'Massachusetts', 'Michigan',
+        'Minnesota', 'Mississippi', 'Missouri', 'Montana', 'Nebraska', 'Nevada', 'New Hampshire',
+        'New Jersey', 'New Mexico', 'New York', 'North Carolina', 'North Dakota', 'Ohio',
+        'Oklahoma', 'Oregon', 'Pennsylvania', 'Rhode Island', 'South Carolina', 'South Dakota',
+        'Tennessee', 'Texas', 'Utah', 'Vermont', 'Virginia', 'Washington', 'West Virginia',
+        'Wisconsin', 'Wyoming', 'District of Columbia'
+    }
+    canadian_provinces = {'Ontario', 'Quebec', 'British Columbia', 'Alberta', 'Manitoba', 'Saskatchewan',
+                          'Nova Scotia', 'New Brunswick', 'Newfoundland', 'PEI', 'ON', 'QC', 'BC', 'AB'}
+    
+    parts = [p.strip() for p in location.split(',')]
+    
+    if len(parts) >= 1:
+        result['city'] = parts[0]
+    
+    if len(parts) >= 2:
+        second = parts[1].strip()
+        # Check if it's a US state
+        if second.upper() in us_states or second in us_state_names:
+            result['state'] = second
+            result['country'] = 'US'
+        # Check if it's a Canadian province
+        elif second in canadian_provinces:
+            result['state'] = second
+            result['country'] = 'CA'
+        # Could be a country code
+        elif len(second) == 2 and second.upper() == second:
+            result['country'] = second
+        else:
+            result['state'] = second
+    
+    if len(parts) >= 3:
+        third = parts[2].strip()
+        if len(third) <= 3:  # Likely country code
+            result['country'] = third.upper()
+        elif not result['country']:
+            result['country'] = third
+    
+    return result
+
+
 def extract_title_from_summary(summary: str) -> str:
     """Extract job title from a LinkedIn summary/headline string."""
     if not summary:
@@ -1137,14 +1194,20 @@ def normalize_company_response(company_data: Dict) -> Dict:
         "specialities": company_data.get("specialities") or company_data.get("specialties") or [],
     }
     
-    # Build location from HQ if available
+    # Build location from HQ if available, or from top-level fields
     hq = company_data.get("hq") or company_data.get("headquarters") or {}
-    if hq:
-        loc_parts = [hq.get("city", ""), hq.get("state", ""), hq.get("country", "")]
+    
+    # Try HQ first, then fall back to top-level fields
+    city = hq.get("city", "") or company_data.get("city", "")
+    state = hq.get("state", "") or company_data.get("state", "")
+    country = hq.get("country", "") or company_data.get("country", "")
+    
+    if city or state or country:
+        loc_parts = [city, state, country]
         normalized["location_str"] = ", ".join(p for p in loc_parts if p)
-        normalized["city"] = hq.get("city", "")
-        normalized["state"] = hq.get("state", "")
-        normalized["country"] = hq.get("country", "")
+        normalized["city"] = city
+        normalized["state"] = state
+        normalized["country"] = country
     
     # Company profiles don't have people_also_viewed - they have similar_companies
     # For network building, we use similar_companies or affiliated_companies
@@ -1488,11 +1551,19 @@ def run_crawler(
             if len(seen_profiles) >= max_nodes:
                 break
             
+            neighbor_location = neighbor.get('location', '')
             neighbor_node = {
                 'id': neighbor_id, 'name': neighbor_name, 'profile_url': neighbor_url,
-                'headline': neighbor_headline, 'location': neighbor.get('location', ''),
+                'headline': neighbor_headline, 'location': neighbor_location,
                 'degree': current_node['degree'] + 1, 'source_type': 'discovered'
             }
+            
+            # Parse location string into city/state/country
+            if neighbor_location:
+                loc_parts = parse_location_string(neighbor_location)
+                neighbor_node['city'] = loc_parts['city']
+                neighbor_node['state'] = loc_parts['state']
+                neighbor_node['country'] = loc_parts['country']
             
             # For company crawls, mark discovered nodes as companies and store industry
             if crawl_type == 'company':
