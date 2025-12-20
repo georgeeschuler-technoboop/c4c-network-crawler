@@ -12,6 +12,12 @@ Usage:
 
 VERSION HISTORY:
 ----------------
+v3.0.2 (2025-12-20): Critical fixes for betweenness and bridge detection
+- FIX: Betweenness now computed on undirected graph (was always 0 on DiGraph)
+- FIX: Bridge ranking now sorted by impact (nodes isolated if removed)
+- FIX: Health score now includes governance factor (board interlocks)
+- Aligned with V2 metrics output
+
 v3.0.1 (2025-12-19): Fixed hidden broker detection bug
 - Added betweenness > 0 check to is_broker and is_hidden_broker
 - Previously flagged 2,810 nodes with betweenness=0 as hidden brokers
@@ -143,7 +149,10 @@ def compute_base_metrics(nodes_df, grant_graph, board_graph, interlock_graph) ->
     """Compute base metrics for all nodes."""
     metrics = []
     
-    grant_betweenness = nx.betweenness_centrality(grant_graph) if grant_graph.number_of_edges() > 0 else {}
+    # FIX: Convert to undirected for betweenness calculation
+    # Directed grant graph has no paths through nodes (funder→grantee only)
+    grant_undirected = grant_graph.to_undirected() if grant_graph.number_of_edges() > 0 else nx.Graph()
+    grant_betweenness = nx.betweenness_centrality(grant_undirected) if grant_undirected.number_of_edges() > 0 else {}
     grant_pagerank = nx.pagerank(grant_graph, weight="weight") if grant_graph.number_of_edges() > 0 else {}
     board_betweenness = nx.betweenness_centrality(board_graph) if board_graph.number_of_edges() > 0 else {}
     
@@ -296,9 +305,16 @@ def compute_portfolio_overlap(edges_df: pd.DataFrame) -> pd.DataFrame:
 # =============================================================================
 
 def compute_network_health(flow_stats, metrics_df, n_components, largest_component_pct, multi_funder_pct):
-    """Compute 0-100 health score for funder network."""
+    """Compute 0-100 health score for funder network.
+    
+    Factors:
+    - Coordination (multi-funder grantees): 0-25 points
+    - Connectivity (largest component): 0-20 points
+    - Concentration (top 5 share): -15 to +10 points
+    - Governance (board interlocks): 0-15 points (NEW)
+    """
     positive_factors, risk_factors = [], []
-    score = 30.0
+    score = 20.0  # Lower base to account for governance factor
     
     # Coordination signal
     if multi_funder_pct >= 10:
@@ -330,6 +346,19 @@ def compute_network_health(flow_stats, metrics_df, n_components, largest_compone
     elif top5_share < 80:
         score += 10
         positive_factors.append(f"🟢 **Distributed funding** — top 5 control {top5_share:.0f}%")
+    
+    # Governance connectivity (NEW)
+    org_metrics = metrics_df[metrics_df["node_type"] == "ORG"]
+    foundations = org_metrics[org_metrics["grant_outflow_total"] > 0] if "grant_outflow_total" in org_metrics.columns else pd.DataFrame()
+    if len(foundations) > 0:
+        pct_with_interlocks = (foundations["shared_board_count"] > 0).mean() * 100
+        if pct_with_interlocks >= 20:
+            score += 15
+            positive_factors.append(f"🟢 **Governance ties** — {pct_with_interlocks:.0f}% of funders share board members")
+        elif pct_with_interlocks >= 5:
+            score += 8
+        elif pct_with_interlocks == 0:
+            risk_factors.append("🔴 **No governance ties** — funders have no shared board members")
     
     score = max(0, min(100, int(score)))
     label = "Healthy coordination" if score >= 70 else "Mixed signals" if score >= 40 else "Fragmented / siloed"
@@ -1057,13 +1086,32 @@ def generate_insight_cards(nodes_df, edges_df, metrics_df, interlock_graph, flow
         ap_in_network = [a for a in ap if a in metrics_df["node_id"].values]
         
         if ap_in_network:
+            # Compute impact of removing each articulation point
+            bridge_impacts = []
+            for a in ap_in_network:
+                G_temp = grant_graph.copy()
+                G_temp.remove_node(a)
+                components = list(nx.connected_components(G_temp))
+                isolated_count = sum(len(c) for c in components[1:]) if len(components) > 1 else 0
+                neighbor_count = grant_graph.degree(a)
+                bridge_impacts.append({
+                    "node_id": a,
+                    "isolated_nodes": isolated_count,
+                    "component_count": len(components),
+                    "neighbor_count": neighbor_count
+                })
+            
+            # Sort by impact (isolated nodes descending)
+            bridge_impacts.sort(key=lambda x: -x["isolated_nodes"])
+            
             bridge_narrative = (
                 f"**{len(ap_in_network)} nodes** are critical bridges — removing any one would fragment the network "
                 f"into disconnected pieces. These are structural vulnerabilities but also high-leverage positions."
             )
             
             ranked_rows = []
-            for i, a in enumerate(ap_in_network[:5]):
+            for i, impact in enumerate(bridge_impacts[:5]):
+                a = impact["node_id"]
                 row = metrics_df[metrics_df["node_id"] == a].iloc[0]
                 node_type = row["node_type"]
                 if node_type == "ORG" and (row.get("grant_outflow_total") or 0) > 0:
@@ -1073,12 +1121,16 @@ def generate_insight_cards(nodes_df, edges_df, metrics_df, interlock_graph, flow
                 else:
                     role_desc = f"Person on {int(row.get('boards_served', 0))} boards"
                 
+                impact_desc = f"Would isolate {impact['isolated_nodes']} nodes across {impact['component_count']} component(s)"
+                
                 ranked_rows.append({
                     "rank": i+1, 
                     "node": node_labels.get(a, a),
                     "type": node_type,
                     "role": role_desc,
-                    "narrative": f"Removing {node_labels.get(a, a)} would split the network. {role_desc}."
+                    "impact": impact_desc,
+                    "neighbor_count": impact["neighbor_count"],
+                    "narrative": f"Removing {node_labels.get(a, a)} would split the network. {impact_desc}."
                 })
             
             cards.append({
