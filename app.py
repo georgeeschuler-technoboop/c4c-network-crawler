@@ -1630,7 +1630,7 @@ def main():
     
     with col1:
         st.subheader("1. Upload Seed Profiles")
-        uploaded_file = st.file_uploader("Upload CSV with columns: name, profile_url (max 5 rows)", type=['csv'])
+        uploaded_file = st.file_uploader("Upload CSV with columns: name, profile_url (max 10 rows)", type=['csv'])
         
         seeds = []
         if uploaded_file:
@@ -1641,8 +1641,8 @@ def main():
                 
                 if missing_cols:
                     st.error(f"❌ Missing required columns: {', '.join(missing_cols)}")
-                elif len(df) > 5:
-                    st.error("❌ Prototype limit: max 5 seed profiles.")
+                elif len(df) > 10:
+                    st.error("❌ Prototype limit: max 10 seed profiles.")
                 elif len(df) == 0:
                     st.error("❌ CSV file is empty.")
                 else:
