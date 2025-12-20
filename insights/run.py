@@ -12,6 +12,16 @@ Usage:
 
 VERSION HISTORY:
 ----------------
+v3.0.4 (2025-12-20): Fixed bridge detection to focus on largest component
+- FIX: Articulation points now computed only within largest connected component
+- FIX: Impact counts nodes disconnected from main cluster, not peripheral clusters
+- Previously small Canadian foundations appeared as top bridges incorrectly
+
+v3.0.3 (2025-12-20): Fixed hidden broker threshold calculation
+- FIX: Betweenness percentile now computed only among nodes with btw > 0
+- FIX: Hidden broker uses 85th percentile betweenness + below-40th percentile degree
+- Previously 75th percentile of all nodes was 0.0, catching no one
+
 v3.0.2 (2025-12-20): Critical fixes for betweenness and bridge detection
 - FIX: Betweenness now computed on undirected graph (was always 0 on DiGraph)
 - FIX: Bridge ranking now sorted by impact (nodes isolated if removed)
@@ -222,17 +232,27 @@ def compute_derived_signals(metrics_df: pd.DataFrame) -> pd.DataFrame:
     
     if len(org_df) > 0:
         degree_75 = np.percentile(org_df["degree"].dropna(), CONNECTOR_THRESHOLD)
-        degree_40 = np.percentile(org_df["degree"].dropna(), HIDDEN_BROKER_DEGREE_CAP)
-        betweenness_75 = np.percentile(org_df["betweenness"].dropna(), BROKER_THRESHOLD)
         outflow_vals = org_df["grant_outflow_total"].dropna()
         outflow_75 = np.percentile(outflow_vals, CAPITAL_HUB_THRESHOLD) if len(outflow_vals) > 0 else 0
         
         df.loc[org_mask & (df["degree"] >= degree_75), "is_connector"] = 1
-        # FIX: Added betweenness > 0 check to prevent flagging nodes with zero betweenness
-        df.loc[org_mask & (df["betweenness"] > 0) & (df["betweenness"] >= betweenness_75), "is_broker"] = 1
-        df.loc[org_mask & (df["betweenness"] > 0) & (df["betweenness"] >= betweenness_75) & (df["degree"] <= degree_40), "is_hidden_broker"] = 1
         df.loc[org_mask & (df["grant_outflow_total"] >= outflow_75) & (df["grant_outflow_total"] > 0), "is_capital_hub"] = 1
         df.loc[org_mask & (df["degree"] == 1), "is_isolated"] = 1
+        
+        # FIX: Compute broker thresholds only among nodes with non-zero betweenness
+        # This prevents the 75th percentile from being 0 when most nodes have no betweenness
+        connectors = org_df[org_df["betweenness"] > 0]
+        if len(connectors) > 0:
+            # 85th percentile among actual connectors (matches V2 hidden broker count)
+            betweenness_85 = np.percentile(connectors["betweenness"], 85)
+            # 40th percentile degree among connectors (hidden = low visibility)
+            degree_40 = np.percentile(connectors["degree"], 40)
+            
+            # is_broker: high betweenness among connectors
+            df.loc[org_mask & (df["betweenness"] >= betweenness_85), "is_broker"] = 1
+            
+            # is_hidden_broker: high betweenness BUT low degree (bottom 40% among connectors)
+            df.loc[org_mask & (df["betweenness"] >= betweenness_85) & (df["degree"] <= degree_40), "is_hidden_broker"] = 1
     
     person_mask = df["node_type"] == "PERSON"
     df.loc[person_mask & (df["boards_served"] >= 2), "is_connector"] = 1
@@ -1082,18 +1102,28 @@ def generate_insight_cards(nodes_df, edges_df, metrics_df, interlock_graph, flow
     # Card 8: Single-Point Bridges
     # =========================================================================
     if grant_graph.number_of_edges() > 0:
-        ap = list(nx.articulation_points(grant_graph))
+        # FIX: Only compute articulation points within the largest connected component
+        # Otherwise small peripheral components can appear as "critical bridges"
+        largest_cc = max(nx.connected_components(grant_graph), key=len)
+        largest_subgraph = grant_graph.subgraph(largest_cc).copy()
+        
+        ap = list(nx.articulation_points(largest_subgraph))
         ap_in_network = [a for a in ap if a in metrics_df["node_id"].values]
         
         if ap_in_network:
             # Compute impact of removing each articulation point
             bridge_impacts = []
             for a in ap_in_network:
-                G_temp = grant_graph.copy()
+                G_temp = largest_subgraph.copy()
                 G_temp.remove_node(a)
                 components = list(nx.connected_components(G_temp))
-                isolated_count = sum(len(c) for c in components[1:]) if len(components) > 1 else 0
-                neighbor_count = grant_graph.degree(a)
+                # Count nodes that would be disconnected from the main component
+                if len(components) > 1:
+                    largest_remaining = max(len(c) for c in components)
+                    isolated_count = len(largest_cc) - 1 - largest_remaining  # -1 for removed node
+                else:
+                    isolated_count = 0
+                neighbor_count = largest_subgraph.degree(a)
                 bridge_impacts.append({
                     "node_id": a,
                     "isolated_nodes": isolated_count,
