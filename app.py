@@ -31,9 +31,10 @@ import plotly.graph_objects as go
 # APP VERSION
 # ============================================================================
 
-APP_VERSION = "0.3.2"
+APP_VERSION = "0.3.3"
 
 VERSION_HISTORY = [
+    "FIXED v0.3.3: Company crawls now use correct API endpoint (/api/v2/company vs /api/v2/profile)",
     "FIXED v0.3.2: Corrected indentation bug causing blank page (UI code was inside collapsed expander)",
     "UPDATED v0.3.1: Seed-file auto-detect (people vs company), max-10 enforcement, cleaner Polinode node fields for companies, and crawl-type KPIs",
     "UPDATED v0.3.0: Company crawl path, Polinode export baseline, KPI panel + downloadables",
@@ -1039,21 +1040,33 @@ def test_network_connectivity() -> Tuple[bool, str]:
 # ============================================================================
 
 def call_enrichlayer_api(api_token: str, profile_url: str, mock_mode: bool = False, max_retries: int = 3) -> Tuple[Optional[Dict], Optional[str]]:
-    """Call EnrichLayer person profile endpoint with retry logic."""
+    """Call EnrichLayer API with automatic endpoint detection for person vs company."""
     if mock_mode:
         time.sleep(0.1)
         return get_mock_response(profile_url), None
     
-    endpoint = "https://enrichlayer.com/api/v2/profile"
+    # Detect if this is a company or person URL
+    is_company = "/company/" in profile_url.lower()
+    
+    if is_company:
+        endpoint = "https://enrichlayer.com/api/v2/company"
+        params = {"url": profile_url, "use_cache": "if-present"}
+    else:
+        endpoint = "https://enrichlayer.com/api/v2/profile"
+        params = {"url": profile_url, "use_cache": "if-present", "live_fetch": "if-needed"}
+    
     headers = {"Authorization": f"Bearer {api_token}"}
-    params = {"url": profile_url, "use_cache": "if-present", "live_fetch": "if-needed"}
     
     for attempt in range(max_retries):
         try:
             response = requests.get(endpoint, headers=headers, params=params, timeout=30)
             
             if response.status_code == 200:
-                return response.json(), None
+                data = response.json()
+                # Normalize company response to match expected format
+                if is_company:
+                    data = normalize_company_response(data)
+                return data, None
             elif response.status_code == 401:
                 return None, "Invalid API token"
             elif response.status_code == 403:
@@ -1070,7 +1083,12 @@ def call_enrichlayer_api(api_token: str, profile_url: str, mock_mode: bool = Fal
                     continue
                 return None, "Enrichment failed"
             else:
-                return None, f"API error {response.status_code}"
+                # Try to get error details from response
+                try:
+                    error_detail = response.json().get('message', '') or response.json().get('error', '')
+                    return None, f"API error {response.status_code}: {error_detail}" if error_detail else f"API error {response.status_code}"
+                except:
+                    return None, f"API error {response.status_code}"
         except requests.exceptions.Timeout:
             if attempt < max_retries - 1:
                 time.sleep(2)
@@ -1085,12 +1103,130 @@ def call_enrichlayer_api(api_token: str, profile_url: str, mock_mode: bool = Fal
     return None, "Failed after maximum retries"
 
 
+def normalize_company_response(company_data: Dict) -> Dict:
+    """Normalize company API response to match person profile format for crawler compatibility."""
+    # Company responses don't have people_also_viewed, but may have similar_companies
+    # We adapt the response so the crawler can process it uniformly
+    
+    normalized = {
+        "public_identifier": company_data.get("universal_name_id", ""),
+        "full_name": company_data.get("name", ""),
+        "headline": company_data.get("tagline", "") or company_data.get("industry", ""),
+        "occupation": company_data.get("industry", ""),
+        "location_str": "",
+        "summary": company_data.get("description", ""),
+        "is_company": True,
+        # Preserve original company fields
+        "company_size": company_data.get("company_size"),
+        "company_type": company_data.get("company_type"),
+        "founded_year": company_data.get("founded_year"),
+        "website": company_data.get("website"),
+        "industry": company_data.get("industry"),
+        "specialities": company_data.get("specialities", []),
+    }
+    
+    # Build location from HQ if available
+    hq = company_data.get("hq", {})
+    if hq:
+        loc_parts = [hq.get("city", ""), hq.get("state", ""), hq.get("country", "")]
+        normalized["location_str"] = ", ".join(p for p in loc_parts if p)
+        normalized["city"] = hq.get("city", "")
+        normalized["state"] = hq.get("state", "")
+        normalized["country"] = hq.get("country", "")
+    
+    # Company profiles don't have people_also_viewed - they have similar_companies
+    # For network building, we could potentially use similar_companies or affiliated_companies
+    similar = company_data.get("similar_companies", []) or []
+    affiliated = company_data.get("affiliated_companies", []) or []
+    
+    # Convert similar/affiliated companies to people_also_viewed format for crawler compatibility
+    people_also_viewed = []
+    for comp in (similar + affiliated)[:20]:  # Limit to 20
+        if isinstance(comp, dict) and comp.get("link"):
+            people_also_viewed.append({
+                "link": comp.get("link", ""),
+                "name": comp.get("name", ""),
+                "summary": comp.get("industry", ""),
+                "location": comp.get("location", "")
+            })
+    
+    normalized["people_also_viewed"] = people_also_viewed
+    
+    return normalized
+
+
 def get_mock_response(profile_url: str) -> Dict:
     """Generate comprehensive mock API response for stress testing."""
     import hashlib
     
     url_hash = int(hashlib.md5(profile_url.encode()).hexdigest(), 16)
     
+    # Check if this is a company URL
+    is_company = "/company/" in profile_url.lower()
+    
+    if is_company:
+        return get_mock_company_response(profile_url, url_hash)
+    else:
+        return get_mock_person_response(profile_url, url_hash)
+
+
+def get_mock_company_response(profile_url: str, url_hash: int) -> Dict:
+    """Generate mock company API response."""
+    company_names = ["Green Earth Foundation", "Sustainable Futures Inc", "EcoTech Solutions", 
+                     "Climate Action Network", "Blue Ocean Initiative", "Forest Alliance",
+                     "Clean Energy Partners", "Wildlife Conservation Trust", "Urban Renewal Coalition",
+                     "Great Lakes Foundation", "Midwest Environmental Group", "Community Development Corp"]
+    industries = ["Environmental Services", "Non-profit Organization Management", "Civic & Social Organization",
+                  "Research", "Government Administration", "Philanthropy", "Education"]
+    cities = ["Chicago", "Detroit", "Cleveland", "Milwaukee", "Minneapolis", "Grand Rapids", "Indianapolis"]
+    states = ["Illinois", "Michigan", "Ohio", "Wisconsin", "Minnesota", "Indiana"]
+    
+    temp_id = canonical_id_from_url(profile_url)
+    company_name = company_names[url_hash % len(company_names)]
+    industry = industries[(url_hash // 100) % len(industries)]
+    city = cities[(url_hash // 1000) % len(cities)]
+    state = states[(url_hash // 10000) % len(states)]
+    
+    # Generate similar companies (for network building)
+    num_similar = 8 + (url_hash % 8)
+    similar_companies = []
+    for i in range(num_similar):
+        comp_hash = (url_hash + i * 7919) % (2**32)
+        comp_name = company_names[comp_hash % len(company_names)]
+        comp_industry = industries[(comp_hash // 100) % len(industries)]
+        comp_id = comp_name.lower().replace(" ", "-").replace(".", "")[:30]
+        
+        similar_companies.append({
+            "link": f"https://www.linkedin.com/company/{comp_id}",
+            "name": comp_name,
+            "industry": comp_industry,
+            "location": f"{cities[comp_hash % len(cities)]}, {states[(comp_hash // 100) % len(states)]}"
+        })
+    
+    # Return normalized format (already processed like normalize_company_response would do)
+    return {
+        "public_identifier": temp_id,
+        "full_name": company_name,
+        "headline": industry,
+        "occupation": industry,
+        "location_str": f"{city}, {state}",
+        "summary": f"{company_name} is a leading organization in {industry.lower()}.",
+        "is_company": True,
+        "company_size": [50, 200],
+        "company_type": "NONPROFIT" if "Non-profit" in industry else "PRIVATELY_HELD",
+        "founded_year": 1990 + (url_hash % 30),
+        "website": f"https://www.{temp_id}.org",
+        "industry": industry,
+        "specialities": ["Community Development", "Environmental Advocacy", "Research"],
+        "city": city,
+        "state": state,
+        "country": "US",
+        "people_also_viewed": similar_companies
+    }
+
+
+def get_mock_person_response(profile_url: str, url_hash: int) -> Dict:
+    """Generate mock person API response."""
     first_names = ["James", "Mary", "John", "Patricia", "Robert", "Jennifer", "Michael", "Linda",
                    "William", "Elizabeth", "David", "Barbara", "Richard", "Susan", "Joseph", "Jessica"]
     last_names = ["Smith", "Johnson", "Williams", "Brown", "Jones", "Garcia", "Miller", "Davis",
