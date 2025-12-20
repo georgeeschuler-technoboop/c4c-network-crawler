@@ -31,15 +31,15 @@ import plotly.graph_objects as go
 # APP VERSION
 # ============================================================================
 
-APP_VERSION = "0.3.12"
+APP_VERSION = "0.3.13"
 
 VERSION_HISTORY = [
+    "ADDED v0.3.13: Polinode Excel export (single .xlsx with Nodes + Edges tabs); requires openpyxl",
     "HARDENED v0.3.12: Name canonicalization (Unicode NFKC, whitespace, quotes, hyphens); post-export validation for Polinode",
     "FIXED v0.3.11: Polinode edges now use display Names (not IDs); duplicate node names deduplicated (prefer seed)",
     "FIXED v0.3.10: URL parser now handles /about/, /jobs/, /people/ suffixes and properly extracts company IDs",
     "UPDATED v0.3.9: Separate C4C and Polinode schema outputs (nodes.csv + nodes_polinode.csv, edges.csv + edges_polinode.csv)",
     "FIXED v0.3.8: City/Region/Country now populated from API response and parsed from location strings",
-    "UPDATED v0.3.7: Polinode company fields (Website, Industry, Company Size, Founded Year); nan name handling; edge_type=similar_companies for company crawls",
 ]
 
 
@@ -1967,6 +1967,33 @@ def validate_polinode_export(nodes_csv: str, edges_csv: str) -> Tuple[bool, List
     return len(errors) == 0, errors
 
 
+def generate_polinode_excel(nodes_polinode_csv: str, edges_polinode_csv: str) -> bytes:
+    """Generate a single Excel file with Nodes and Edges sheets for Polinode import.
+    
+    Args:
+        nodes_polinode_csv: CSV string for nodes (with # comment header)
+        edges_polinode_csv: CSV string for edges (with # comment header)
+    
+    Returns:
+        Excel file as bytes
+    """
+    # Parse CSVs (skip comment header)
+    nodes_lines = [l for l in nodes_polinode_csv.split('\n') if l and not l.startswith('#')]
+    edges_lines = [l for l in edges_polinode_csv.split('\n') if l and not l.startswith('#')]
+    
+    nodes_df = pd.read_csv(StringIO('\n'.join(nodes_lines)))
+    edges_df = pd.read_csv(StringIO('\n'.join(edges_lines)))
+    
+    # Create Excel file in memory
+    excel_buffer = BytesIO()
+    with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
+        nodes_df.to_excel(writer, sheet_name='Nodes', index=False)
+        edges_df.to_excel(writer, sheet_name='Edges', index=False)
+    
+    excel_buffer.seek(0)
+    return excel_buffer.getvalue()
+
+
 def generate_raw_json(raw_profiles: List) -> str:
     """Generate raw_profiles.json content."""
     return json.dumps(raw_profiles, indent=2)
@@ -2030,7 +2057,8 @@ def generate_crawl_log(stats: Dict, seen_profiles: Dict, edges: List, max_degree
 
 def create_download_zip(nodes_csv: str, edges_csv: str, nodes_polinode_csv: str, edges_polinode_csv: str,
                         raw_json: str, analysis_json: str = None,
-                        insights_report: str = None, crawl_log: str = None) -> bytes:
+                        insights_report: str = None, crawl_log: str = None, 
+                        polinode_excel: bytes = None) -> bytes:
     """Create a ZIP file containing all output files in both C4C and Polinode schemas."""
     zip_buffer = BytesIO()
     with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
@@ -2041,6 +2069,8 @@ def create_download_zip(nodes_csv: str, edges_csv: str, nodes_polinode_csv: str,
         # Polinode schema files
         zip_file.writestr('polinode_schema/nodes_polinode.csv', nodes_polinode_csv)
         zip_file.writestr('polinode_schema/edges_polinode.csv', edges_polinode_csv)
+        if polinode_excel:
+            zip_file.writestr('polinode_schema/actorgraph_polinode.xlsx', polinode_excel)
         
         # Raw data and logs
         zip_file.writestr('raw_profiles.json', raw_json)
@@ -2511,7 +2541,10 @@ def main():
             mock_mode=was_mock_mode
         )
         
-        zip_data = create_download_zip(nodes_csv, edges_csv, nodes_polinode_csv, edges_polinode_csv, raw_json, analysis_json, None, crawl_log)
+        # Generate Excel file for Polinode
+        polinode_excel = generate_polinode_excel(nodes_polinode_csv, edges_polinode_csv)
+        
+        zip_data = create_download_zip(nodes_csv, edges_csv, nodes_polinode_csv, edges_polinode_csv, raw_json, analysis_json, None, crawl_log, polinode_excel)
         
         dl_col1, dl_col2 = st.columns([3, 1])
         with dl_col1:
@@ -2536,6 +2569,15 @@ def main():
         
         # Polinode Schema Downloads
         st.markdown("### 🔗 Polinode Import Files")
+        
+        st.download_button(
+            "📊 Download Polinode Excel (Nodes + Edges tabs)", 
+            data=polinode_excel, 
+            file_name="actorgraph_polinode.xlsx", 
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True
+        )
+        
         poli_col1, poli_col2 = st.columns(2)
         with poli_col1:
             st.download_button("📥 nodes_polinode.csv", data=nodes_polinode_csv, file_name="nodes_polinode.csv", mime="text/csv", use_container_width=True)
