@@ -13,6 +13,13 @@ Outputs conform to C4C Network Schema v1 (MVP):
 
 VERSION HISTORY:
 ----------------
+UPDATED v0.16.0: Polinode export improvements
+- Name canonicalization (Unicode NFKC, whitespace, quotes, hyphens)
+- Duplicate node names deduplicated (prefers ORG over PERSON)
+- Post-export validation (warns if duplicate names or missing edge references)
+- Excel export with Nodes + Edges tabs for direct Polinode import
+- ZIP structure now uses c4c_schema/ and polinode_schema/ folders
+
 UPDATED v0.14.0: Multi-project support
 - Project selection UI (New / Add to Existing / View Demo)
 - Merge behavior for adding foundations to existing projects
@@ -1357,13 +1364,96 @@ def render_data_preview(nodes_df: pd.DataFrame, edges_df: pd.DataFrame):
             st.dataframe(edges_df, use_container_width=True)
         else:
             st.info("No edges to display")
+
+
+# =============================================================================
+# Polinode Export Helpers
+# =============================================================================
+
+def canonicalize_name(name: str) -> str:
+    """Canonicalize a display name for Polinode consistency.
+    
+    - Unicode normalize (NFKC)
+    - Strip whitespace
+    - Collapse multiple spaces
+    - Normalize quotes and hyphens
+    """
+    import unicodedata
+    if not name or pd.isna(name):
+        return str(name) if name else ""
+    name = str(name)
+    # Unicode normalize
+    name = unicodedata.normalize('NFKC', name)
+    # Normalize curly quotes to straight
+    name = name.replace('"', '"').replace('"', '"').replace(''', "'").replace(''', "'")
+    # Normalize various hyphens/dashes to standard hyphen
+    name = name.replace('–', '-').replace('—', '-').replace('−', '-')
+    # Strip and collapse whitespace
+    name = ' '.join(name.split())
+    return name
+
+
+def validate_polinode_export(poli_nodes: pd.DataFrame, poli_edges: pd.DataFrame) -> tuple:
+    """Validate Polinode export for consistency before saving.
+    
+    Returns:
+        Tuple of (is_valid, list_of_errors)
+    """
+    errors = []
+    
+    if poli_nodes.empty:
+        return True, errors
+    
+    # Check 1: Node names must be unique
+    if 'Name' in poli_nodes.columns:
+        duplicates = poli_nodes[poli_nodes.duplicated(subset='Name', keep=False)]['Name'].unique()
+        if len(duplicates) > 0:
+            errors.append(f"Duplicate node names ({len(duplicates)}): {', '.join(str(d) for d in duplicates[:5])}")
+    
+    # Check 2: All edge sources/targets must exist in nodes
+    if not poli_edges.empty and 'Name' in poli_nodes.columns and 'Source' in poli_edges.columns:
+        node_names = set(poli_nodes['Name'].dropna())
+        edge_sources = set(poli_edges['Source'].dropna())
+        edge_targets = set(poli_edges['Target'].dropna())
+        
+        missing_sources = edge_sources - node_names
+        missing_targets = edge_targets - node_names
+        
+        if missing_sources:
+            errors.append(f"Edge sources not in nodes ({len(missing_sources)}): {', '.join(str(s) for s in list(missing_sources)[:5])}")
+        if missing_targets:
+            errors.append(f"Edge targets not in nodes ({len(missing_targets)}): {', '.join(str(t) for t in list(missing_targets)[:5])}")
+    
+    return len(errors) == 0, errors
+
+
+def generate_polinode_excel(poli_nodes: pd.DataFrame, poli_edges: pd.DataFrame) -> bytes:
+    """Generate a single Excel file with Nodes and Edges sheets for Polinode import.
+    
+    Returns:
+        Excel file as bytes
+    """
+    excel_buffer = BytesIO()
+    with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
+        poli_nodes.to_excel(writer, sheet_name='Nodes', index=False)
+        poli_edges.to_excel(writer, sheet_name='Edges', index=False)
+    
+    excel_buffer.seek(0)
+    return excel_buffer.getvalue()
+
+
 def convert_to_polinode_format(nodes_df: pd.DataFrame, edges_df: pd.DataFrame) -> tuple:
     """
     Convert internal node/edge format to Polinode-compatible format.
     
     Polinode requires:
     - Nodes: 'Name' column (unique identifier)
-    - Edges: 'Source' and 'Target' columns matching Name values
+    - Edges: 'Source' and 'Target' columns matching Name values exactly
+    
+    Features:
+    - Name canonicalization (Unicode, whitespace, quotes, hyphens)
+    - Deduplication by name (prefers ORG over PERSON for same name)
+    - Edges reference canonicalized display names
     
     Returns:
         (polinode_nodes_df, polinode_edges_df)
@@ -1371,58 +1461,91 @@ def convert_to_polinode_format(nodes_df: pd.DataFrame, edges_df: pd.DataFrame) -
     if nodes_df.empty:
         return pd.DataFrame(), pd.DataFrame()
     
-    # Build node_id → label mapping
-    id_to_label = dict(zip(nodes_df['node_id'], nodes_df['label']))
+    # Build node_id → canonicalized label mapping, handling duplicates
+    id_to_label = {}
+    label_to_row = {}  # Track best row per label (prefer ORG over PERSON for duplicates)
     
-    # --- Nodes ---
-    # Create Name column from label, keep useful attributes
-    poli_nodes = pd.DataFrame()
-    poli_nodes['Name'] = nodes_df['label']
-    poli_nodes['Type'] = nodes_df['node_type']  # ORG or PERSON
+    for idx, row in nodes_df.iterrows():
+        node_id = row['node_id']
+        raw_label = row.get('label', node_id)
+        canon_label = canonicalize_name(raw_label)
+        node_type = row.get('node_type', '')
+        
+        # Handle duplicate labels: prefer ORG over PERSON
+        if canon_label in label_to_row:
+            existing_type = label_to_row[canon_label].get('node_type', '')
+            # If existing is PERSON and this one is ORG, replace
+            if existing_type == 'PERSON' and node_type == 'ORG':
+                label_to_row[canon_label] = row
+        else:
+            label_to_row[canon_label] = row
+        
+        # Always map this ID to the canonical label
+        id_to_label[node_id] = canon_label
     
-    # Add optional attributes that Polinode can use
-    if 'city' in nodes_df.columns:
-        poli_nodes['City'] = nodes_df['city']
-    if 'region' in nodes_df.columns:
-        poli_nodes['Region'] = nodes_df['region']
-    if 'jurisdiction' in nodes_df.columns:
-        poli_nodes['Jurisdiction'] = nodes_df['jurisdiction']
-    if 'tax_id' in nodes_df.columns:
-        poli_nodes['Tax ID'] = nodes_df['tax_id']
-    if 'assets_latest' in nodes_df.columns:
-        poli_nodes['Assets'] = nodes_df['assets_latest']
+    # --- Nodes (deduplicated) ---
+    poli_nodes_data = []
+    for canon_label, row in label_to_row.items():
+        node_dict = {
+            'Name': canon_label,
+            'Type': row.get('node_type', ''),
+        }
+        # Add optional attributes
+        if 'city' in row.index and pd.notna(row.get('city')):
+            node_dict['City'] = row['city']
+        if 'region' in row.index and pd.notna(row.get('region')):
+            node_dict['Region'] = row['region']
+        if 'jurisdiction' in row.index and pd.notna(row.get('jurisdiction')):
+            node_dict['Jurisdiction'] = row['jurisdiction']
+        if 'tax_id' in row.index and pd.notna(row.get('tax_id')):
+            node_dict['Tax ID'] = row['tax_id']
+        if 'assets_latest' in row.index and pd.notna(row.get('assets_latest')):
+            node_dict['Assets'] = row['assets_latest']
+        
+        poli_nodes_data.append(node_dict)
     
-    # Keep internal ID for reference (prefixed with ! so Polinode doesn't parse it)
-    poli_nodes['!Internal ID'] = nodes_df['node_id']
+    poli_nodes = pd.DataFrame(poli_nodes_data)
     
     # --- Edges ---
     if edges_df.empty:
         return poli_nodes, pd.DataFrame()
     
-    poli_edges = pd.DataFrame()
+    poli_edges_data = []
+    for idx, row in edges_df.iterrows():
+        source_label = id_to_label.get(row['from_id'])
+        target_label = id_to_label.get(row['to_id'])
+        
+        # Skip edges where we can't resolve the label
+        if not source_label or not target_label:
+            continue
+        
+        edge_dict = {
+            'Source': source_label,
+            'Target': target_label,
+        }
+        # Add edge attributes
+        if 'edge_type' in row.index and pd.notna(row.get('edge_type')):
+            edge_dict['Type'] = row['edge_type']
+        if 'amount' in row.index and pd.notna(row.get('amount')):
+            edge_dict['Amount'] = row['amount']
+        if 'fiscal_year' in row.index and pd.notna(row.get('fiscal_year')):
+            edge_dict['Fiscal Year'] = row['fiscal_year']
+        if 'purpose' in row.index and pd.notna(row.get('purpose')):
+            edge_dict['Purpose'] = row['purpose']
+        if 'role' in row.index and pd.notna(row.get('role')):
+            edge_dict['Role'] = row['role']
+        if 'city' in row.index and pd.notna(row.get('city')):
+            edge_dict['City'] = row['city']
+        if 'region' in row.index and pd.notna(row.get('region')):
+            edge_dict['Region'] = row['region']
+        
+        poli_edges_data.append(edge_dict)
     
-    # Convert from_id/to_id to Source/Target using labels
-    poli_edges['Source'] = edges_df['from_id'].map(id_to_label)
-    poli_edges['Target'] = edges_df['to_id'].map(id_to_label)
+    poli_edges = pd.DataFrame(poli_edges_data)
     
-    # Add edge attributes
-    if 'edge_type' in edges_df.columns:
-        poli_edges['Type'] = edges_df['edge_type']  # GRANT or BOARD_MEMBERSHIP
-    if 'amount' in edges_df.columns:
-        poli_edges['Amount'] = edges_df['amount']
-    if 'fiscal_year' in edges_df.columns:
-        poli_edges['Fiscal Year'] = edges_df['fiscal_year']
-    if 'purpose' in edges_df.columns:
-        poli_edges['Purpose'] = edges_df['purpose']
-    if 'role' in edges_df.columns:
-        poli_edges['Role'] = edges_df['role']
-    if 'city' in edges_df.columns:
-        poli_edges['City'] = edges_df['city']
-    if 'region' in edges_df.columns:
-        poli_edges['Region'] = edges_df['region']
-    
-    # Drop rows where Source or Target couldn't be mapped (shouldn't happen, but safety)
-    poli_edges = poli_edges.dropna(subset=['Source', 'Target'])
+    # Remove duplicate edges
+    if not poli_edges.empty:
+        poli_edges = poli_edges.drop_duplicates()
     
     return poli_nodes, poli_edges
 
@@ -1547,8 +1670,21 @@ def render_downloads(nodes_df: pd.DataFrame, edges_df: pd.DataFrame,
     # Convert to Polinode format
     poli_nodes, poli_edges = convert_to_polinode_format(export_nodes, export_edges)
     
-    # Download buttons in columns
-    col1, col2, col3, col4 = st.columns(4)
+    # Validate Polinode export
+    is_valid, validation_errors = validate_polinode_export(poli_nodes, poli_edges)
+    if not is_valid:
+        st.error("⚠️ **Polinode Export Validation Failed**")
+        for err in validation_errors:
+            st.warning(f"• {err}")
+    
+    # Generate Polinode Excel
+    polinode_excel = None
+    if not poli_nodes.empty:
+        polinode_excel = generate_polinode_excel(poli_nodes, poli_edges if not poli_edges.empty else pd.DataFrame())
+    
+    # Download buttons - C4C schema
+    st.markdown("**C4C Schema**")
+    col1, col2 = st.columns(2)
     
     with col1:
         if not export_nodes.empty:
@@ -1572,7 +1708,20 @@ def render_downloads(nodes_df: pd.DataFrame, edges_df: pd.DataFrame,
                 help="C4C schema format"
             )
     
-    with col3:
+    # Download buttons - Polinode
+    st.markdown("**Polinode Import**")
+    
+    if polinode_excel:
+        st.download_button(
+            "📊 Download Polinode Excel (Nodes + Edges tabs)",
+            data=polinode_excel,
+            file_name="orggraph_polinode.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True
+        )
+    
+    poli_col1, poli_col2 = st.columns(2)
+    with poli_col1:
         if not poli_nodes.empty:
             st.download_button(
                 "📥 nodes_polinode.csv",
@@ -1583,7 +1732,7 @@ def render_downloads(nodes_df: pd.DataFrame, edges_df: pd.DataFrame,
                 help="Polinode-compatible format"
             )
     
-    with col4:
+    with poli_col2:
         if not poli_edges.empty:
             st.download_button(
                 "📥 edges_polinode.csv",
@@ -1600,15 +1749,17 @@ def render_downloads(nodes_df: pd.DataFrame, edges_df: pd.DataFrame,
         with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
             # C4C schema files
             if not export_nodes.empty:
-                zip_file.writestr('nodes.csv', export_nodes.to_csv(index=False))
+                zip_file.writestr('c4c_schema/nodes.csv', export_nodes.to_csv(index=False))
             if not export_edges.empty:
-                zip_file.writestr('edges.csv', export_edges.to_csv(index=False))
+                zip_file.writestr('c4c_schema/edges.csv', export_edges.to_csv(index=False))
             
             # Polinode-compatible files
             if not poli_nodes.empty:
-                zip_file.writestr('nodes_polinode.csv', poli_nodes.to_csv(index=False))
+                zip_file.writestr('polinode_schema/nodes_polinode.csv', poli_nodes.to_csv(index=False))
             if not poli_edges.empty:
-                zip_file.writestr('edges_polinode.csv', poli_edges.to_csv(index=False))
+                zip_file.writestr('polinode_schema/edges_polinode.csv', poli_edges.to_csv(index=False))
+            if polinode_excel:
+                zip_file.writestr('polinode_schema/orggraph_polinode.xlsx', polinode_excel)
             
             # Grants detail (canonical schema)
             if export_grants is not None and not export_grants.empty:
@@ -1624,8 +1775,8 @@ def render_downloads(nodes_df: pd.DataFrame, edges_df: pd.DataFrame,
         # Explain what's in the ZIP
         st.caption("""
         **Complete export includes:**
-        `nodes.csv` + `edges.csv` + `grants_detail.csv` (C4C schema) •
-        `nodes_polinode.csv` + `edges_polinode.csv` (Polinode-ready) •
+        `c4c_schema/nodes.csv` + `c4c_schema/edges.csv` + `grants_detail.csv` (C4C schema) •
+        `polinode_schema/nodes_polinode.csv` + `polinode_schema/edges_polinode.csv` + `polinode_schema/orggraph_polinode.xlsx` (Polinode-ready) •
         `parse_log.json` (diagnostics)
         """)
         
