@@ -6,30 +6,12 @@ Reads exported data from OrgGraph US/CA projects.
 
 VERSION HISTORY:
 ----------------
-UPDATED v0.5.0: Aligned with OrgGraph US/CA visual patterns
-- Multi-project support (scans demo_data/)
-- Loads pre-exported artifacts when available
-- Consistent section headers and metric labels
-- Clean separation: Network Results → Insight Cards → Downloads
-
-UPDATED v0.5.1: Added Grant Purpose Explorer
-- Loads grants_detail.csv when available
-- Keyword-based purpose classification (no AI)
-- Filter grants by purpose tags
-
-UPDATED v0.5.2: Data-calibrated purpose keywords
-- Keywords calibrated from GLFN grants_detail.csv (5,160 grants)
-- Added Arts & Culture category
-- Improved coverage: 80% of grants now categorized
-
-UPDATED v0.5.3: Fixed input/output flow
-- Inputs: nodes.csv + edges.csv (required), grants_detail.csv (optional)
-- Outputs: project_summary.json, insight_cards.json, insight_report.md, node_metrics.csv
-- Clear "Run" vs "Load Previous" workflow
-- No longer requires pre-computed artifacts to run
-
-UPDATED v0.5.4: Use grant_purpose_raw column
-- Purpose column is now explicitly 'grant_purpose_raw' (OrgGraph US standard)
+UPDATED v0.7.0: Critical metrics fixes (run.py v3.0.4)
+- FIX: Betweenness now computed on undirected graph (was always 0)
+- FIX: Hidden broker thresholds computed among connectors only
+- FIX: Bridge detection focuses on largest component, ranked by impact
+- FIX: Health score includes governance factor (board interlocks)
+- Aligned V1 output with V2 metrics
 
 UPDATED v0.6.0: Canonical schema alignment with OrgGraph US/CA
 - Added Grant Network Results section (All vs Region Relevant)
@@ -37,6 +19,31 @@ UPDATED v0.6.0: Canonical schema alignment with OrgGraph US/CA
 - Column aliasing: foundation_name ↔ funder_name for compatibility
 - Region filtering support via region_relevant column
 - Source breakdown (US vs CA) when multiple source_systems present
+
+UPDATED v0.5.4: Use grant_purpose_raw column
+- Purpose column is now explicitly 'grant_purpose_raw' (OrgGraph US standard)
+
+UPDATED v0.5.3: Fixed input/output flow
+- Inputs: nodes.csv + edges.csv (required), grants_detail.csv (optional)
+- Outputs: project_summary.json, insight_cards.json, insight_report.md, node_metrics.csv
+- Clear "Run" vs "Load Previous" workflow
+- No longer requires pre-computed artifacts to run
+
+UPDATED v0.5.2: Data-calibrated purpose keywords
+- Keywords calibrated from GLFN grants_detail.csv (5,160 grants)
+- Added Arts & Culture category
+- Improved coverage: 80% of grants now categorized
+
+UPDATED v0.5.1: Added Grant Purpose Explorer
+- Loads grants_detail.csv when available
+- Keyword-based purpose classification (no AI)
+- Filter grants by purpose tags
+
+UPDATED v0.5.0: Aligned with OrgGraph US/CA visual patterns
+- Multi-project support (scans demo_data/)
+- Loads pre-exported artifacts when available
+- Consistent section headers and metric labels
+- Clean separation: Network Results → Insight Cards → Downloads
 """
 
 import streamlit as st
@@ -53,7 +60,7 @@ import importlib.util
 # Config
 # =============================================================================
 
-APP_VERSION = "0.6.0"  # Added Grant Network Results (All vs Region), canonical schema alignment
+APP_VERSION = "0.7.0"  # Critical metrics fixes (betweenness, hidden brokers, bridges, health score)
 C4C_LOGO_URL = "https://static.wixstatic.com/media/275a3f_ed8e76c8495d4799a5d7575822009e93~mv2.png"
 
 # Get paths
