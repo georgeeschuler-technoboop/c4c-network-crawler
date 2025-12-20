@@ -1032,39 +1032,69 @@ def test_network_connectivity() -> Tuple[bool, str]:
 # ENRICHLAYER API CLIENT
 # ============================================================================
 
-def call_enrichlayer_api(api_token: str, profile_url: str, mock_mode: bool = False, max_retries: int = 3) -> Tuple[Optional[Dict], Optional[str]]:
-    """Call EnrichLayer person profile endpoint with retry logic."""
-    if mock_mode:
+def classify_linkedin_url(linkedin_url: str) -> str:
+    """Return 'person' or 'company' based on a LinkedIn URL."""
+    if not linkedin_url:
+        return "person"
+    u = linkedin_url.lower()
+    if "linkedin.com/company/" in u or "linkedin.com/showcase/" in u:
+        return "company"
+    if "linkedin.com/in/" in u:
+        return "person"
+    # Fallback: treat other LinkedIn profile-like URLs as person
+    return "person"
+
+
+def call_enrichlayer_person_api(
+    api_token: str,
+    profile_url: str,
+    synthetic_mode: bool = False,
+    max_retries: int = 3,
+) -> Tuple[Optional[Dict], Optional[str]]:
+    """Call EnrichLayer PERSON profile endpoint with retry logic."""
+    if synthetic_mode:
         time.sleep(0.1)
         return get_mock_response(profile_url), None
-    
+
     endpoint = "https://enrichlayer.com/api/v2/profile"
     headers = {"Authorization": f"Bearer {api_token}"}
-    params = {"url": profile_url, "use_cache": "if-present", "live_fetch": "if-needed"}
-    
+    params = {
+        "url": profile_url,
+        "use_cache": "if-present",
+        "fallback_to_cache": "on-error",
+        # NOTE: EnrichLayer supports live_fetch on some endpoints. Keep conservative defaults here.
+        "live_fetch": "default",
+    }
+
     for attempt in range(max_retries):
         try:
             response = requests.get(endpoint, headers=headers, params=params, timeout=30)
-            
             if response.status_code == 200:
                 return response.json(), None
-            elif response.status_code == 401:
+
+            # Add response text for 400 to aid debugging
+            if response.status_code == 400:
+                detail = (response.text or "").strip()
+                return None, f"API error 400 (bad request). Check URL format. Details: {detail[:300]}"
+
+            if response.status_code == 401:
                 return None, "Invalid API token"
-            elif response.status_code == 403:
+            if response.status_code == 403:
                 return None, "Out of credits"
-            elif response.status_code == 429:
+            if response.status_code == 429:
                 if attempt < max_retries - 1:
                     wait_time = (2 ** attempt) * 3
                     time.sleep(wait_time)
                     continue
-                return None, f"Rate limit exceeded"
-            elif response.status_code == 503:
+                return None, "Rate limit exceeded"
+            if response.status_code == 503:
                 if attempt < max_retries - 1:
                     time.sleep(3)
                     continue
                 return None, "Enrichment failed"
-            else:
-                return None, f"API error {response.status_code}"
+
+            detail = (response.text or "").strip()
+            return None, f"API error {response.status_code}. Details: {detail[:300]}"
         except requests.exceptions.Timeout:
             if attempt < max_retries - 1:
                 time.sleep(2)
@@ -1075,16 +1105,148 @@ def call_enrichlayer_api(api_token: str, profile_url: str, mock_mode: bool = Fal
                 time.sleep(2)
                 continue
             return None, f"Network error: {str(e)}"
-    
+
     return None, "Failed after maximum retries"
 
 
-def get_mock_response(profile_url: str) -> Dict:
-    """Generate comprehensive mock API response for stress testing."""
+def call_enrichlayer_company_api(
+    api_token: str,
+    company_url: str,
+    synthetic_mode: bool = False,
+    max_retries: int = 3,
+) -> Tuple[Optional[Dict], Optional[str]]:
+    """Call EnrichLayer COMPANY profile endpoint with retry logic."""
+    if synthetic_mode:
+        time.sleep(0.1)
+        return get_mock_company_response(company_url), None
+
+    endpoint = "https://enrichlayer.com/api/v2/company"
+    headers = {"Authorization": f"Bearer {api_token}"}
+    params = {
+        "url": company_url,
+        "use_cache": "if-present",
+        "fallback_to_cache": "on-error",
+        # Keep premium params OFF by default to avoid extra credit surprises.
+        "categories": "exclude",
+        "funding_data": "exclude",
+        "exit_data": "exclude",
+        "acquisitions": "exclude",
+        "extra": "exclude",
+    }
+
+    for attempt in range(max_retries):
+        try:
+            response = requests.get(endpoint, headers=headers, params=params, timeout=30)
+            if response.status_code == 200:
+                return response.json(), None
+
+            if response.status_code == 400:
+                detail = (response.text or "").strip()
+                return None, f"API error 400 (bad request). Check URL format. Details: {detail[:300]}"
+
+            if response.status_code == 401:
+                return None, "Invalid API token"
+            if response.status_code == 403:
+                return None, "Out of credits"
+            if response.status_code == 429:
+                if attempt < max_retries - 1:
+                    wait_time = (2 ** attempt) * 3
+                    time.sleep(wait_time)
+                    continue
+                return None, "Rate limit exceeded"
+            if response.status_code == 503:
+                if attempt < max_retries - 1:
+                    time.sleep(3)
+                    continue
+                return None, "Enrichment failed"
+
+            detail = (response.text or "").strip()
+            return None, f"API error {response.status_code}. Details: {detail[:300]}"
+        except requests.exceptions.Timeout:
+            if attempt < max_retries - 1:
+                time.sleep(2)
+                continue
+            return None, "Request timed out"
+        except requests.exceptions.RequestException as e:
+            if attempt < max_retries - 1:
+                time.sleep(2)
+                continue
+            return None, f"Network error: {str(e)}"
+
+    return None, "Failed after maximum retries"
+
+
+def call_enrichlayer_api(
+    api_token: str,
+    profile_url: str,
+    synthetic_mode: bool = False,
+    max_retries: int = 3,
+    node_type: Optional[str] = None,
+) -> Tuple[Optional[Dict], Optional[str]]:
+    """Route to PERSON vs COMPANY endpoint based on URL (or explicit node_type)."""
+    kind = (node_type or classify_linkedin_url(profile_url)).lower()
+    if kind == "company":
+        return call_enrichlayer_company_api(api_token, profile_url, synthetic_mode=synthetic_mode, max_retries=max_retries)
+    return call_enrichlayer_person_api(api_token, profile_url, synthetic_mode=synthetic_mode, max_retries=max_retries)
+
+
+def get_mock_company_response(company_url: str) -> Dict:
+    """Generate a mock COMPANY response with similar/affiliated companies."""
     import hashlib
-    
+    url_hash = int(hashlib.md5(company_url.encode()).hexdigest(), 16)
+
+    companies = [
+        ("The Nature Conservancy", "https://www.linkedin.com/company/the-nature-conservancy/"),
+        ("World Wildlife Fund", "https://www.linkedin.com/company/world-wildlife-fund/"),
+        ("Environmental Defense Fund", "https://www.linkedin.com/company/environmental-defense-fund/"),
+        ("Rockefeller Foundation", "https://www.linkedin.com/company/rockefeller-foundation/"),
+        ("Ford Foundation", "https://www.linkedin.com/company/ford-foundation/"),
+        ("Cleveland Foundation", "https://www.linkedin.com/company/cleveland-foundation/"),
+        ("McDougal Family Foundation", "https://www.linkedin.com/company/mcdougal-family-foundation/"),
+        ("Great Lakes Protection Fund", "https://www.linkedin.com/company/great-lakes-protection-fund/"),
+        ("Charles Stewart Mott Foundation", "https://www.linkedin.com/company/charles-stewart-mott-foundation/"),
+    ]
+    industries = ["Non-profit Organizations", "Philanthropy", "Environmental Services", "Civic & Social Organization"]
+    locations = ["Chicago, IL", "Toronto, ON", "Detroit, MI", "Cleveland, OH", "New York, NY", "San Francisco, CA"]
+
+    name = re.sub(r"^https?://(www\.)?linkedin\.com/company/", "", company_url.rstrip("/"), flags=re.I)
+    name = name.replace("-", " ").strip().title() or "Example Organization"
+
+    def pick_company(i: int):
+        n, link = companies[(url_hash + i * 7919) % len(companies)]
+        return {
+            "industry": industries[(url_hash + i) % len(industries)],
+            "link": link.rstrip("/"),
+            "location": locations[(url_hash + i * 13) % len(locations)],
+            "name": n,
+        }
+
+    similar = [pick_company(i) for i in range(6)]
+    affiliated = [pick_company(i + 10) for i in range(4)]
+
+    return {
+        "name": name,
+        "industry": industries[url_hash % len(industries)],
+        "follower_count": int(1000 + (url_hash % 250000)),
+        "linkedin_internal_id": str(url_hash % 1000000),
+        "universal_name_id": name.lower().replace(" ", "-"),
+        "hq": {"city": "Unknown", "state": "", "country": "US", "is_hq": True, "line_1": "", "postal_code": ""},
+        "similar_companies": similar,
+        "affiliated_companies": affiliated,
+        "meta": {"last_updated": datetime.now(timezone.utc).isoformat(), "thin_profile": False},
+    }
+
+
+def get_mock_response(profile_url: str) -> Dict:
+    """Backwards-compatible mock response router."""
+    if classify_linkedin_url(profile_url) == "company":
+        return get_mock_company_response(profile_url)
+
+    # Original PERSON mock response (kept for compatibility)
+    import hashlib
+
     url_hash = int(hashlib.md5(profile_url.encode()).hexdigest(), 16)
-    
+
     first_names = ["James", "Mary", "John", "Patricia", "Robert", "Jennifer", "Michael", "Linda",
                    "William", "Elizabeth", "David", "Barbara", "Richard", "Susan", "Joseph", "Jessica"]
     last_names = ["Smith", "Johnson", "Williams", "Brown", "Jones", "Garcia", "Miller", "Davis",
@@ -1097,17 +1259,17 @@ def get_mock_response(profile_url: str) -> Dict:
                      "Stanford University", "Harvard University", "MIT", "McKinsey & Company"]
     locations = ["San Francisco, CA", "New York, NY", "Washington, DC", "Boston, MA",
                  "Los Angeles, CA", "Seattle, WA", "Chicago, IL", "Denver, CO"]
-    
+
     temp_id = canonical_id_from_url(profile_url)
     first_name = first_names[url_hash % len(first_names)]
     last_name = last_names[(url_hash // 100) % len(last_names)]
     title = titles[(url_hash // 1000) % len(titles)]
     org = organizations[(url_hash // 10000) % len(organizations)]
     location = locations[(url_hash // 100000) % len(locations)]
-    
+
     full_name = f"{first_name} {last_name}"
     headline = f"{title} at {org}"
-    
+
     num_connections = 25 + (url_hash % 16)
     people_also_viewed = []
     for i in range(num_connections):
@@ -1119,14 +1281,14 @@ def get_mock_response(profile_url: str) -> Dict:
         conn_location = locations[(conn_hash // 100000) % len(locations)]
         conn_name = f"{conn_first} {conn_last}"
         conn_id = f"{conn_first.lower()}-{conn_last.lower()}-{conn_hash % 1000}"
-        
+
         people_also_viewed.append({
             "link": f"https://www.linkedin.com/in/{conn_id}",
             "name": conn_name,
             "summary": f"{conn_title} at {conn_org}",
             "location": conn_location
         })
-    
+
     return {
         "public_identifier": temp_id,
         "full_name": full_name,
@@ -1139,7 +1301,6 @@ def get_mock_response(profile_url: str) -> Dict:
         "experiences": [{"company": org, "title": title, "starts_at": {"year": 2020, "month": 1}, "ends_at": None}],
         "people_also_viewed": people_also_viewed
     }
-
 
 # ============================================================================
 # BFS CRAWLER
@@ -1180,7 +1341,8 @@ def run_crawler(
         temp_id = canonical_id_from_url(seed['profile_url'])
         node = {
             'id': temp_id, 'name': seed['name'], 'profile_url': seed['profile_url'],
-            'headline': '', 'location': '', 'degree': 0, 'source_type': 'seed'
+            'headline': '', 'location': '', 'degree': 0, 'source_type': 'seed',
+            'node_type': classify_linkedin_url(seed['profile_url'])
         }
         seen_profiles[temp_id] = node
         queue.append(temp_id)
@@ -1218,7 +1380,7 @@ def run_crawler(
             rate_limiter.wait_for_slot()
         
         stats['api_calls'] += 1
-        response, error = call_enrichlayer_api(api_token, current_node['profile_url'], mock_mode=mock_mode)
+        response, error = call_enrichlayer_api(api_token, current_node['profile_url'], synthetic_mode=mock_mode, node_type=current_node.get('node_type'))
         
         if rate_limiter:
             rate_limiter.record_call()
@@ -1244,24 +1406,59 @@ def run_crawler(
         stats['successful_calls'] += 1
         raw_profiles.append(response)
         
-        enriched_id = response.get('public_identifier', current_id)
-        current_node['headline'] = response.get('headline', '')
-        current_node['location'] = response.get('location_str') or response.get('location', '')
-        
-        if advanced_mode:
-            occupation = response.get('occupation', '')
-            experiences = response.get('experiences', [])
-            organization = extract_organization(occupation, experiences)
-            sector = infer_sector(organization, current_node['headline'])
-            current_node['organization'] = organization
-            current_node['sector'] = sector
+        kind = current_node.get('node_type') or classify_linkedin_url(current_node['profile_url'])
+
+        if kind == 'company':
+            # Company/org enrichment shape differs from person profiles
+            current_node['name'] = response.get('name', current_node.get('name', ''))
+            current_node['headline'] = response.get('industry', '') or response.get('headline', '')
+            hq = response.get('hq') or {}
+            loc_parts = [hq.get('city'), hq.get('state') or hq.get('country')]
+            current_node['location'] = ", ".join([p for p in loc_parts if p])
+            enriched_id = response.get('universal_name_id') or response.get('linkedin_internal_id') or current_id
+
+            if advanced_mode:
+                current_node['organization'] = current_node['name']
+                current_node['sector'] = response.get('industry', '')
+        else:
+            # Person profile enrichment
+            current_node['name'] = response.get('full_name', current_node.get('name', ''))
+            enriched_id = response.get('public_identifier', current_id)
+            current_node['headline'] = response.get('headline', '')
+            current_node['location'] = response.get('location_str') or response.get('location', '')
+
+            if advanced_mode:
+                occupation = response.get('occupation', '')
+                experiences = response.get('experiences', [])
+                organization = extract_organization(occupation, experiences)
+                sector = infer_sector(organization, current_node['headline'])
+                current_node['organization'] = organization
+                current_node['sector'] = sector
         
         if enriched_id != current_id:
             update_canonical_ids(seen_profiles, edges, current_id, enriched_id)
             current_id = enriched_id
             current_node = seen_profiles[current_id]
         
-        neighbors = response.get('people_also_viewed', [])
+        kind = current_node.get('node_type') or classify_linkedin_url(current_node['profile_url'])
+
+        # People: use 'people_also_viewed'
+        # Companies/Orgs: use 'similar_companies' + 'affiliated_companies'
+        neighbors = []
+        if kind == 'company':
+            for n in response.get('similar_companies', []) or []:
+                nd = dict(n)
+                nd['_edge_type'] = 'similar_company'
+                neighbors.append(nd)
+            for n in response.get('affiliated_companies', []) or []:
+                nd = dict(n)
+                nd['_edge_type'] = 'affiliated_company'
+                neighbors.append(nd)
+        else:
+            for n in response.get('people_also_viewed', []) or []:
+                nd = dict(n)
+                nd['_edge_type'] = 'people_also_viewed'
+                neighbors.append(nd)
         if not neighbors:
             stats['profiles_with_no_neighbors'] += 1
         else:
@@ -1280,7 +1477,7 @@ def run_crawler(
             
             neighbor_id = neighbor.get('public_identifier', canonical_id_from_url(neighbor_url))
             
-            edges.append({'source_id': current_id, 'target_id': neighbor_id, 'edge_type': 'people_also_viewed'})
+            edges.append({'source_id': current_id, 'target_id': neighbor_id, 'edge_type': neighbor.get('_edge_type', 'people_also_viewed')})
             stats['edges_added'] += 1
             
             if neighbor_id in seen_profiles:
@@ -1291,7 +1488,8 @@ def run_crawler(
             neighbor_node = {
                 'id': neighbor_id, 'name': neighbor_name, 'profile_url': neighbor_url,
                 'headline': neighbor_headline, 'location': neighbor.get('location', ''),
-                'degree': current_node['degree'] + 1, 'source_type': 'discovered'
+                'degree': current_node['degree'] + 1, 'source_type': 'discovered',
+                'node_type': classify_linkedin_url(neighbor_url)
             }
             
             if advanced_mode:
@@ -1630,7 +1828,7 @@ def main():
     
     with col1:
         st.subheader("1. Upload Seed Profiles")
-        uploaded_file = st.file_uploader("Upload CSV with columns: name, profile_url (max 10 rows)", type=['csv'])
+        uploaded_file = st.file_uploader("Upload CSV with columns: name, profile_url (max 5 rows)", type=['csv'])
         
         seeds = []
         if uploaded_file:
@@ -1641,8 +1839,8 @@ def main():
                 
                 if missing_cols:
                     st.error(f"❌ Missing required columns: {', '.join(missing_cols)}")
-                elif len(df) > 10:
-                    st.error("❌ Prototype limit: max 10 seed profiles.")
+                elif len(df) > 5:
+                    st.error("❌ Prototype limit: max 5 seed profiles.")
                 elif len(df) == 0:
                     st.error("❌ CSV file is empty.")
                 else:
