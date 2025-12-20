@@ -31,26 +31,15 @@ import plotly.graph_objects as go
 # APP VERSION
 # ============================================================================
 
-APP_VERSION = "0.3.0"
+APP_VERSION = "0.3.2"
+
+# VERSION HISTORY
+# UPDATED v0.3.2: Seed limit 10 + company crawl support + KPIs by crawl type + cleaner Polinode-ready exports
+# UPDATED v0.3.1: Boot stability fixes (indentation / return outside function)
+# UPDATED v0.3.0: Network Intelligence Engine (centrality badges, health score, sector + brokerage roles)
 
 
 
-
-# ============================================================================
-# VERSION HISTORY (human-readable changelog shown in the UI)
-# ============================================================================
-VERSION_HISTORY = [
-    {
-        "version": "0.3.0",
-        "title": "Stability + seed limit + company URL support",
-        "bullets": [
-            "Seed upload supports up to 10 rows (instead of 5)",
-            "Routes LinkedIn /company/ URLs to EnrichLayer Company endpoint",
-            "Company-to-company crawling uses similar_companies + affiliated_companies as neighbors",
-            "Improved error messages for HTTP 400 (usually invalid/unsupported LinkedIn URL)",
-        ],
-    },
-]
 # ============================================================================
 # NETWORK INSIGHTS (Badges, Health Score, Breakpoints)
 # ============================================================================
@@ -903,6 +892,33 @@ class RateLimiter:
 # UTILITY FUNCTIONS
 # ============================================================================
 
+def detect_seed_type(profile_url: str) -> str:
+    """Detect whether a LinkedIn URL is for a person or a company."""
+    if not profile_url:
+        return "unknown"
+    u = str(profile_url).strip().lower()
+    if "/in/" in u:
+        return "person"
+    if "/company/" in u or "/showcase/" in u:
+        return "company"
+    return "unknown"
+
+
+def validate_seed_types(seeds: List[Dict]) -> Tuple[bool, str, Optional[str]]:
+    """Enforce: no mixed PERSON+COMPANY seeds; no unknown URL formats."""
+    types = []
+    for s in seeds:
+        t = detect_seed_type(s.get("profile_url", ""))
+        if t == "unknown":
+            return False, f"❌ Unrecognized LinkedIn URL format: {s.get('profile_url','')}", None
+        types.append(t)
+    unique = sorted(set(types))
+    if len(unique) > 1:
+        return False, "❌ Mixed PERSON + COMPANY seeds detected. Please run one type at a time.", None
+    crawl_type = unique[0] if unique else None
+    return True, f"✅ Seed type detected: {crawl_type.upper()}", crawl_type
+
+
 def extract_url_stub(profile_url: str) -> str:
     """Extract a temporary ID from LinkedIn URL."""
     clean_url = profile_url.rstrip('/').split('?')[0]
@@ -1049,108 +1065,6 @@ def test_network_connectivity() -> Tuple[bool, str]:
 # ENRICHLAYER API CLIENT
 # ============================================================================
 
-def is_company_url(linkedin_url: str) -> bool:
-    """Heuristic: treat LinkedIn /company/ and /showcase/ URLs as company profiles."""
-    if not linkedin_url:
-        return False
-    u = linkedin_url.lower()
-    return ("linkedin.com/company/" in u) or ("linkedin.com/showcase/" in u)
-
-
-def call_enrichlayer_company_api(
-    api_token: str,
-    company_url: str,
-    mock_mode: bool = False,
-    max_retries: int = 3,
-) -> Tuple[Optional[Dict], Optional[str]]:
-    """Call EnrichLayer company endpoint with retry logic."""
-    if mock_mode:
-        time.sleep(0.1)
-        person_like = get_mock_response(company_url)
-        return {
-            "universal_name_id": extract_url_stub(company_url),
-            "name": person_like.get("full_name") or extract_url_stub(company_url),
-            "link": company_url,
-            "industry": "",
-            "hq": {},
-            "similar_companies": [],
-            "affiliated_companies": [],
-        }, None
-
-    endpoint = "https://enrichlayer.com/api/v2/company"
-    headers = {"Authorization": f"Bearer {api_token}"}
-    params = {"url": company_url, "use_cache": "if-present", "fallback_to_cache": "on-error"}
-
-    for attempt in range(max_retries):
-        try:
-            response = requests.get(endpoint, headers=headers, params=params, timeout=30)
-
-            if response.status_code == 200:
-                return response.json(), None
-            elif response.status_code == 400:
-                return None, "API error 400 (bad request) — check that the URL is a valid LinkedIn company URL."
-            elif response.status_code == 401:
-                return None, "Invalid API token"
-            elif response.status_code == 403:
-                return None, "Out of credits"
-            elif response.status_code == 429:
-                if attempt < max_retries - 1:
-                    wait_time = (2 ** attempt) * 3
-                    time.sleep(wait_time)
-                    continue
-                return None, "Rate limit exceeded"
-            elif response.status_code == 503:
-                if attempt < max_retries - 1:
-                    time.sleep(3)
-                    continue
-                return None, "Enrichment failed"
-            elif response.status_code == 400:
-                return None, "API error 400 (bad request) — usually an invalid/unsupported LinkedIn URL for this endpoint."
-            else:
-                return None, f"API error {response.status_code}"
-        except requests.exceptions.Timeout:
-            if attempt < max_retries - 1:
-                time.sleep(2)
-                continue
-            return None, "Request timed out"
-        except requests.exceptions.RequestException as e:
-            if attempt < max_retries - 1:
-                time.sleep(2)
-                continue
-            return None, f"Network error: {str(e)}"
-
-    return None, "Failed after maximum retries"
-
-
-def get_neighbors_from_response(response: Dict, is_company: bool) -> Tuple[List[Dict], str]:
-    """Normalize neighbor extraction for people vs companies."""
-    if not response:
-        return [], ""
-    if is_company:
-        neighbors: List[Dict] = []
-        for item in (response.get("similar_companies") or []):
-            if isinstance(item, dict):
-                neighbors.append({
-                    "link": item.get("link"),
-                    "name": item.get("name"),
-                    "summary": item.get("industry"),
-                    "location": item.get("location"),
-                })
-        for item in (response.get("affiliated_companies") or []):
-            if isinstance(item, dict):
-                neighbors.append({
-                    "link": item.get("link"),
-                    "name": item.get("name"),
-                    "summary": item.get("industry"),
-                    "location": item.get("location"),
-                })
-        return neighbors, "company_neighbors"
-    return (response.get("people_also_viewed") or []), "people_also_viewed"
-
-
-def extract_company_name_from_company_response(resp: Dict, fallback: str = "") -> str:
-    return (resp or {}).get("name") or fallback
-
 def call_enrichlayer_api(api_token: str, profile_url: str, mock_mode: bool = False, max_retries: int = 3) -> Tuple[Optional[Dict], Optional[str]]:
     """Call EnrichLayer person profile endpoint with retry logic."""
     if mock_mode:
@@ -1195,6 +1109,69 @@ def call_enrichlayer_api(api_token: str, profile_url: str, mock_mode: bool = Fal
                 continue
             return None, f"Network error: {str(e)}"
     
+    return None, "Failed after maximum retries"
+
+
+
+def call_enrichlayer_company_api(
+    api_token: str,
+    company_url: str,
+    mock_mode: bool = False,
+    max_retries: int = 3
+) -> Tuple[Optional[Dict], Optional[str]]:
+    """Call EnrichLayer company endpoint with retry logic."""
+    if mock_mode:
+        time.sleep(0.1)
+        resp = get_mock_response(company_url)
+        resp["entity_type"] = "company"
+        resp["name"] = resp.get("full_name", resp.get("public_identifier", "Unknown Company"))
+        resp["industry"] = "Mock Industry"
+        resp["hq_location"] = resp.get("location_str", "") or resp.get("location", "")
+        resp["similar_companies"] = [
+            {"link": p.get("link"), "name": p.get("name"), "summary": p.get("summary"), "location": p.get("location")}
+            for p in resp.get("people_also_viewed", [])
+        ]
+        resp["affiliated_companies"] = []
+        resp["people_also_viewed"] = []
+        return resp, None
+
+    endpoint = "https://enrichlayer.com/api/v2/company"
+    headers = {"Authorization": f"Bearer {api_token}"}
+    params = {"url": company_url, "use_cache": "if-present", "live_fetch": "if-needed"}
+
+    for attempt in range(max_retries):
+        try:
+            response = requests.get(endpoint, headers=headers, params=params, timeout=30)
+
+            if response.status_code == 200:
+                return response.json(), None
+            if response.status_code == 401:
+                return None, "Invalid API token"
+            if response.status_code == 403:
+                return None, "Out of credits"
+            if response.status_code == 429:
+                if attempt < max_retries - 1:
+                    time.sleep((2 ** attempt) * 3)
+                    continue
+                return None, "Rate limit exceeded"
+            if response.status_code == 503:
+                if attempt < max_retries - 1:
+                    time.sleep(3)
+                    continue
+                return None, "Enrichment failed"
+
+            return None, f"API error {response.status_code}"
+        except requests.exceptions.Timeout:
+            if attempt < max_retries - 1:
+                time.sleep(2)
+                continue
+            return None, "Request timed out"
+        except requests.exceptions.RequestException as e:
+            if attempt < max_retries - 1:
+                time.sleep(2)
+                continue
+            return None, f"Network error: {str(e)}"
+
     return None, "Failed after maximum retries"
 
 
@@ -1270,6 +1247,7 @@ def run_crawler(
     max_degree: int,
     max_edges: int,
     max_nodes: int,
+    crawl_type: str,
     status_container,
     mock_mode: bool = False,
     advanced_mode: bool = False,
@@ -1337,12 +1315,9 @@ def run_crawler(
             rate_limiter.wait_for_slot()
         
         stats['api_calls'] += 1
-        current_url = current_node['profile_url']
-        current_is_company = is_company_url(current_url)
-        if current_is_company:
-            response, error = call_enrichlayer_company_api(api_token, current_url, mock_mode=mock_mode)
-        else:
-            response, error = call_enrichlayer_api(api_token, current_url, mock_mode=mock_mode)
+        response, error = (call_enrichlayer_company_api(api_token, current_node['profile_url'], mock_mode=mock_mode)
+                         if crawl_type == 'company' else
+                         call_enrichlayer_api(api_token, current_node['profile_url'], mock_mode=mock_mode))
         
         if rate_limiter:
             rate_limiter.record_call()
@@ -1368,22 +1343,17 @@ def run_crawler(
         stats['successful_calls'] += 1
         raw_profiles.append(response)
         
-        enriched_id = response.get('public_identifier', response.get('universal_name_id', current_id))
-        current_node['headline'] = response.get('headline', '')
-        current_node['location'] = response.get('location_str') or response.get('location', '')
-        # If this is a company crawl, enrich display fields from company response
-        if current_is_company:
-            current_node['name'] = extract_company_name_from_company_response(
-                response, fallback=current_node.get('name', '')
-            )
-            current_node['headline'] = response.get('industry', '') or current_node.get('headline', '')
-            hq = response.get('hq') or {}
-            if isinstance(hq, dict):
-                loc_bits = [hq.get('city'), hq.get('state'), hq.get('country')]
-                current_node['location'] = ", ".join([b for b in loc_bits if b])
-
-
-        if advanced_mode:
+        enriched_id = response.get('public_identifier', current_id)
+        if crawl_type == 'company':
+            current_node['headline'] = response.get('industry') or response.get('headline', '') or ''
+            current_node['location'] = response.get('hq_location') or response.get('headquarter') or response.get('location_str') or response.get('location', '') or ''
+            current_node['organization'] = response.get('name') or current_node.get('name','')
+            current_node['sector'] = 'Company'
+        else:
+            current_node['headline'] = response.get('headline', '')
+            current_node['location'] = response.get('location_str') or response.get('location', '')
+        
+        if advanced_mode and crawl_type != 'company':
             occupation = response.get('occupation', '')
             experiences = response.get('experiences', [])
             organization = extract_organization(occupation, experiences)
@@ -1396,7 +1366,18 @@ def run_crawler(
             current_id = enriched_id
             current_node = seen_profiles[current_id]
         
-        neighbors, neighbor_mode = get_neighbors_from_response(response, is_company=current_is_company)
+        if crawl_type == 'company':
+            neighbors = []
+            for n in (response.get('similar_companies') or []):
+                n = dict(n)
+                n['_edge_type'] = 'similar_company'
+                neighbors.append(n)
+            for n in (response.get('affiliated_companies') or []):
+                n = dict(n)
+                n['_edge_type'] = 'affiliated_company'
+                neighbors.append(n)
+        else:
+            neighbors = response.get('people_also_viewed', [])
         if not neighbors:
             stats['profiles_with_no_neighbors'] += 1
         else:
@@ -1415,7 +1396,8 @@ def run_crawler(
             
             neighbor_id = neighbor.get('public_identifier', canonical_id_from_url(neighbor_url))
             
-            edges.append({'source_id': current_id, 'target_id': neighbor_id, 'edge_type': neighbor_mode})
+            edge_type = neighbor.get('_edge_type') or ('people_also_viewed')
+            edges.append({'source_id': current_id, 'target_id': neighbor_id, 'edge_type': edge_type})
             stats['edges_added'] += 1
             
             if neighbor_id in seen_profiles:
@@ -1429,7 +1411,7 @@ def run_crawler(
                 'degree': current_node['degree'] + 1, 'source_type': 'discovered'
             }
             
-            if advanced_mode:
+            if advanced_mode and crawl_type != 'company':
                 extracted_org = extract_org_from_summary(neighbor_headline)
                 neighbor_node['organization'] = extracted_org
                 neighbor_node['sector'] = infer_sector(extracted_org, neighbor_headline) if extracted_org else ''
@@ -1568,41 +1550,74 @@ def calculate_network_metrics(seen_profiles: Dict, edges: List) -> Dict:
 # CSV/JSON GENERATION
 # ============================================================================
 
-def generate_nodes_csv(seen_profiles: Dict, max_degree: int, max_edges: int, max_nodes: int, network_metrics: Dict = None) -> str:
-    """Generate nodes.csv content."""
+
+def generate_nodes_csv(seen_profiles: Dict, max_degree: int, max_edges: int, max_nodes: int) -> str:
+    """Generate a nodes.csv that is easy to import into Polinode (while keeping our internal fields)."""
     nodes_data = []
-    node_metrics = network_metrics.get('node_metrics', {}) if network_metrics else {}
-    
-    for node in seen_profiles.values():
-        node_dict = {
-            'id': node['id'], 'name': node['name'], 'profile_url': node['profile_url'],
-            'headline': node.get('headline', ''), 'location': node.get('location', ''),
-            'degree': node['degree'], 'source_type': node['source_type']
-        }
-        if 'organization' in node:
-            node_dict['organization'] = node.get('organization', '')
-        if 'sector' in node:
-            node_dict['sector'] = node.get('sector', '')
-        if node['id'] in node_metrics:
-            metrics = node_metrics[node['id']]
-            node_dict['connections'] = metrics.get('degree', 0)
-            node_dict['degree_centrality'] = metrics.get('degree_centrality', 0)
-            node_dict['betweenness_centrality'] = metrics.get('betweenness_centrality', 0)
-            node_dict['eigenvector_centrality'] = metrics.get('eigenvector_centrality', 0)
-            node_dict['closeness_centrality'] = metrics.get('closeness_centrality', 0)
-        nodes_data.append(node_dict)
-    
+    for node_id, node in seen_profiles.items():
+        row = dict(node)
+        row.setdefault("id", node_id)
+        # Standardize a few fields
+        row["profile_url"] = row.get("profile_url") or ""
+        row["name"] = row.get("name") or row.get("profile_url") or node_id
+        row["entity_type"] = (row.get("entity_type") or "person").lower()
+
+        # Company hygiene: prefer industry in headline if present
+        if row["entity_type"] == "company":
+            # If enrichment returns 'industry' we stash it; otherwise headline is best proxy
+            row["industry"] = row.get("industry") or row.get("headline") or ""
+            row["sector"] = row.get("sector") or "Company"
+
+        nodes_data.append(row)
+
     df = pd.DataFrame(nodes_data)
+
+    # Polinode-friendly columns (non-destructive)
+    if not df.empty:
+        df["Name"] = df.get("name")
+        df["Type"] = df.get("entity_type", "person").astype(str).str.upper()
+        df["!Internal ID"] = df.get("id")
+        df["URL"] = df.get("profile_url")
+
+        # Company-specific "clean" fields (best-effort)
+        if "entity_type" in df.columns:
+            is_company = df["entity_type"].astype(str).str.lower().eq("company")
+            if "industry" in df.columns:
+                df.loc[is_company, "Industry"] = df.loc[is_company, "industry"]
+            else:
+                df.loc[is_company, "Industry"] = df.loc[is_company, "headline"]
+            df.loc[is_company, "HQ"] = df.loc[is_company, "location"]
+
     csv_body = df.to_csv(index=False)
-    meta = f"# generated_at={datetime.now(timezone.utc).isoformat()}; max_degree={max_degree}; max_edges={max_edges}; max_nodes={max_nodes}\n"
+    meta = (
+        f"# generated_at={datetime.now(timezone.utc).isoformat()}; "
+        f"max_degree={max_degree}; max_edges={max_edges}; max_nodes={max_nodes}\n"
+    )
     return meta + csv_body
 
 
-def generate_edges_csv(edges: List, max_degree: int, max_edges: int, max_nodes: int) -> str:
-    """Generate edges.csv content."""
+
+def generate_edges_csv(
+    edges: List,
+    max_degree: int,
+    max_edges: int,
+    max_nodes: int,
+    seen_profiles: Dict = None
+) -> str:
+    """Generate an edges.csv that is easy to import into Polinode."""
     df = pd.DataFrame(edges)
+
+    if not df.empty:
+        if seen_profiles is not None:
+            df["Source"] = df["source_id"].apply(lambda x: seen_profiles.get(x, {}).get("name", x))
+            df["Target"] = df["target_id"].apply(lambda x: seen_profiles.get(x, {}).get("name", x))
+        df["Type"] = df.get("edge_type", "link")
+
     csv_body = df.to_csv(index=False)
-    meta = f"# generated_at={datetime.now(timezone.utc).isoformat()}; max_degree={max_degree}; max_edges={max_edges}; max_nodes={max_nodes}\n"
+    meta = (
+        f"# generated_at={datetime.now(timezone.utc).isoformat()}; "
+        f"max_degree={max_degree}; max_edges={max_edges}; max_nodes={max_nodes}\n"
+    )
     return meta + csv_body
 
 
@@ -1737,12 +1752,6 @@ def main():
         st.title("ActorGraph")
         st.markdown("People-centered network graphs from public profile data.")
         st.caption(f"v{APP_VERSION}")
-        with st.expander("🧾 Version History"):
-            for item in VERSION_HISTORY:
-                st.markdown(f"**UPDATED v{item['version']}: {item['title']}**")
-                for b in item.get('bullets', []):
-                    st.markdown(f"- {b}")
-
     
     st.markdown("---")
     
@@ -1771,12 +1780,16 @@ def main():
     
     with col1:
         st.subheader("1. Upload Seed Profiles")
-        uploaded_file = st.file_uploader("Upload CSV with columns: name, profile_url (max 5 rows)", type=['csv'])
+        uploaded_file = st.file_uploader("Upload CSV with columns: name, profile_url (max 10 rows)", type=['csv'])
         
         seeds = []
         if uploaded_file:
             try:
                 df = pd.read_csv(uploaded_file)
+                # Drop rows with missing profile_url
+                if 'profile_url' in df.columns:
+                    df = df[df['profile_url'].notna()]
+                    df = df[df['profile_url'].astype(str).str.strip().ne('')]
                 required_cols = ['name', 'profile_url']
                 missing_cols = [col for col in required_cols if col not in df.columns]
                 
@@ -1788,7 +1801,14 @@ def main():
                     st.error("❌ CSV file is empty.")
                 else:
                     seeds = df.to_dict('records')
-                    st.success(f"✅ Loaded {len(seeds)} seed profiles")
+                    ok, msg, crawl_type = validate_seed_types(seeds)
+                    if not ok:
+                        st.error(msg)
+                        seeds = []
+                    else:
+                        st.info(msg)
+                        st.session_state['crawl_type'] = crawl_type
+                        st.success(f"✅ Loaded {len(seeds)} seed profiles")
                     st.dataframe(df)
             except Exception as e:
                 st.error(f"❌ Error reading CSV: {str(e)}")
@@ -1837,7 +1857,8 @@ def main():
     st.caption(f"⏱️ API pacing: up to **{PER_MIN_LIMIT} requests/minute**")
     
     # RUN BUTTON
-    can_run = len(seeds) > 0 and (api_token or mock_mode)
+    crawl_type = st.session_state.get('crawl_type')
+    can_run = len(seeds) > 0 and crawl_type in ('person','company') and (api_token or mock_mode)
     
     if not can_run:
         if len(seeds) == 0:
@@ -1855,6 +1876,7 @@ def main():
         
         seen_profiles, edges, raw_profiles, stats = run_crawler(
             seeds=seeds, api_token=api_token, max_degree=max_degree, max_edges=10000, max_nodes=7500,
+            crawl_type=crawl_type,
             status_container=status_container, mock_mode=mock_mode, advanced_mode=advanced_mode,
             progress_bar=progress_bar, per_min_limit=PER_MIN_LIMIT
         )
@@ -1874,7 +1896,7 @@ def main():
         
         st.session_state.crawl_results = {
             'seen_profiles': seen_profiles, 'edges': edges, 'raw_profiles': raw_profiles,
-            'stats': stats, 'max_degree': max_degree, 'advanced_mode': advanced_mode,
+            'stats': stats, 'max_degree': max_degree, 'advanced_mode': advanced_mode, 'crawl_type': crawl_type,
             'mock_mode': mock_mode, 'network_metrics': network_metrics
         }
     
@@ -1901,7 +1923,8 @@ def main():
         col5, col6, col7, col8 = st.columns(4)
         col5.metric("Successful", stats['successful_calls'])
         col6.metric("Failed", stats['failed_calls'])
-        col7.metric("No Neighbors", stats['profiles_with_no_neighbors'])
+        no_neighbors_label = 'People w/ no neighbors' if results.get('crawl_type') == 'person' else 'Companies w/ no neighbors'
+        col7.metric(no_neighbors_label, stats['profiles_with_no_neighbors'])
         
         if stats['stopped_reason'] == 'completed':
             col8.success("✅ Completed")
@@ -2008,8 +2031,9 @@ def main():
         # DOWNLOAD SECTION
         st.header("💾 Download Results")
         
-        nodes_csv = generate_nodes_csv(seen_profiles, max_degree=was_max_degree, max_edges=10000, max_nodes=7500, network_metrics=network_metrics)
-        edges_csv = generate_edges_csv(edges, max_degree=was_max_degree, max_edges=10000, max_nodes=7500)
+        nodes_csv = generate_nodes_csv(seen_profiles, max_degree=was_max_degree, max_edges=10000, max_nodes=7500,
+            crawl_type=crawl_type, network_metrics=network_metrics)
+        edges_csv = generate_edges_csv(edges, max_degree=was_max_degree, max_edges=10000, max_nodes=7500, seen_profiles=seen_profiles)
         raw_json = generate_raw_json(raw_profiles)
         
         analysis_json = None
@@ -2019,6 +2043,7 @@ def main():
         crawl_log = generate_crawl_log(
             stats=stats, seen_profiles=seen_profiles, edges=edges,
             max_degree=was_max_degree, max_edges=10000, max_nodes=7500,
+            crawl_type=crawl_type,
             api_delay=1.0, mode='Intelligence Engine' if was_advanced_mode else 'Seed Crawler',
             mock_mode=was_mock_mode
         )
