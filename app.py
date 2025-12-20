@@ -31,15 +31,15 @@ import plotly.graph_objects as go
 # APP VERSION
 # ============================================================================
 
-APP_VERSION = "0.3.9"
+APP_VERSION = "0.3.10"
 
 VERSION_HISTORY = [
+    "FIXED v0.3.10: URL parser now handles /about/, /jobs/, /people/ suffixes and properly extracts company IDs",
     "UPDATED v0.3.9: Separate C4C and Polinode schema outputs (nodes.csv + nodes_polinode.csv, edges.csv + edges_polinode.csv)",
     "FIXED v0.3.8: City/Region/Country now populated from API response and parsed from location strings",
     "UPDATED v0.3.7: Polinode company fields (Website, Industry, Company Size, Founded Year); nan name handling; edge_type=similar_companies for company crawls",
     "FIXED v0.3.6: Validation now exclusive by crawl_type with positive pattern matching; company columns prioritized separately",
     "FIXED v0.3.5: Crawl-type-aware column detection, fixed compute_percentiles O(n²) bug, hardened company response parsing",
-    "UPDATED v0.3.4: Explicit crawl type selector (People vs Company) - no more auto-detection issues",
 ]
 
 
@@ -901,9 +901,24 @@ class RateLimiter:
 def extract_url_stub(profile_url: str) -> str:
     """Extract a temporary ID from LinkedIn URL."""
     clean_url = profile_url.rstrip('/').split('?')[0]
+    
+    # Strip common LinkedIn URL suffixes
+    for suffix in ['/about', '/jobs', '/people', '/posts', '/insights', '/life']:
+        if clean_url.endswith(suffix):
+            clean_url = clean_url[:-len(suffix)]
+            break
+    
+    # Handle /in/ URLs (people)
     match = re.search(r'/in/([^/]+)', clean_url)
     if match:
         return match.group(1)
+    
+    # Handle /company/ URLs
+    match = re.search(r'/company/([^/]+)', clean_url)
+    if match:
+        return match.group(1)
+    
+    # Fallback: last segment
     return clean_url.split('/')[-1]
 
 
