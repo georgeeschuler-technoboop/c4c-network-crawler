@@ -31,9 +31,10 @@ import plotly.graph_objects as go
 # APP VERSION
 # ============================================================================
 
-APP_VERSION = "0.3.3"
+APP_VERSION = "0.3.4"
 
 VERSION_HISTORY = [
+    "UPDATED v0.3.4: Explicit crawl type selector (People vs Company) - no more auto-detection issues",
     "FIXED v0.3.3: Company crawls now use correct API endpoint (/api/v2/company vs /api/v2/profile)",
     "FIXED v0.3.2: Corrected indentation bug causing blank page (UI code was inside collapsed expander)",
     "UPDATED v0.3.1: Seed-file auto-detect (people vs company), max-10 enforcement, cleaner Polinode node fields for companies, and crawl-type KPIs",
@@ -1039,14 +1040,18 @@ def test_network_connectivity() -> Tuple[bool, str]:
 # ENRICHLAYER API CLIENT
 # ============================================================================
 
-def call_enrichlayer_api(api_token: str, profile_url: str, mock_mode: bool = False, max_retries: int = 3) -> Tuple[Optional[Dict], Optional[str]]:
-    """Call EnrichLayer API with automatic endpoint detection for person vs company."""
+def call_enrichlayer_api(api_token: str, profile_url: str, crawl_type: str = "people", mock_mode: bool = False, max_retries: int = 3) -> Tuple[Optional[Dict], Optional[str]]:
+    """Call EnrichLayer API with explicit endpoint selection.
+    
+    Args:
+        crawl_type: "people" uses /api/v2/profile, "company" uses /api/v2/company
+    """
     if mock_mode:
         time.sleep(0.1)
-        return get_mock_response(profile_url), None
+        return get_mock_response(profile_url, crawl_type), None
     
-    # Detect if this is a company or person URL
-    is_company = "/company/" in profile_url.lower()
+    # Use explicit crawl_type parameter (not auto-detection from URL)
+    is_company = (crawl_type == "company")
     
     if is_company:
         endpoint = "https://enrichlayer.com/api/v2/company"
@@ -1155,16 +1160,18 @@ def normalize_company_response(company_data: Dict) -> Dict:
     return normalized
 
 
-def get_mock_response(profile_url: str) -> Dict:
-    """Generate comprehensive mock API response for stress testing."""
+def get_mock_response(profile_url: str, crawl_type: str = "people") -> Dict:
+    """Generate comprehensive mock API response for stress testing.
+    
+    Args:
+        crawl_type: "people" or "company" - explicitly determines response format
+    """
     import hashlib
     
     url_hash = int(hashlib.md5(profile_url.encode()).hexdigest(), 16)
     
-    # Check if this is a company URL
-    is_company = "/company/" in profile_url.lower()
-    
-    if is_company:
+    # Use explicit crawl_type parameter
+    if crawl_type == "company":
         return get_mock_company_response(profile_url, url_hash)
     else:
         return get_mock_person_response(profile_url, url_hash)
@@ -1297,9 +1304,14 @@ def run_crawler(
     mock_mode: bool = False,
     advanced_mode: bool = False,
     progress_bar = None,
-    per_min_limit: int = PER_MIN_LIMIT
+    per_min_limit: int = PER_MIN_LIMIT,
+    crawl_type: str = "people"  # Explicit: "people" or "company"
 ) -> Tuple[Dict, List, List, Dict]:
-    """Run BFS crawler on seed profiles."""
+    """Run BFS crawler on seed profiles.
+    
+    Args:
+        crawl_type: Explicitly set to "people" or "company" to determine API endpoint.
+    """
     rate_limiter = None if mock_mode else RateLimiter(per_min_limit=per_min_limit)
     
     queue = deque()
@@ -1360,7 +1372,7 @@ def run_crawler(
             rate_limiter.wait_for_slot()
         
         stats['api_calls'] += 1
-        response, error = call_enrichlayer_api(api_token, current_node['profile_url'], mock_mode=mock_mode)
+        response, error = call_enrichlayer_api(api_token, current_node['profile_url'], crawl_type=crawl_type, mock_mode=mock_mode)
         
         if rate_limiter:
             rate_limiter.record_call()
@@ -1743,42 +1755,6 @@ def create_brokerage_role_chart(brokerage_roles: Dict[str, str]) -> 'go.Figure':
 # STREAMLIT UI
 # ============================================================================
 
-def _detect_seed_mode(df: pd.DataFrame) -> tuple:
-    """Return (mode, name_col, url_col) where mode is 'people' or 'company'. Raises ValueError on invalid/mixed."""
-    cols = {c.strip().lower(): c for c in df.columns}
-    url_candidates = ["linkedin_profile_url", "profile_url", "linkedin_url", "url"]
-    url_col = next((cols[c] for c in url_candidates if c in cols), None)
-    if not url_col:
-        raise ValueError(f"Missing URL column. Expected one of: {', '.join(url_candidates)}")
-
-    # Prefer org_name for companies if present; otherwise fall back to name.
-    name_candidates = ["org_name", "name"]
-    name_col = next((cols[c] for c in name_candidates if c in cols), None)
-    if not name_col:
-        raise ValueError("Missing name column. Expected 'name' (people) or 'org_name' (companies).")
-
-    urls = (
-        df[url_col]
-        .astype(str)
-        .str.strip()
-        .replace({"nan": "", "None": ""})
-    )
-    urls = urls[urls != ""]
-    if urls.empty:
-        raise ValueError("No usable LinkedIn URLs found (all URL cells are blank).")
-
-    is_people = urls.str.contains(r"/in/", case=False, regex=True)
-    is_company = urls.str.contains(r"/company/", case=False, regex=True)
-
-    if is_people.any() and is_company.any():
-        raise ValueError("Mixed seed file: contains both people (/in/) and company (/company/) LinkedIn URLs. Use one or the other.")
-    if is_company.any():
-        return "company", name_col, url_col
-    if is_people.any():
-        return "people", name_col, url_col
-
-    raise ValueError("Could not detect seed type: LinkedIn URLs must contain '/in/' (people) or '/company/' (company).")
-
 
 def main():
     st.set_page_config(
@@ -1805,8 +1781,28 @@ def main():
 
     st.markdown("---")
 
-    # MODE SELECTION
-    st.subheader("🎛️ Select Mode")
+    # =========================================================================
+    # CRAWL TYPE SELECTION (explicit, drives API endpoint)
+    # =========================================================================
+    st.subheader("🎯 Crawl Type")
+    
+    crawl_type = st.radio(
+        "What are you crawling?",
+        options=["people", "company"],
+        format_func=lambda x: "👤 People (LinkedIn /in/ profiles)" if x == "people" else "🏢 Companies (LinkedIn /company/ pages)",
+        horizontal=True,
+        key="_crawl_type"
+    )
+    
+    if crawl_type == "people":
+        st.success("**People Crawl** → Uses EnrichLayer `/api/v2/profile` endpoint. Seed file should contain LinkedIn `/in/` URLs.")
+    else:
+        st.info("**Company Crawl** → Uses EnrichLayer `/api/v2/company` endpoint. Seed file should contain LinkedIn `/company/` URLs.")
+
+    st.markdown("---")
+
+    # MODE SELECTION (Seed Crawler vs Intelligence Engine)
+    st.subheader("🎛️ Analysis Mode")
 
     mode_col1, mode_col2, mode_col3 = st.columns([2, 1, 2])
     with mode_col2:
@@ -1817,9 +1813,9 @@ def main():
         st.markdown("**🔬 Intelligence Engine**" if advanced_mode else "🔬 Intelligence Engine")
 
     if advanced_mode:
-        st.info("**🔬 Network Intelligence Engine** — Full strategic analysis with centrality metrics, communities, and brokerage roles.")
+        st.caption("Full strategic analysis with centrality metrics, communities, and brokerage roles.")
     else:
-        st.success("**📊 Network Seed Crawler** — Quick network mapping. Crawl, export, import to Polinode.")
+        st.caption("Quick network mapping. Crawl, export, import to Polinode.")
 
     st.markdown("---")
 
@@ -1830,20 +1826,48 @@ def main():
 
     with input_col1:
         st.subheader("1. Upload Seed Profiles")
+        expected_url_type = "/in/" if crawl_type == "people" else "/company/"
+        st.caption(f"Expected URL format: `linkedin.com{expected_url_type}...`")
         uploaded_file = st.file_uploader("Upload a CSV file", type=["csv"])
 
     seeds = []
-    seed_mode = None
+    seed_validation_ok = True
 
     if uploaded_file is not None:
         try:
             seed_df = pd.read_csv(uploaded_file)
 
-            seed_mode, name_col, url_col = _detect_seed_mode(seed_df)
+            # Find columns
+            cols = {c.strip().lower(): c for c in seed_df.columns}
+            url_candidates = ["linkedin_profile_url", "profile_url", "linkedin_url", "url"]
+            url_col = next((cols[c] for c in url_candidates if c in cols), None)
+            if not url_col:
+                raise ValueError(f"Missing URL column. Expected one of: {', '.join(url_candidates)}")
+            
+            name_candidates = ["org_name", "name"]
+            name_col = next((cols[c] for c in name_candidates if c in cols), None)
+            if not name_col:
+                raise ValueError("Missing name column. Expected 'name' (people) or 'org_name' (companies).")
 
-            # Drop rows with missing URLs (explicit user requirement)
+            # Clean URLs
             seed_df[url_col] = seed_df[url_col].astype(str).str.strip()
             seed_df = seed_df[seed_df[url_col].notna() & (seed_df[url_col] != "") & (seed_df[url_col].str.lower() != "nan")]
+            
+            if seed_df.empty:
+                raise ValueError("No usable LinkedIn URLs found (all URL cells are blank).")
+
+            # Validate URLs match selected crawl type
+            urls = seed_df[url_col]
+            if crawl_type == "people":
+                wrong_type = urls.str.contains(r"/company/", case=False, regex=True)
+                if wrong_type.any():
+                    st.error(f"⚠️ **Crawl type mismatch!** You selected **People** crawl but {wrong_type.sum()} URLs contain `/company/`. Either change crawl type to **Company** or fix your seed file.")
+                    seed_validation_ok = False
+            else:  # company
+                wrong_type = urls.str.contains(r"/in/", case=False, regex=True)
+                if wrong_type.any():
+                    st.error(f"⚠️ **Crawl type mismatch!** You selected **Company** crawl but {wrong_type.sum()} URLs contain `/in/`. Either change crawl type to **People** or fix your seed file.")
+                    seed_validation_ok = False
 
             # Enforce max 10 seed rows (truncate with warning)
             if len(seed_df) > 10:
@@ -1857,7 +1881,7 @@ def main():
                 seeds.append({
                     "name": name_val,
                     "profile_url": url_val,
-                    "seed_mode": seed_mode,
+                    "crawl_type": crawl_type,  # Explicit crawl type from UI selection
                     # keep optional location fields if present (helps Polinode outputs)
                     "geography": row.get("geography") if "geography" in seed_df.columns else None,
                     "city": row.get("city") if "city" in seed_df.columns else None,
@@ -1865,8 +1889,10 @@ def main():
                     "country": row.get("country") if "country" in seed_df.columns else None,
                 })
 
-            st.success(f"Loaded {len(seeds)} seed profiles ({seed_mode})")
-            st.dataframe(seed_df, use_container_width=True)
+            if seed_validation_ok:
+                crawl_type_label = "👤 People" if crawl_type == "people" else "🏢 Companies"
+                st.success(f"✅ Loaded {len(seeds)} seed profiles — {crawl_type_label}")
+                st.dataframe(seed_df, use_container_width=True)
 
         except Exception as e:
             st.error(f"Error reading seed file: {e}")
@@ -1915,11 +1941,13 @@ def main():
     st.caption(f"⏱️ API pacing: up to **{PER_MIN_LIMIT} requests/minute**")
 
     # RUN BUTTON
-    can_run = len(seeds) > 0 and (api_token or mock_mode)
+    can_run = len(seeds) > 0 and (api_token or mock_mode) and seed_validation_ok
 
     if not can_run:
         if len(seeds) == 0:
             st.warning("⚠️ Please upload a valid seed CSV to continue.")
+        elif not seed_validation_ok:
+            pass  # Error already shown above
         elif not api_token and not mock_mode:
             st.warning("⚠️ Please enter your EnrichLayer API token to continue.")
 
@@ -1928,13 +1956,17 @@ def main():
     # CRAWL EXECUTION
     if run_button:
         st.header("🔄 Crawl Progress")
+        crawl_type_label = "People" if crawl_type == "people" else "Companies"
+        st.info(f"**Crawl Type: {crawl_type_label}** — Using `/api/v2/{'profile' if crawl_type == 'people' else 'company'}` endpoint")
+        
         progress_bar = st.progress(0.0, text="Starting crawl...")
         status_container = st.status("Running crawl...", expanded=True)
         
         seen_profiles, edges, raw_profiles, stats = run_crawler(
             seeds=seeds, api_token=api_token, max_degree=max_degree, max_edges=10000, max_nodes=7500,
             status_container=status_container, mock_mode=mock_mode, advanced_mode=advanced_mode,
-            progress_bar=progress_bar, per_min_limit=PER_MIN_LIMIT
+            progress_bar=progress_bar, per_min_limit=PER_MIN_LIMIT,
+            crawl_type=crawl_type  # Explicit crawl type passed through
         )
         
         progress_bar.progress(1.0, text="✅ Complete!")
