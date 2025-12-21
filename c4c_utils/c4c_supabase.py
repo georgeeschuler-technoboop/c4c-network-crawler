@@ -422,8 +422,15 @@ class C4CSupabase:
         Returns:
             Number of rows saved.
         """
-        if grants_df is None or grants_df.empty:
+        if grants_df is None:
+            print("DEBUG save_grants_detail: grants_df is None")
             return 0
+        
+        if grants_df.empty:
+            print("DEBUG save_grants_detail: grants_df is empty")
+            return 0
+        
+        print(f"DEBUG save_grants_detail: {len(grants_df)} rows, columns: {list(grants_df.columns)}")
         
         # Column aliases (OrgGraph exports → Supabase schema)
         column_aliases = {
@@ -439,6 +446,7 @@ class C4CSupabase:
         for old_col, new_col in column_aliases.items():
             if old_col in df.columns and new_col not in df.columns:
                 df[new_col] = df[old_col]
+                print(f"DEBUG: Aliased {old_col} → {new_col}")
         
         # Generate grant_id if not present
         if "grant_id" not in df.columns:
@@ -447,6 +455,7 @@ class C4CSupabase:
                 lambda r: f"{r.get('funder_id', '')}_{r.get('grantee_name', '')}_{r.get('amount', '')}_{r.get('fiscal_year', '')}".replace(" ", "_")[:100],
                 axis=1
             )
+            print(f"DEBUG: Generated grant_id, sample: {df['grant_id'].iloc[0] if len(df) > 0 else 'N/A'}")
         
         # Core columns that map to Supabase schema
         core_cols = {
@@ -478,7 +487,11 @@ class C4CSupabase:
             
             records.append(record)
         
-        return self._upsert_batch("grants_detail", records, ["project_id", "grant_id"])
+        print(f"DEBUG: Built {len(records)} records, sample keys: {list(records[0].keys()) if records else 'N/A'}")
+        
+        result = self._upsert_batch("grants_detail", records, ["project_id", "grant_id"])
+        print(f"DEBUG: Upserted {result} grants_detail rows")
+        return result
     
     def get_grants_detail(self, project_id: str) -> pd.DataFrame:
         """Get all grants_detail for a project as DataFrame."""
@@ -692,13 +705,17 @@ class C4CSupabase:
         for i in range(0, len(records), batch_size):
             batch = records[i:i + batch_size]
             try:
-                self.client.table(table).upsert(
+                response = self.client.table(table).upsert(
                     batch,
                     on_conflict=",".join(conflict_cols)
                 ).execute()
                 total += len(batch)
+                print(f"DEBUG _upsert_batch: {table} batch {i//batch_size + 1}, {len(batch)} records OK")
             except Exception as e:
-                print(f"Error upserting batch to {table}: {e}")
+                print(f"ERROR _upsert_batch {table} batch {i//batch_size + 1}: {e}")
+                # Print sample record for debugging
+                if batch:
+                    print(f"DEBUG: Sample record keys: {list(batch[0].keys())}")
         return total
 
 
