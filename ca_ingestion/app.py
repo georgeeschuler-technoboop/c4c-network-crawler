@@ -168,6 +168,11 @@ def save_to_cloud(project_name: str, nodes_df: pd.DataFrame, edges_df: pd.DataFr
         st.error("❌ Login required to save to cloud")
         return False
     
+    # Debug: check what we're receiving
+    print(f"DEBUG save_to_cloud: nodes={len(nodes_df) if nodes_df is not None else 'None'}, edges={len(edges_df) if edges_df is not None else 'None'}, grants={len(grants_df) if grants_df is not None else 'None'}")
+    if grants_df is not None and not grants_df.empty:
+        print(f"DEBUG save_to_cloud: grants_df columns = {list(grants_df.columns)}")
+    
     # Create slug from project name
     slug = project_name.lower().replace(" ", "-").replace("_", "-")
     slug = "".join(c for c in slug if c.isalnum() or c == "-")
@@ -197,16 +202,21 @@ def save_to_cloud(project_name: str, nodes_df: pd.DataFrame, edges_df: pd.DataFr
                 )
                 
                 if not project:
-                    st.error("❌ Failed to create cloud project")
+                    error_msg = db.last_error if hasattr(db, 'last_error') else "Unknown error"
+                    st.error(f"❌ Failed to create cloud project: {error_msg}")
                     return False
             
             # Save data
+            st.info(f"🔍 Attempting save: nodes={len(nodes_df) if nodes_df is not None else 0}, edges={len(edges_df) if edges_df is not None else 0}, grants={len(grants_df) if grants_df is not None and not grants_df.empty else 0}")
+            
             results = db.save_project_data(
                 project_id=project["id"],
                 nodes_df=nodes_df,
                 edges_df=edges_df,
                 grants_df=grants_df if grants_df is not None else None
             )
+            
+            st.info(f"🔍 Results: {results}")
             
             grants_msg = f", {results.get('grants', 0)} grants" if results.get('grants', 0) > 0 else ""
             st.success(f"☁️ Saved to cloud: {results.get('nodes', 0)} nodes, {results.get('edges', 0)} edges{grants_msg}")
@@ -1984,6 +1994,9 @@ def render_downloads(nodes_df: pd.DataFrame, edges_df: pd.DataFrame,
     
     # Save options (Local + Cloud)
     if project_name and project_name != DEMO_PROJECT_NAME:
+        # DEBUG: Show what data we have
+        st.caption(f"🔍 Debug: nodes={len(nodes_df) if nodes_df is not None else 'None'}, edges={len(edges_df) if edges_df is not None else 'None'}, grants={len(grants_detail_df) if grants_detail_df is not None and not grants_detail_df.empty else 'None/Empty'}")
+        
         st.markdown("**💾 Save Project**")
         
         save_col1, save_col2, save_col3 = st.columns([2, 2, 1])
