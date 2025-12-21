@@ -6,8 +6,9 @@ Reads exported data from OrgGraph US/CA projects.
 
 VERSION HISTORY:
 ----------------
-UPDATED v0.8.0: Renamed to InsightGraph
+UPDATED v0.8.0: Renamed to InsightGraph + Roles × Region Lens
 - RENAMED: "Insight Engine" → "InsightGraph" for product consistency
+- NEW: Roles × Region Lens section in reports (requires run.py v3.0.5)
 - Matches naming pattern: ActorGraph, OrgGraph, InsightGraph
 
 UPDATED v0.7.0: Critical metrics fixes (run.py v3.0.4)
@@ -1111,6 +1112,12 @@ def compute_insights(project: dict, project_id: str) -> dict:
             flow_stats = run_module.compute_flow_stats(edges_df, metrics_df)
             overlap_df = run_module.compute_portfolio_overlap(edges_df)
             
+            # Roles × Region Lens (v3.0.5+)
+            lens_config = run_module.load_region_lens_config(path)
+            nodes_with_roles = run_module.derive_network_roles(nodes_df.copy(), edges_df)
+            nodes_with_lens = run_module.compute_region_lens_membership(nodes_with_roles, lens_config)
+            roles_region_summary = run_module.generate_roles_region_summary(nodes_with_lens, edges_df, lens_config)
+            
             # Generate insights
             insight_cards = run_module.generate_insight_cards(
                 nodes_df, edges_df, metrics_df,
@@ -1120,9 +1127,12 @@ def compute_insights(project: dict, project_id: str) -> dict:
             
             # Project summary
             project_summary = run_module.generate_project_summary(nodes_df, edges_df, metrics_df, flow_stats)
+            project_summary['roles_region'] = roles_region_summary
             
-            # Generate markdown report
-            markdown_report = run_module.generate_markdown_report(insight_cards, project_summary, project_id)
+            # Generate markdown report (with roles/region section)
+            markdown_report = run_module.generate_markdown_report(
+                insight_cards, project_summary, project_id, roles_region_summary
+            )
             
             return {
                 "project_id": project_id,
@@ -1132,6 +1142,7 @@ def compute_insights(project: dict, project_id: str) -> dict:
                 "insight_cards": insight_cards,
                 "project_summary": project_summary,
                 "markdown_report": markdown_report,
+                "roles_region_summary": roles_region_summary,
             }
             
         except Exception as e:
