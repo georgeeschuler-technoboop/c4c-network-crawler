@@ -12,6 +12,10 @@ Usage:
 
 VERSION HISTORY:
 ----------------
+v3.0.10 (2025-12-21): Fixed region lens funder fallback
+- FIX: Column name was 'network_role' but should be 'network_role_code'
+- Funders without state data now correctly default to in-lens
+
 v3.0.9 (2025-12-21): HTML rendering improvements
 - FIX: Blockquotes (> lines) now render as styled callouts
 - FIX: Duplicate H1 removed (skip first H1 in markdown)
@@ -84,7 +88,7 @@ from collections import defaultdict
 # Version
 # =============================================================================
 
-ENGINE_VERSION = "3.0.9"
+ENGINE_VERSION = "3.0.10"
 BUNDLE_FORMAT_VERSION = "1.0"
 
 # C4C logo as base64 (80px, ~4KB) for self-contained HTML reports
@@ -1409,7 +1413,7 @@ def compute_region_lens_membership(nodes_df: pd.DataFrame, lens_config: dict) ->
         
         # FALLBACK: Funders without state data are assumed in-lens
         # (they define the network; long-term fix is to ensure state data exists)
-        role = str(row.get('network_role', '')).upper()
+        role = str(row.get('network_role_code', '')).upper()
         if role in ('FUNDER', 'FUNDER_GRANTEE') and not location:
             return True
         
