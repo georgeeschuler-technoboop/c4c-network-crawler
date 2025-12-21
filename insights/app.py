@@ -622,6 +622,10 @@ def save_artifacts_to_cloud(project_id: str, data: dict):
         st.error("❌ Login required to save to cloud")
         return False
     
+    # Debug: check what we're receiving
+    print(f"DEBUG save_artifacts_to_cloud: project_id={project_id}")
+    print(f"DEBUG save_artifacts_to_cloud: data keys={list(data.keys())}")
+    
     # Create slug from project name
     slug = project_id.lower().replace(" ", "-").replace("_", "-")
     slug = "".join(c for c in slug if c.isalnum() or c == "-")
@@ -647,7 +651,8 @@ def save_artifacts_to_cloud(project_id: str, data: dict):
                 )
                 
                 if not project:
-                    st.error("❌ Failed to create cloud project")
+                    error_msg = db.last_error if hasattr(db, 'last_error') else "Unknown error"
+                    st.error(f"❌ Failed to create cloud project: {error_msg}")
                     return False
             
             # Save artifacts
@@ -670,6 +675,7 @@ def save_artifacts_to_cloud(project_id: str, data: dict):
                 db.save_artifact(project["id"], "node_metrics", metrics_json, f"InsightGraph v{APP_VERSION}")
                 saved.append("node_metrics")
             
+            st.info(f"🔍 Saved artifacts: {saved}")
             st.success(f"☁️ Saved to cloud: {', '.join(saved)}")
             return True
             
