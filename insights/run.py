@@ -12,6 +12,11 @@ Usage:
 
 VERSION HISTORY:
 ----------------
+v3.0.8 (2025-12-21): Fixed region lens membership
+- FIX: Check 'state' column first, then 'region' as fallback
+- FIX: Funders without state data default to in-lens (they define the network)
+- Long-term: state data should be populated for all orgs
+
 v3.0.7 (2025-12-21): Added HTML report rendering
 - NEW: render_html_report() function for styled HTML output
 - NEW: Embedded CSS template with C4C branding
@@ -71,7 +76,7 @@ from collections import defaultdict
 # Version
 # =============================================================================
 
-ENGINE_VERSION = "3.0.7"
+ENGINE_VERSION = "3.0.8"
 BUNDLE_FORMAT_VERSION = "1.0"
 
 # C4C logo as base64 (80px, ~4KB) for self-contained HTML reports
@@ -1372,25 +1377,35 @@ def compute_region_lens_membership(nodes_df: pd.DataFrame, lens_config: dict) ->
     lens_label = lens_config.get('label', 'Custom Region')
     
     def is_in_lens(row):
-        # Check region/state/province column
-        region = str(row.get('region', '')).strip().upper()
+        # Check state column first (preferred), then region as fallback
+        state_val = str(row.get('state', '')).strip().upper()
+        region_val = str(row.get('region', '')).strip().upper()
         
-        # Handle common variations
-        if region in all_regions:
+        # Use state if available, otherwise region
+        location = state_val if state_val else region_val
+        
+        # Direct match (2-letter codes)
+        if location and location in all_regions:
             return True
         
-        # Check 2-letter codes
-        if len(region) == 2:
-            return region in all_regions
-        
         # Check full names (Ontario -> ON, etc.)
-        region_map = {
-            'ONTARIO': 'ON', 'QUEBEC': 'QC', 'MICHIGAN': 'MI', 'OHIO': 'OH',
-            'MINNESOTA': 'MN', 'WISCONSIN': 'WI', 'INDIANA': 'IN', 'ILLINOIS': 'IL',
-            'NEW YORK': 'NY', 'PENNSYLVANIA': 'PA'
-        }
-        mapped = region_map.get(region, region)
-        return mapped in all_regions
+        if location:
+            region_map = {
+                'ONTARIO': 'ON', 'QUEBEC': 'QC', 'MICHIGAN': 'MI', 'OHIO': 'OH',
+                'MINNESOTA': 'MN', 'WISCONSIN': 'WI', 'INDIANA': 'IN', 'ILLINOIS': 'IL',
+                'NEW YORK': 'NY', 'PENNSYLVANIA': 'PA'
+            }
+            mapped = region_map.get(location, location)
+            if mapped in all_regions:
+                return True
+        
+        # FALLBACK: Funders without state data are assumed in-lens
+        # (they define the network; long-term fix is to ensure state data exists)
+        role = str(row.get('network_role', '')).upper()
+        if role in ('FUNDER', 'FUNDER_GRANTEE') and not location:
+            return True
+        
+        return False
     
     nodes_df['in_region_lens'] = nodes_df.apply(is_in_lens, axis=1)
     nodes_df['region_lens_label'] = lens_label
