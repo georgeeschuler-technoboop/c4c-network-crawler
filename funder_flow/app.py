@@ -342,7 +342,8 @@ def save_to_cloud(project_name: str, nodes_df: pd.DataFrame, edges_df: pd.DataFr
                 )
                 
                 if not project:
-                    st.error("❌ Failed to create cloud project")
+                    error_msg = db.last_error if hasattr(db, 'last_error') else "Unknown error"
+                    st.error(f"❌ Failed to create cloud project: {error_msg}")
                     return False
             
             # Save data
