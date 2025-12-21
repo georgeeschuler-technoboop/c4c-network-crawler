@@ -275,6 +275,8 @@ def render_cloud_status():
         return db
     else:
         with st.sidebar.expander("☁️ Cloud Login", expanded=False):
+            st.caption("Save projects to the cloud for backup and sharing.")
+            
             tab1, tab2 = st.tabs(["Login", "Sign Up"])
             
             with tab1:
@@ -288,6 +290,7 @@ def render_cloud_status():
                         st.error("Login failed")
             
             with tab2:
+                st.caption("First time? Create an account.")
                 signup_email = st.text_input("Email", key="cloud_signup_email")
                 signup_pass = st.text_input("Password", type="password", key="cloud_signup_pass")
                 if st.button("Sign Up", key="cloud_signup_btn"):
