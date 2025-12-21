@@ -422,10 +422,33 @@ class C4CSupabase:
         Returns:
             Number of rows saved.
         """
-        if grants_df.empty:
+        if grants_df is None or grants_df.empty:
             return 0
         
-        # Core columns that map directly
+        # Column aliases (OrgGraph exports → Supabase schema)
+        column_aliases = {
+            "foundation_ein": "funder_id",
+            "foundation_name": "funder_name",
+            "grant_amount": "amount",
+            "grant_purpose_raw": "grant_purpose",
+            "tax_year": "fiscal_year",
+        }
+        
+        # Apply aliases
+        df = grants_df.copy()
+        for old_col, new_col in column_aliases.items():
+            if old_col in df.columns and new_col not in df.columns:
+                df[new_col] = df[old_col]
+        
+        # Generate grant_id if not present
+        if "grant_id" not in df.columns:
+            # Create composite key from funder + grantee + amount + year
+            df["grant_id"] = df.apply(
+                lambda r: f"{r.get('funder_id', '')}_{r.get('grantee_name', '')}_{r.get('amount', '')}_{r.get('fiscal_year', '')}".replace(" ", "_")[:100],
+                axis=1
+            )
+        
+        # Core columns that map to Supabase schema
         core_cols = {
             "grant_id", "funder_id", "funder_name", "grantee_id", "grantee_name",
             "amount", "fiscal_year", "grant_purpose",
@@ -434,22 +457,24 @@ class C4CSupabase:
         }
         
         records = []
-        attr_cols = [c for c in grants_df.columns if c not in core_cols]
+        attr_cols = [c for c in df.columns if c not in core_cols and c not in column_aliases.keys()]
         
-        for _, row in grants_df.iterrows():
+        for _, row in df.iterrows():
             record = {"project_id": project_id}
             
             # Map core columns
             for col in core_cols:
-                if col in grants_df.columns and pd.notna(row.get(col)):
+                if col in df.columns and pd.notna(row.get(col)):
                     record[col] = _clean_value(row[col])
             
             # Everything else goes to attributes
-            record["attributes"] = {
+            attrs = {
                 col: _clean_value(row.get(col)) 
                 for col in attr_cols 
                 if pd.notna(row.get(col))
             }
+            if attrs:
+                record["attributes"] = attrs
             
             records.append(record)
         
