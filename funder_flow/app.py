@@ -1923,6 +1923,9 @@ def render_downloads(nodes_df: pd.DataFrame, edges_df: pd.DataFrame,
     
     # Save options (Local + Cloud)
     if project_name and project_name != DEMO_PROJECT_NAME:
+        # DEBUG: Show what data we have
+        st.caption(f"🔍 Debug: nodes={len(export_nodes) if export_nodes is not None else 'None'}, edges={len(export_edges) if export_edges is not None else 'None'}, grants={len(export_grants) if export_grants is not None and not export_grants.empty else 'None/Empty'}")
+        
         st.markdown("**💾 Save Project**")
         
         save_col1, save_col2, save_col3 = st.columns([2, 2, 1])
