@@ -13,6 +13,13 @@ Outputs conform to C4C Network Schema v1 (MVP):
 
 VERSION HISTORY:
 ----------------
+UPDATED v0.18.0: Canonical role vocabulary
+- Role columns now include: network_role_code, network_role_label, network_role_order
+- Labels aligned with spec: "Funder + Grantee" (not "/"), "Individual" (not "Person")
+- Codes: FUNDER, GRANTEE, FUNDER_GRANTEE, BOARD_MEMBER, ORGANIZATION, INDIVIDUAL
+- Legend order (1-6) for consistent Polinode sorting
+- Derivation order documented (BOARD_MEMBER overrides first)
+
 UPDATED v0.17.0: Network Role in Polinode export
 - Added `Network Role` column: Funder, Grantee, Funder / Grantee, Board Member
 - Derived from edge relationships (who gives grants, receives grants, serves on boards)
@@ -70,7 +77,7 @@ from c4c_utils.summary_helpers import build_grant_network_summary, summarize_gra
 # =============================================================================
 # Constants
 # =============================================================================
-APP_VERSION = "0.17.0"  # Added network_role to Polinode export (Funder/Grantee/Board Member)
+APP_VERSION = "0.18.0"  # Canonical role vocabulary (code + label + order)
 MAX_FILES = 50
 C4C_LOGO_URL = "https://static.wixstatic.com/media/275a3f_25063966d6cd496eb2fe3f6ee5cde0fa~mv2.png"
 SOURCE_SYSTEM = "IRS_990"
@@ -1451,19 +1458,51 @@ def derive_network_roles(nodes_df: pd.DataFrame, edges_df: pd.DataFrame) -> dict
     """
     Derive network role for each node based on edge relationships.
     
-    Roles:
-    - Funder: ORG appears as from_id in GRANT edges
-    - Grantee: ORG appears as to_id in GRANT edges
-    - Funder / Grantee: ORG appears in both positions
-    - Board Member: PERSON appears as from_id in BOARD_MEMBERSHIP edges
-    - Person: PERSON with no board edges
-    - Organization: ORG with no grant edges
+    Returns canonical role vocabulary per spec:
+    - FUNDER: Organization that gives grants
+    - GRANTEE: Organization that receives grants  
+    - FUNDER_GRANTEE: Organization that both gives and receives grants
+    - BOARD_MEMBER: Individual serving on organization's board
+    - ORGANIZATION: Organization with no grant edges (fallback)
+    - INDIVIDUAL: Person node not acting as board member
+    
+    Derivation order (per spec):
+    1. BOARD_MEMBER (overrides other roles for people)
+    2. FUNDER_GRANTEE (appears in both from_id and to_id)
+    3. FUNDER (only in from_id)
+    4. GRANTEE (only in to_id)
+    5. ORGANIZATION (org with no grant edges)
+    6. INDIVIDUAL (person with no board role)
     
     Returns:
-        dict mapping node_id -> network_role string
+        dict mapping node_id -> {code, label, order}
     """
+    # Role definitions (canonical vocabulary)
+    ROLES = {
+        'FUNDER':         {'label': 'Funder',            'order': 1},
+        'FUNDER_GRANTEE': {'label': 'Funder + Grantee',  'order': 2},
+        'GRANTEE':        {'label': 'Grantee',           'order': 3},
+        'ORGANIZATION':   {'label': 'Organization',      'order': 4},
+        'BOARD_MEMBER':   {'label': 'Board Member',      'order': 5},
+        'INDIVIDUAL':     {'label': 'Individual',        'order': 6},
+    }
+    
     if edges_df.empty:
-        return {}
+        # No edges - all orgs are ORGANIZATION, all people are INDIVIDUAL
+        roles = {}
+        for _, row in nodes_df.iterrows():
+            node_id = row['node_id']
+            node_type = row.get('node_type', '')
+            if node_type == 'PERSON':
+                code = 'INDIVIDUAL'
+            else:
+                code = 'ORGANIZATION'
+            roles[node_id] = {
+                'code': code,
+                'label': ROLES[code]['label'],
+                'order': ROLES[code]['order']
+            }
+        return roles
     
     grant_edges = edges_df[edges_df['edge_type'] == 'GRANT']
     board_edges = edges_df[edges_df['edge_type'] == 'BOARD_MEMBERSHIP']
@@ -1477,15 +1516,30 @@ def derive_network_roles(nodes_df: pd.DataFrame, edges_df: pd.DataFrame) -> dict
         node_id = row['node_id']
         node_type = row.get('node_type', '')
         
+        # Apply derivation rules in order
         if node_type == 'PERSON':
-            roles[node_id] = 'Board Member' if node_id in board_member_ids else 'Person'
+            # Rule 1: BOARD_MEMBER (overrides for people)
+            # Rule 6: INDIVIDUAL (fallback for people)
+            code = 'BOARD_MEMBER' if node_id in board_member_ids else 'INDIVIDUAL'
         else:
-            node_roles = []
-            if node_id in funder_ids:
-                node_roles.append('Funder')
-            if node_id in grantee_ids:
-                node_roles.append('Grantee')
-            roles[node_id] = ' / '.join(node_roles) if node_roles else 'Organization'
+            # Rules 2-5 for organizations
+            is_funder = node_id in funder_ids
+            is_grantee = node_id in grantee_ids
+            
+            if is_funder and is_grantee:
+                code = 'FUNDER_GRANTEE'  # Rule 2
+            elif is_funder:
+                code = 'FUNDER'          # Rule 3
+            elif is_grantee:
+                code = 'GRANTEE'         # Rule 4
+            else:
+                code = 'ORGANIZATION'    # Rule 5
+        
+        roles[node_id] = {
+            'code': code,
+            'label': ROLES[code]['label'],
+            'order': ROLES[code]['order']
+        }
     
     return roles
 
@@ -1541,10 +1595,13 @@ def convert_to_polinode_format(nodes_df: pd.DataFrame, edges_df: pd.DataFrame) -
     poli_nodes_data = []
     for canon_label, row in label_to_row.items():
         node_id = label_to_id.get(canon_label)
+        role_info = network_roles.get(node_id, {'code': '', 'label': '', 'order': 99})
         node_dict = {
             'Name': canon_label,
             'Type': row.get('node_type', ''),
-            'Network Role': network_roles.get(node_id, ''),
+            'network_role_code': role_info.get('code', ''),
+            'network_role_label': role_info.get('label', ''),
+            'network_role_order': role_info.get('order', 99),
         }
         # Add optional attributes
         if 'city' in row.index and pd.notna(row.get('city')):
