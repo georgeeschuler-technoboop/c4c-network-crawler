@@ -172,24 +172,36 @@ class C4CSupabase:
         Returns:
             Created project dict, or None on failure.
         """
-        if not self.user_id:
-            print("Error: Not authenticated")
+        uid = self.user_id
+        if not uid:
+            self._last_error = "Not authenticated (user_id is None)"
             return None
         
         try:
-            response = self.client.table("projects").insert({
-                "user_id": self.user_id,
+            data = {
+                "user_id": uid,
                 "name": name,
                 "slug": slug,
                 "source_app": source_app,
                 "description": description,
                 "config": config or {}
-            }).execute()
+            }
+            print(f"DEBUG: Inserting project with user_id={uid}, slug={slug}")
             
+            response = self.client.table("projects").insert(data).execute()
+            
+            print(f"DEBUG: Response data={response.data}")
+            self._last_error = None
             return response.data[0] if response.data else None
         except Exception as e:
+            self._last_error = str(e)
             print(f"Error creating project: {e}")
             return None
+    
+    @property
+    def last_error(self) -> Optional[str]:
+        """Get the last error message."""
+        return getattr(self, '_last_error', None)
     
     def list_projects(self, source_app: str = None) -> List[Dict]:
         """
