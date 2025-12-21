@@ -455,10 +455,14 @@ class C4CSupabase:
         # Generate grant_id if not present
         if "grant_id" not in df.columns:
             # Create composite key from funder + grantee + amount + year
-            df["grant_id"] = df.apply(
-                lambda r: f"{r.get('funder_id', '')}_{r.get('grantee_name', '')}_{r.get('amount', '')}_{r.get('fiscal_year', '')}".replace(" ", "_")[:100],
-                axis=1
-            )
+            def make_grant_id(row):
+                funder = str(row.get('funder_id', '') or '')
+                grantee = str(row.get('grantee_name', '') or '')
+                amt = str(row.get('amount', '') or '')
+                year = str(row.get('fiscal_year', '') or '')
+                return f"{funder}_{grantee}_{amt}_{year}".replace(" ", "_")[:100]
+            
+            df["grant_id"] = df.apply(make_grant_id, axis=1)
             print(f"DEBUG: Generated grant_id, sample: {df['grant_id'].iloc[0] if len(df) > 0 else 'N/A'}")
         
         # Core columns that map to Supabase schema
