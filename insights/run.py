@@ -93,7 +93,7 @@ from collections import defaultdict
 # Version
 # =============================================================================
 
-ENGINE_VERSION = "3.0.11"
+ENGINE_VERSION = "3.0.12"
 BUNDLE_FORMAT_VERSION = "1.0"
 
 # C4C logo as base64 (80px, ~4KB) for self-contained HTML reports
@@ -1395,7 +1395,13 @@ def compute_region_lens_membership(nodes_df: pd.DataFrame, lens_config: dict) ->
     lens_label = lens_config.get('label', 'Custom Region')
     
     def is_in_lens(row):
-        # Check state column first (preferred), then region as fallback
+        # Funders define the network - they are ALWAYS "in lens" by definition
+        # The geographic lens is about where grantees are located, not funders
+        role = str(row.get('network_role_code', '')).upper()
+        if role in ('FUNDER', 'FUNDER_GRANTEE'):
+            return True
+        
+        # For other roles, check geography
         state_val = str(row.get('state', '')).strip().upper()
         region_val = str(row.get('region', '')).strip().upper()
         
@@ -1416,12 +1422,6 @@ def compute_region_lens_membership(nodes_df: pd.DataFrame, lens_config: dict) ->
             mapped = region_map.get(location, location)
             if mapped in all_regions:
                 return True
-        
-        # FALLBACK: Funders without state data are assumed in-lens
-        # (they define the network; long-term fix is to ensure state data exists)
-        role = str(row.get('network_role_code', '')).upper()
-        if role in ('FUNDER', 'FUNDER_GRANTEE') and not location:
-            return True
         
         return False
     
