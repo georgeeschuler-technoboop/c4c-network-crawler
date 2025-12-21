@@ -354,7 +354,8 @@ def save_to_cloud(project_name: str, nodes_df: pd.DataFrame, edges_df: pd.DataFr
                 grants_df=grants_df if grants_df is not None else None
             )
             
-            st.success(f"☁️ Saved to cloud: {results.get('nodes', 0)} nodes, {results.get('edges', 0)} edges")
+            grants_msg = f", {results.get('grants', 0)} grants" if results.get('grants', 0) > 0 else ""
+            st.success(f"☁️ Saved to cloud: {results.get('nodes', 0)} nodes, {results.get('edges', 0)} edges{grants_msg}")
             return True
             
         except Exception as e:
