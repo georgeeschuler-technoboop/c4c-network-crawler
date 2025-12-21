@@ -6,6 +6,11 @@ Reads exported data from OrgGraph US/CA projects.
 
 VERSION HISTORY:
 ----------------
+UPDATED v0.9.0: Supabase cloud storage integration
+- Added cloud save/load functionality
+- User authentication via Supabase
+- Artifacts persist in cloud database
+
 UPDATED v0.8.0: Renamed to InsightGraph + Roles × Region Lens
 - RENAMED: "Insight Engine" → "InsightGraph" for product consistency
 - NEW: Roles × Region Lens section in reports (requires run.py v3.0.5)
@@ -59,19 +64,25 @@ from pathlib import Path
 from io import BytesIO
 import zipfile
 import sys
+import os
 import importlib.util
+
+# Get paths first (needed for sys.path)
+APP_DIR = Path(__file__).resolve().parent
+REPO_ROOT = APP_DIR.parent
+
+# Add the project root to path for imports (MUST be before c4c_utils imports)
+sys.path.insert(0, str(REPO_ROOT))
+
 from c4c_utils.c4c_supabase import C4CSupabase
 
 # =============================================================================
 # Config
 # =============================================================================
 
-APP_VERSION = "0.8.0"  # Renamed to InsightGraph
+APP_VERSION = "0.9.0"  # Supabase cloud storage integration
 C4C_LOGO_URL = "https://static.wixstatic.com/media/275a3f_ed8e76c8495d4799a5d7575822009e93~mv2.png"
 
-# Get paths
-APP_DIR = Path(__file__).resolve().parent
-REPO_ROOT = APP_DIR.parent
 DEMO_DATA_DIR = REPO_ROOT / "demo_data"
 
 # =============================================================================
@@ -538,6 +549,133 @@ def init_session_state():
         st.session_state.current_project_id = None
     if "project_data" not in st.session_state:
         st.session_state.project_data = None
+    
+    # Initialize Supabase connection
+    init_supabase()
+
+
+# =============================================================================
+# Supabase Cloud Integration
+# =============================================================================
+
+def init_supabase():
+    """Initialize Supabase connection."""
+    if "supabase_db" not in st.session_state:
+        try:
+            url = st.secrets["supabase"]["url"]
+            key = st.secrets["supabase"]["key"]
+            st.session_state.supabase_db = C4CSupabase(url=url, key=key)
+        except Exception as e:
+            st.session_state.supabase_db = None
+    return st.session_state.get("supabase_db")
+
+
+def render_cloud_status():
+    """Render cloud connection status and login UI in sidebar."""
+    db = st.session_state.get("supabase_db")
+    
+    if not db:
+        st.sidebar.caption("☁️ Cloud offline")
+        return None
+    
+    if db.is_authenticated:
+        user = db.get_user()
+        st.sidebar.success(f"☁️ {user['email']}")
+        if st.sidebar.button("Logout", key="cloud_logout"):
+            db.logout()
+            st.rerun()
+        return db
+    else:
+        with st.sidebar.expander("☁️ Cloud Login", expanded=False):
+            st.caption("Save projects to the cloud for backup and sharing.")
+            
+            tab1, tab2 = st.tabs(["Login", "Sign Up"])
+            
+            with tab1:
+                email = st.text_input("Email", key="cloud_login_email")
+                password = st.text_input("Password", type="password", key="cloud_login_pass")
+                if st.button("Login", key="cloud_login_btn"):
+                    if db.login(email, password):
+                        st.success("✅ Logged in!")
+                        st.rerun()
+                    else:
+                        st.error("Login failed")
+            
+            with tab2:
+                st.caption("First time? Create an account.")
+                signup_email = st.text_input("Email", key="cloud_signup_email")
+                signup_pass = st.text_input("Password", type="password", key="cloud_signup_pass")
+                if st.button("Sign Up", key="cloud_signup_btn"):
+                    if db.signup(signup_email, signup_pass):
+                        st.success("✅ Check email to confirm")
+                    else:
+                        st.error("Signup failed")
+        
+        return db
+
+
+def save_artifacts_to_cloud(project_id: str, data: dict):
+    """Save InsightGraph artifacts to Supabase cloud."""
+    db = st.session_state.get("supabase_db")
+    
+    if not db or not db.is_authenticated:
+        st.error("❌ Login required to save to cloud")
+        return False
+    
+    # Create slug from project name
+    slug = project_id.lower().replace(" ", "-").replace("_", "-")
+    slug = "".join(c for c in slug if c.isalnum() or c == "-")
+    slug = slug[:50]
+    
+    if not slug:
+        slug = "untitled-project"
+    
+    with st.spinner("☁️ Saving to cloud..."):
+        try:
+            # Check if project exists
+            existing = db.get_project_by_slug(slug)
+            
+            if existing:
+                project = existing
+            else:
+                # Create new project
+                project = db.create_project(
+                    name=project_id,
+                    slug=slug,
+                    source_app="insightgraph",
+                    config={}
+                )
+                
+                if not project:
+                    st.error("❌ Failed to create cloud project")
+                    return False
+            
+            # Save artifacts
+            saved = []
+            
+            if data.get("project_summary"):
+                db.save_artifact(project["id"], "project_summary", data["project_summary"], f"InsightGraph v{APP_VERSION}")
+                saved.append("project_summary")
+            
+            if data.get("insight_cards"):
+                db.save_artifact(project["id"], "insight_cards", data["insight_cards"], f"InsightGraph v{APP_VERSION}")
+                saved.append("insight_cards")
+            
+            if data.get("markdown_report"):
+                db.save_artifact(project["id"], "insight_report", data["markdown_report"], f"InsightGraph v{APP_VERSION}")
+                saved.append("insight_report")
+            
+            if data.get("metrics_df") is not None and not data["metrics_df"].empty:
+                metrics_json = data["metrics_df"].to_dict(orient="records")
+                db.save_artifact(project["id"], "node_metrics", metrics_json, f"InsightGraph v{APP_VERSION}")
+                saved.append("node_metrics")
+            
+            st.success(f"☁️ Saved to cloud: {', '.join(saved)}")
+            return True
+            
+        except Exception as e:
+            st.error(f"❌ Cloud save failed: {e}")
+            return False
 
 
 # =============================================================================
@@ -1026,6 +1164,23 @@ def render_downloads(data: dict):
                 use_container_width=True
             )
     
+    # Cloud save option
+    db = st.session_state.get("supabase_db")
+    cloud_enabled = db and db.is_authenticated
+    
+    col_cloud1, col_cloud2 = st.columns([2, 1])
+    with col_cloud1:
+        if st.button("☁️ Save to Cloud",
+                    disabled=not cloud_enabled,
+                    use_container_width=True,
+                    help="Login to enable cloud save" if not cloud_enabled else "Save artifacts to Supabase"):
+            save_artifacts_to_cloud(data["project_id"], data)
+    with col_cloud2:
+        if not cloud_enabled:
+            st.caption("☁️ Login to enable cloud save")
+        else:
+            st.caption("☁️ Ready")
+    
     # Individual files
     st.caption("Individual data files:")
     col1, col2, col3 = st.columns(3)
@@ -1169,6 +1324,9 @@ def main():
     
     st.markdown("Structured insight from complex networks.")
     st.caption(f"v{APP_VERSION}")
+    
+    # Cloud status in sidebar
+    render_cloud_status()
     
     st.divider()
     
