@@ -64,11 +64,13 @@ import sys
 import os
 import re
 import tempfile
-from c4c_utils.c4c_supabase import C4CSupabase
 from pathlib import Path
 from datetime import datetime
-# Add the project root to path for imports
+
+# Add the project root to path for imports (MUST be before c4c_utils imports)
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from c4c_utils.c4c_supabase import C4CSupabase
 from c4c_utils.irs990_parser import PARSER_VERSION
 from c4c_utils.irs990pf_xml_parser import parse_990pf_xml
 from c4c_utils.irs990_xml_parser import parse_990_xml
