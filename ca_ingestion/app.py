@@ -13,6 +13,11 @@ Outputs conform to C4C Network Schema v1 (MVP):
 
 VERSION HISTORY:
 ----------------
+UPDATED v0.11.0: Supabase cloud storage integration
+- Added cloud save/load functionality
+- User authentication via Supabase
+- Projects persist in cloud database
+
 UPDATED v0.10.1: Regional Perspective UI improvements
 - Renamed "Region Mode" to "Regional Perspective" for consistency with US
 - Added preset regions: Quebec, Prairie Provinces, Atlantic Canada
@@ -61,6 +66,8 @@ import json
 import re
 import hashlib
 import zipfile
+import sys
+import os
 from pathlib import Path
 from io import BytesIO, StringIO
 from enum import Enum
@@ -69,7 +76,7 @@ from enum import Enum
 # Config
 # =============================================================================
 
-APP_VERSION = "0.10.1"  # Regional Perspective UI improvements
+APP_VERSION = "0.11.0"  # Supabase cloud storage integration
 C4C_LOGO_URL = "https://static.wixstatic.com/media/275a3f_bcf888c01ebe499ca978b82f5291947b~mv2.png"
 SOURCE_SYSTEM = "CHARITYDATA_CA"
 JURISDICTION = "CA"
@@ -81,11 +88,133 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 DEMO_DATA_DIR = REPO_ROOT / "demo_data"
 DEMO_PROJECT_NAME = "_demo"  # Reserved name for demo dataset
 
+# Add the project root to path for imports (MUST be before c4c_utils imports)
+sys.path.insert(0, str(REPO_ROOT))
+
+from c4c_utils.c4c_supabase import C4CSupabase
+
 st.set_page_config(
     page_title="OrgGraph (CA)",
     page_icon=C4C_LOGO_URL,
     layout="wide"
 )
+
+# =============================================================================
+# Supabase Cloud Integration
+# =============================================================================
+
+def init_supabase():
+    """Initialize Supabase connection."""
+    if "supabase_db" not in st.session_state:
+        try:
+            url = st.secrets["supabase"]["url"]
+            key = st.secrets["supabase"]["key"]
+            st.session_state.supabase_db = C4CSupabase(url=url, key=key)
+        except Exception as e:
+            st.session_state.supabase_db = None
+    return st.session_state.get("supabase_db")
+
+
+def render_cloud_status():
+    """Render cloud connection status and login UI in sidebar."""
+    db = st.session_state.get("supabase_db")
+    
+    if not db:
+        st.sidebar.caption("☁️ Cloud offline")
+        return None
+    
+    if db.is_authenticated:
+        user = db.get_user()
+        st.sidebar.success(f"☁️ {user['email']}")
+        if st.sidebar.button("Logout", key="cloud_logout"):
+            db.logout()
+            st.rerun()
+        return db
+    else:
+        with st.sidebar.expander("☁️ Cloud Login", expanded=False):
+            st.caption("Save projects to the cloud for backup and sharing.")
+            
+            tab1, tab2 = st.tabs(["Login", "Sign Up"])
+            
+            with tab1:
+                email = st.text_input("Email", key="cloud_login_email")
+                password = st.text_input("Password", type="password", key="cloud_login_pass")
+                if st.button("Login", key="cloud_login_btn"):
+                    if db.login(email, password):
+                        st.success("✅ Logged in!")
+                        st.rerun()
+                    else:
+                        st.error("Login failed")
+            
+            with tab2:
+                st.caption("First time? Create an account.")
+                signup_email = st.text_input("Email", key="cloud_signup_email")
+                signup_pass = st.text_input("Password", type="password", key="cloud_signup_pass")
+                if st.button("Sign Up", key="cloud_signup_btn"):
+                    if db.signup(signup_email, signup_pass):
+                        st.success("✅ Check email to confirm")
+                    else:
+                        st.error("Signup failed")
+        
+        return db
+
+
+def save_to_cloud(project_name: str, nodes_df: pd.DataFrame, edges_df: pd.DataFrame,
+                  grants_df: pd.DataFrame = None, region_def: dict = None):
+    """Save project data to Supabase cloud."""
+    db = st.session_state.get("supabase_db")
+    
+    if not db or not db.is_authenticated:
+        st.error("❌ Login required to save to cloud")
+        return False
+    
+    # Create slug from project name
+    slug = project_name.lower().replace(" ", "-").replace("_", "-")
+    slug = "".join(c for c in slug if c.isalnum() or c == "-")
+    slug = slug[:50]  # Limit length
+    
+    if not slug:
+        slug = "untitled-project"
+    
+    with st.spinner("☁️ Saving to cloud..."):
+        try:
+            # Check if project exists
+            existing = db.get_project_by_slug(slug)
+            
+            if existing:
+                project = existing
+            else:
+                # Create new project
+                config = {}
+                if region_def:
+                    config["region_lens"] = region_def
+                
+                project = db.create_project(
+                    name=project_name,
+                    slug=slug,
+                    source_app="orggraph_ca",
+                    config=config
+                )
+                
+                if not project:
+                    st.error("❌ Failed to create cloud project")
+                    return False
+            
+            # Save data
+            results = db.save_project_data(
+                project_id=project["id"],
+                nodes_df=nodes_df,
+                edges_df=edges_df,
+                grants_df=grants_df if grants_df is not None else None
+            )
+            
+            st.success(f"☁️ Saved to cloud: {results.get('nodes', 0)} nodes, {results.get('edges', 0)} edges")
+            return True
+            
+        except Exception as e:
+            st.error(f"❌ Cloud save failed: {e}")
+            return False
+
 
 # =============================================================================
 # Regional Perspective (Shared Logic with OrgGraph US)
@@ -1852,11 +1981,15 @@ def render_downloads(nodes_df: pd.DataFrame, edges_df: pd.DataFrame,
     # Check if we have grants_detail
     has_grants_detail = grants_detail_df is not None and not grants_detail_df.empty
     
-    # Save to project folder (PRIMARY ACTION)
+    # Save options (Local + Cloud)
     if project_name and project_name != DEMO_PROJECT_NAME:
-        save_col1, save_col2 = st.columns([2, 1])
+        st.markdown("**💾 Save Project**")
+        
+        save_col1, save_col2, save_col3 = st.columns([2, 2, 1])
+        
+        # Local save
         with save_col1:
-            if st.button("💾 Save to Project", type="primary", use_container_width=True):
+            if st.button("💾 Save to Local", type="primary", use_container_width=True):
                 project_path = get_project_path(project_name)
                 try:
                     nodes_df.to_csv(project_path / "nodes.csv", index=False)
@@ -1867,8 +2000,28 @@ def render_downloads(nodes_df: pd.DataFrame, edges_df: pd.DataFrame,
                     st.caption("Files saved: nodes.csv, edges.csv" + (", grants_detail.csv" if has_grants_detail else ""))
                 except Exception as e:
                     st.error(f"Error saving: {e}")
+        
+        # Cloud save
         with save_col2:
-            st.caption("Saves nodes.csv, edges.csv, and grants_detail.csv directly to the project folder")
+            db = st.session_state.get("supabase_db")
+            cloud_enabled = db and db.is_authenticated
+            
+            if st.button("☁️ Save to Cloud", 
+                        disabled=not cloud_enabled,
+                        use_container_width=True,
+                        help="Login to enable cloud save" if not cloud_enabled else "Save to Supabase"):
+                save_to_cloud(
+                    project_name=project_name,
+                    nodes_df=nodes_df,
+                    edges_df=edges_df,
+                    grants_df=grants_detail_df
+                )
+        
+        with save_col3:
+            if not cloud_enabled:
+                st.caption("☁️ Login to enable")
+            else:
+                st.caption("☁️ Ready")
         
         st.divider()
     
@@ -2252,6 +2405,9 @@ def render_upload_interface(project_name: str):
 # =============================================================================
 
 def main():
+    # Initialize Supabase
+    init_supabase()
+    
     # Header with logo, title, and help button
     col1, col2, col3 = st.columns([1, 8, 1])
     with col1:
@@ -2266,6 +2422,9 @@ def main():
     OrgGraph currently supports US and Canadian nonprofit registries; additional sources will be added in the future.
     """)
     st.caption(f"App v{APP_VERSION}")
+    
+    # Cloud status in sidebar
+    render_cloud_status()
     
     st.divider()
     
