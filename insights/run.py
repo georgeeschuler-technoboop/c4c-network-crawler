@@ -12,6 +12,11 @@ Usage:
 
 VERSION HISTORY:
 ----------------
+v3.0.6 (2025-12-21): Added manifest.json for bundle traceability
+- NEW: generate_manifest() function for structured bundle metadata
+- NEW: Bundle format version 1.0
+- Prep for HTML report rendering
+
 v3.0.5 (2025-12-21): Added Roles × Region Lens analysis
 - NEW: Canonical role vocabulary (FUNDER, GRANTEE, FUNDER_GRANTEE, BOARD_MEMBER, ORGANIZATION, INDIVIDUAL)
 - NEW: Region lens configuration (project_config.json or defaults)
@@ -46,12 +51,20 @@ v3.0.1 (2025-12-19): Fixed hidden broker detection bug
 
 import argparse
 import json
+import hashlib
 import pandas as pd
 import numpy as np
 import networkx as nx
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 from collections import defaultdict
+
+# =============================================================================
+# Version
+# =============================================================================
+
+ENGINE_VERSION = "3.0.6"
+BUNDLE_FORMAT_VERSION = "1.0"
 
 # =============================================================================
 # Constants
@@ -1803,6 +1816,167 @@ def generate_project_summary(nodes_df, edges_df, metrics_df, flow_stats):
             "multi_board_people": len(metrics_df[(metrics_df["node_type"] == "PERSON") & (metrics_df["boards_served"] >= 2)]),
         },
     }
+
+
+def generate_manifest(
+    project_id: str,
+    project_summary: dict,
+    insight_cards: dict,
+    nodes_df: pd.DataFrame,
+    edges_df: pd.DataFrame,
+    grants_df: pd.DataFrame = None,
+    region_lens_config: dict = None,
+    cloud_project_id: str = None,
+    input_paths: dict = None
+) -> dict:
+    """
+    Generate bundle manifest for traceability and reproducibility.
+    
+    Args:
+        project_id: Project identifier (e.g., "glfn-2025")
+        project_summary: Output from generate_project_summary()
+        insight_cards: Output from generate_insight_cards()
+        nodes_df: Input nodes DataFrame
+        edges_df: Input edges DataFrame
+        grants_df: Optional grants_detail DataFrame
+        region_lens_config: Region lens configuration used
+        cloud_project_id: Supabase project UUID (if saved to cloud)
+        input_paths: Dict with original file paths {"nodes": ..., "edges": ..., "grants": ...}
+    
+    Returns:
+        Manifest dict ready for JSON serialization.
+    """
+    now = datetime.now(timezone.utc)
+    
+    # Helper to compute file hash
+    def df_hash(df):
+        if df is None or df.empty:
+            return None
+        return hashlib.sha256(df.to_csv(index=False).encode()).hexdigest()[:16]
+    
+    # Build manifest
+    manifest = {
+        "bundle": {
+            "format_version": BUNDLE_FORMAT_VERSION,
+            "generated_at": now.isoformat(),
+            "generated_by": {
+                "app": "InsightGraph",
+                "engine": f"run.py v{ENGINE_VERSION}"
+            }
+        },
+        
+        "project": {
+            "id": project_id,
+            "name": project_id.replace("-", " ").replace("_", " ").title(),
+        },
+        
+        "config": {
+            "thresholds": {
+                "connector_percentile": CONNECTOR_THRESHOLD,
+                "broker_percentile": BROKER_THRESHOLD,
+                "hidden_broker_degree_cap": HIDDEN_BROKER_DEGREE_CAP,
+                "capital_hub_percentile": CAPITAL_HUB_THRESHOLD
+            }
+        },
+        
+        "inputs": {
+            "nodes": {
+                "path": "data/nodes.csv",
+                "rows": len(nodes_df) if nodes_df is not None else 0,
+                "hash": df_hash(nodes_df)
+            },
+            "edges": {
+                "path": "data/edges.csv",
+                "rows": len(edges_df) if edges_df is not None else 0,
+                "hash": df_hash(edges_df)
+            }
+        },
+        
+        "outputs": {
+            "report_html": {
+                "path": "index.html"
+            },
+            "report_md": {
+                "path": "report.md",
+                "sections": [
+                    "Network Health",
+                    "Funding Concentration",
+                    "Funder Overlap",
+                    "Portfolio Twins",
+                    "Shared Board Conduits",
+                    "Hidden Brokers",
+                    "Single-Point Bridges",
+                    "Roles × Region Lens",
+                    "Recommendations"
+                ]
+            },
+            "project_summary": {
+                "path": "analysis/project_summary.json"
+            },
+            "insight_cards": {
+                "path": "analysis/insight_cards.json",
+                "cards": len(insight_cards) if insight_cards else 0
+            },
+            "node_metrics": {
+                "path": "analysis/node_metrics.csv"
+            }
+        },
+        
+        "stats": {
+            "network": {
+                "nodes": project_summary.get("node_counts", {}).get("total", 0),
+                "edges": project_summary.get("edge_counts", {}).get("total", 0),
+                "organizations": project_summary.get("node_counts", {}).get("organizations", 0),
+                "people": project_summary.get("node_counts", {}).get("people", 0)
+            },
+            "funding": {
+                "total": project_summary.get("funding", {}).get("total_amount", 0),
+                "funders": project_summary.get("funding", {}).get("funder_count", 0),
+                "grantees": project_summary.get("funding", {}).get("grantee_count", 0),
+                "top_5_share": project_summary.get("funding", {}).get("top_5_share", 0)
+            }
+        }
+    }
+    
+    # Add cloud project ID if available
+    if cloud_project_id:
+        manifest["project"]["cloud_id"] = cloud_project_id
+    
+    # Add region lens config if available
+    if region_lens_config:
+        manifest["config"]["region_lens"] = {
+            "id": region_lens_config.get("id", "custom"),
+            "name": region_lens_config.get("name", "Custom Region")
+        }
+        # Include geographic scope if present
+        if "include_us_states" in region_lens_config:
+            manifest["config"]["region_lens"]["include_us_states"] = region_lens_config["include_us_states"]
+        if "include_ca_provinces" in region_lens_config:
+            manifest["config"]["region_lens"]["include_ca_provinces"] = region_lens_config["include_ca_provinces"]
+    
+    # Add grants_detail if available
+    if grants_df is not None and not grants_df.empty:
+        manifest["inputs"]["grants_detail"] = {
+            "path": "data/grants_detail.csv",
+            "rows": len(grants_df),
+            "hash": df_hash(grants_df)
+        }
+    
+    # Add health score if available in insight_cards
+    if insight_cards and "network_health" in insight_cards:
+        health = insight_cards["network_health"]
+        manifest["stats"]["health"] = {
+            "score": health.get("score", 0),
+            "label": health.get("label", "Unknown")
+        }
+    
+    # Add original input paths for traceability
+    if input_paths:
+        for key, path in input_paths.items():
+            if key in manifest["inputs"] and path:
+                manifest["inputs"][key]["source_path"] = str(path)
+    
+    return manifest
 
 
 # =============================================================================
