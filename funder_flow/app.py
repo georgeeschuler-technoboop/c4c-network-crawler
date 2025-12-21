@@ -58,6 +58,7 @@ import sys
 import os
 import re
 import tempfile
+from c4c_utils.c4c_supabase import C4CSupabase
 from pathlib import Path
 from datetime import datetime
 # Add the project root to path for imports
