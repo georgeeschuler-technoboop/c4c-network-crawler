@@ -13,6 +13,12 @@ Outputs conform to C4C Network Schema v1 (MVP):
 
 VERSION HISTORY:
 ----------------
+UPDATED v0.10.1: Regional Perspective UI improvements
+- Renamed "Region Mode" to "Regional Perspective" for consistency with US
+- Added preset regions: Quebec, Prairie Provinces, Atlantic Canada
+- Improved UI layout with dropdown selector and expandable details
+- Great Lakes now labeled "Great Lakes (Binational)"
+
 UPDATED v0.10.0: Canonical role vocabulary
 - Role columns now include: network_role_code, network_role_label, network_role_order
 - Labels aligned with spec: "Funder + Grantee" (not "/"), "Individual" (not "Person")
@@ -63,7 +69,7 @@ from enum import Enum
 # Config
 # =============================================================================
 
-APP_VERSION = "0.10.0"  # Canonical role vocabulary (code + label + order)
+APP_VERSION = "0.10.1"  # Regional Perspective UI improvements
 C4C_LOGO_URL = "https://static.wixstatic.com/media/275a3f_bcf888c01ebe499ca978b82f5291947b~mv2.png"
 SOURCE_SYSTEM = "CHARITYDATA_CA"
 JURISDICTION = "CA"
@@ -82,7 +88,7 @@ st.set_page_config(
 )
 
 # =============================================================================
-# Region Mode (Shared Logic with OrgGraph US)
+# Regional Perspective (Shared Logic with OrgGraph US)
 # =============================================================================
 
 class RegionMode(Enum):
@@ -103,10 +109,28 @@ REGION_PRESETS = {
         "admin1_codes": ["ON"],
         "country_codes": ["CA"],
     },
+    "quebec": {
+        "label": "Quebec",
+        "description": "Quebec only",
+        "admin1_codes": ["QC"],
+        "country_codes": ["CA"],
+    },
     "british_columbia": {
         "label": "British Columbia", 
         "description": "British Columbia only",
         "admin1_codes": ["BC"],
+        "country_codes": ["CA"],
+    },
+    "prairies": {
+        "label": "Prairie Provinces",
+        "description": "Alberta, Saskatchewan, Manitoba",
+        "admin1_codes": ["AB", "SK", "MB"],
+        "country_codes": ["CA"],
+    },
+    "atlantic": {
+        "label": "Atlantic Canada",
+        "description": "NB, NS, PE, NL",
+        "admin1_codes": ["NB", "NS", "PE", "NL"],
         "country_codes": ["CA"],
     },
     "canada_all": {
@@ -2085,32 +2109,55 @@ def render_upload_interface(project_name: str):
         
         st.write(f"🇨🇦 **{files['org_name']}** ({files['cra_bn'] or 'no BN'}) — {', '.join(file_types)}")
     
-    # Region Mode Selection (for grants_detail)
+    # Regional Perspective Selection (for grants_detail)
     st.divider()
-    st.subheader("🌍 Region Mode")
-    st.caption("Filter grants by recipient location for regional analysis")
+    st.subheader("🗺️ Regional Perspective (optional)")
+    st.caption("Apply regional tagging to identify grants in specific geographic areas")
     
     region_mode_options = {
-        "Off (include all grants)": RegionMode.OFF,
-        "Great Lakes Region": RegionMode.PRESET,
+        "Off (show all grants)": ("off", None),
+        "Use preset region": ("preset", None),
     }
-    selected_region_label = st.radio(
-        "Region filter",
-        list(region_mode_options.keys()),
-        horizontal=True,
-        label_visibility="collapsed"
-    )
-    region_mode = region_mode_options[selected_region_label]
     
-    # Get region config
-    if region_mode == RegionMode.PRESET:
-        preset = REGION_PRESETS["great_lakes"]
-        admin1_codes = preset["admin1_codes"]
-        country_codes = preset["country_codes"]
-        st.caption(f"**Includes:** {', '.join(admin1_codes)} ({', '.join(country_codes)})")
+    col1, col2 = st.columns([1, 2])
+    with col1:
+        region_choice = st.radio(
+            "Region mode",
+            ["Off (show all grants)", "Use preset region"],
+            horizontal=False,
+            label_visibility="collapsed"
+        )
+    
+    if region_choice == "Use preset region":
+        with col2:
+            preset_options = {
+                "Great Lakes (Binational)": "great_lakes",
+                "Ontario": "ontario",
+                "Quebec": "quebec",
+                "British Columbia": "british_columbia",
+                "Prairie Provinces": "prairies",
+                "Atlantic Canada": "atlantic",
+                "All Canada": "canada_all",
+            }
+            selected_preset = st.selectbox(
+                "Choose preset region",
+                list(preset_options.keys()),
+                label_visibility="visible"
+            )
+            preset_key = preset_options[selected_preset]
+            preset = REGION_PRESETS[preset_key]
+            admin1_codes = preset["admin1_codes"]
+            country_codes = preset["country_codes"]
+            
+            with st.expander("Region details"):
+                st.caption(f"**Includes:** {', '.join(admin1_codes)}")
+                st.caption(f"**Countries:** {', '.join(country_codes)}")
+        
+        region_mode = RegionMode.PRESET
     else:
         admin1_codes = []
         country_codes = []
+        region_mode = RegionMode.OFF
     
     st.divider()
     
