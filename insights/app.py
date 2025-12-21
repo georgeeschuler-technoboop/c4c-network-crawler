@@ -6,6 +6,10 @@ Reads exported data from OrgGraph US/CA projects.
 
 VERSION HISTORY:
 ----------------
+UPDATED v0.11.1: Fixed HTML download
+- FIX: Encode HTML as UTF-8 bytes for Safari compatibility
+- NEW: Show error message if HTML generation fails
+
 UPDATED v0.11.0: HTML report rendering
 - NEW: HTML download button as primary (styled, print-ready)
 - NEW: index.html included in bundle ZIP
@@ -92,7 +96,7 @@ from c4c_utils.c4c_supabase import C4CSupabase
 # Config
 # =============================================================================
 
-APP_VERSION = "0.11.0"  # HTML report rendering in bundle
+APP_VERSION = "0.11.1"  # Fixed HTML download encoding
 C4C_LOGO_URL = "https://static.wixstatic.com/media/275a3f_9c48d5079fcf4b688606c81d8f34d5a5~mv2.jpg"
 INSIGHTGRAPH_ICON_URL = "https://static.wixstatic.com/media/275a3f_7736e28c9f5e40c1b2407e09dc5cb6e7~mv2.png"
 
@@ -1226,6 +1230,7 @@ def render_downloads(data: dict):
     
     # Generate HTML report for download button
     html_report = None
+    html_error = None
     if has_report:
         run_module = load_run_module()
         if run_module and hasattr(run_module, 'render_html_report'):
@@ -1237,13 +1242,20 @@ def render_downloads(data: dict):
                     project_id=data.get("project_id", "report")
                 )
             except Exception as e:
+                html_error = str(e)
                 print(f"Warning: Could not generate HTML report: {e}")
+        elif run_module:
+            html_error = "render_html_report function not found in run.py"
+        else:
+            html_error = "Could not load run.py module"
     
     with col1:
         if html_report:
+            # Ensure HTML is encoded as UTF-8 bytes
+            html_bytes = html_report.encode('utf-8') if isinstance(html_report, str) else html_report
             st.download_button(
                 "📄 Download Report (HTML)",
-                data=html_report,
+                data=html_bytes,
                 file_name=f"{data['project_id']}_report.html",
                 mime="text/html",
                 type="primary",
@@ -1251,6 +1263,8 @@ def render_downloads(data: dict):
                 help="Open in browser, print to PDF"
             )
         elif has_report:
+            if html_error:
+                st.warning(f"HTML generation failed: {html_error}")
             st.download_button(
                 "📝 Download Report (Markdown)",
                 data=data["markdown_report"],
