@@ -60,6 +60,7 @@ from io import BytesIO
 import zipfile
 import sys
 import importlib.util
+from c4c_utils.c4c_supabase import C4CSupabase
 
 # =============================================================================
 # Config
