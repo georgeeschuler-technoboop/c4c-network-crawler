@@ -12,6 +12,15 @@ Usage:
 
 VERSION HISTORY:
 ----------------
+v3.0.5 (2025-12-21): Added Roles × Region Lens analysis
+- NEW: Canonical role vocabulary (FUNDER, GRANTEE, FUNDER_GRANTEE, BOARD_MEMBER, ORGANIZATION, INDIVIDUAL)
+- NEW: Region lens configuration (project_config.json or defaults)
+- NEW: in_region_lens membership computed per node
+- NEW: Roles × Lens cross-tabulation (counts by role, in/out of lens)
+- NEW: Edge flow categories (IN→IN, IN→OUT, OUT→IN, OUT→OUT)
+- NEW: Roles × Region Lens section in insight_report.md
+- Supports Great Lakes (Binational) lens out of the box
+
 v3.0.4 (2025-12-20): Fixed bridge detection to focus on largest component
 - FIX: Articulation points now computed only within largest connected component
 - FIX: Impact counts nodes disconnected from main cluster, not peripheral clusters
@@ -1215,10 +1224,385 @@ def generate_insight_cards(nodes_df, edges_df, metrics_df, interlock_graph, flow
 
 
 # =============================================================================
+# Roles × Region Lens
+# =============================================================================
+
+# Canonical role vocabulary (must match OrgGraph exports)
+ROLE_VOCABULARY = {
+    'FUNDER':         {'label': 'Funder',            'order': 1},
+    'FUNDER_GRANTEE': {'label': 'Funder + Grantee',  'order': 2},
+    'GRANTEE':        {'label': 'Grantee',           'order': 3},
+    'ORGANIZATION':   {'label': 'Organization',      'order': 4},
+    'BOARD_MEMBER':   {'label': 'Board Member',      'order': 5},
+    'INDIVIDUAL':     {'label': 'Individual',        'order': 6},
+}
+
+# Default region lens for GLFN (can be overridden by project_config.json)
+DEFAULT_REGION_LENS = {
+    "enabled": True,
+    "label": "Great Lakes (Binational)",
+    "mode": "preset",
+    "boundaries": {
+        "us_states": ["MI", "OH", "MN", "WI", "IN", "IL", "NY", "PA"],
+        "ca_provinces": ["ON", "QC"]
+    }
+}
+
+
+def load_region_lens_config(project_dir: Path) -> dict:
+    """
+    Load region lens configuration from project_config.json.
+    Falls back to DEFAULT_REGION_LENS if not found.
+    """
+    config_path = project_dir / "project_config.json"
+    if config_path.exists():
+        try:
+            with open(config_path) as f:
+                config = json.load(f)
+                return config.get("region_lens", DEFAULT_REGION_LENS)
+        except Exception:
+            pass
+    return DEFAULT_REGION_LENS
+
+
+def derive_network_roles(nodes_df: pd.DataFrame, edges_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Derive network role for each node if not already present.
+    
+    If nodes_df already has 'network_role_code', uses that.
+    Otherwise derives from edge relationships.
+    
+    Returns nodes_df with network_role_code, network_role_label, network_role_order columns.
+    """
+    # Check if already present
+    if 'network_role_code' in nodes_df.columns:
+        # Ensure label and order columns exist
+        if 'network_role_label' not in nodes_df.columns:
+            nodes_df['network_role_label'] = nodes_df['network_role_code'].map(
+                lambda c: ROLE_VOCABULARY.get(c, {}).get('label', c)
+            )
+        if 'network_role_order' not in nodes_df.columns:
+            nodes_df['network_role_order'] = nodes_df['network_role_code'].map(
+                lambda c: ROLE_VOCABULARY.get(c, {}).get('order', 99)
+            )
+        return nodes_df
+    
+    # Derive from edges
+    grant_edges = edges_df[edges_df['edge_type'] == 'GRANT'] if not edges_df.empty else pd.DataFrame()
+    board_edges = edges_df[edges_df['edge_type'] == 'BOARD_MEMBERSHIP'] if not edges_df.empty else pd.DataFrame()
+    
+    funder_ids = set(grant_edges['from_id']) if not grant_edges.empty else set()
+    grantee_ids = set(grant_edges['to_id']) if not grant_edges.empty else set()
+    board_member_ids = set(board_edges['from_id']) if not board_edges.empty else set()
+    
+    def get_role(row):
+        node_id = row['node_id']
+        node_type = row.get('node_type', '')
+        
+        if node_type == 'PERSON':
+            code = 'BOARD_MEMBER' if node_id in board_member_ids else 'INDIVIDUAL'
+        else:
+            is_funder = node_id in funder_ids
+            is_grantee = node_id in grantee_ids
+            
+            if is_funder and is_grantee:
+                code = 'FUNDER_GRANTEE'
+            elif is_funder:
+                code = 'FUNDER'
+            elif is_grantee:
+                code = 'GRANTEE'
+            else:
+                code = 'ORGANIZATION'
+        
+        return pd.Series({
+            'network_role_code': code,
+            'network_role_label': ROLE_VOCABULARY[code]['label'],
+            'network_role_order': ROLE_VOCABULARY[code]['order']
+        })
+    
+    role_cols = nodes_df.apply(get_role, axis=1)
+    nodes_df = pd.concat([nodes_df, role_cols], axis=1)
+    
+    return nodes_df
+
+
+def compute_region_lens_membership(nodes_df: pd.DataFrame, lens_config: dict) -> pd.DataFrame:
+    """
+    Compute in_region_lens for each node based on lens boundaries.
+    
+    Returns nodes_df with:
+    - in_region_lens: bool
+    - region_lens_label: str (same for all nodes)
+    """
+    if not lens_config.get('enabled', False):
+        nodes_df['in_region_lens'] = True  # All nodes in-lens if disabled
+        nodes_df['region_lens_label'] = 'All Regions'
+        return nodes_df
+    
+    boundaries = lens_config.get('boundaries', {})
+    us_states = set(boundaries.get('us_states', []))
+    ca_provinces = set(boundaries.get('ca_provinces', []))
+    all_regions = us_states | ca_provinces
+    
+    lens_label = lens_config.get('label', 'Custom Region')
+    
+    def is_in_lens(row):
+        # Check region/state/province column
+        region = str(row.get('region', '')).strip().upper()
+        
+        # Handle common variations
+        if region in all_regions:
+            return True
+        
+        # Check 2-letter codes
+        if len(region) == 2:
+            return region in all_regions
+        
+        # Check full names (Ontario -> ON, etc.)
+        region_map = {
+            'ONTARIO': 'ON', 'QUEBEC': 'QC', 'MICHIGAN': 'MI', 'OHIO': 'OH',
+            'MINNESOTA': 'MN', 'WISCONSIN': 'WI', 'INDIANA': 'IN', 'ILLINOIS': 'IL',
+            'NEW YORK': 'NY', 'PENNSYLVANIA': 'PA'
+        }
+        mapped = region_map.get(region, region)
+        return mapped in all_regions
+    
+    nodes_df['in_region_lens'] = nodes_df.apply(is_in_lens, axis=1)
+    nodes_df['region_lens_label'] = lens_label
+    
+    return nodes_df
+
+
+def compute_roles_by_lens(nodes_df: pd.DataFrame) -> dict:
+    """
+    Compute role counts by lens membership.
+    
+    Returns:
+        {
+            'FUNDER': {'in': 15, 'out': 5, 'pct_in': 75.0},
+            'GRANTEE': {'in': 2000, 'out': 899, 'pct_in': 69.0},
+            ...
+        }
+    """
+    if 'network_role_code' not in nodes_df.columns or 'in_region_lens' not in nodes_df.columns:
+        return {}
+    
+    result = {}
+    for code in ROLE_VOCABULARY.keys():
+        role_nodes = nodes_df[nodes_df['network_role_code'] == code]
+        in_count = len(role_nodes[role_nodes['in_region_lens'] == True])
+        out_count = len(role_nodes[role_nodes['in_region_lens'] == False])
+        total = in_count + out_count
+        
+        result[code] = {
+            'in': in_count,
+            'out': out_count,
+            'total': total,
+            'pct_in': (in_count / total * 100) if total > 0 else 0,
+            'label': ROLE_VOCABULARY[code]['label'],
+            'order': ROLE_VOCABULARY[code]['order']
+        }
+    
+    return result
+
+
+def compute_edge_flows_by_lens(edges_df: pd.DataFrame, nodes_df: pd.DataFrame) -> dict:
+    """
+    Compute grant edge flows by lens category.
+    
+    Categories:
+    - IN_IN: Both funder and grantee in-lens
+    - IN_OUT: Funder in-lens, grantee out-of-lens
+    - OUT_IN: Funder out-of-lens, grantee in-lens
+    - OUT_OUT: Both out-of-lens
+    
+    Returns:
+        {
+            'IN_IN': {'count': 3000, 'amount': 400000000},
+            'IN_OUT': {'count': 500, 'amount': 50000000},
+            ...
+        }
+    """
+    if 'in_region_lens' not in nodes_df.columns:
+        return {}
+    
+    grant_edges = edges_df[edges_df['edge_type'] == 'GRANT'].copy() if not edges_df.empty else pd.DataFrame()
+    
+    if grant_edges.empty:
+        return {}
+    
+    # Build node_id -> in_lens lookup
+    node_lens = dict(zip(nodes_df['node_id'], nodes_df['in_region_lens']))
+    
+    # Classify each edge
+    def classify_edge(row):
+        from_in = node_lens.get(row['from_id'], False)
+        to_in = node_lens.get(row['to_id'], False)
+        
+        if from_in and to_in:
+            return 'IN_IN'
+        elif from_in and not to_in:
+            return 'IN_OUT'
+        elif not from_in and to_in:
+            return 'OUT_IN'
+        else:
+            return 'OUT_OUT'
+    
+    grant_edges['flow_category'] = grant_edges.apply(classify_edge, axis=1)
+    
+    # Parse amounts
+    if 'amount' in grant_edges.columns:
+        grant_edges['amount_num'] = pd.to_numeric(grant_edges['amount'], errors='coerce').fillna(0)
+    else:
+        grant_edges['amount_num'] = 0
+    
+    # Aggregate
+    result = {}
+    for cat in ['IN_IN', 'IN_OUT', 'OUT_IN', 'OUT_OUT']:
+        cat_edges = grant_edges[grant_edges['flow_category'] == cat]
+        result[cat] = {
+            'count': len(cat_edges),
+            'amount': cat_edges['amount_num'].sum(),
+            'label': cat.replace('_', '→')
+        }
+    
+    return result
+
+
+def generate_roles_region_summary(nodes_df: pd.DataFrame, edges_df: pd.DataFrame, lens_config: dict) -> dict:
+    """
+    Generate complete Roles × Region Lens summary.
+    
+    Returns a dict suitable for adding to insight_cards.
+    """
+    if not lens_config.get('enabled', False):
+        return {'enabled': False}
+    
+    # Ensure roles and lens membership are computed
+    nodes_df = derive_network_roles(nodes_df, edges_df)
+    nodes_df = compute_region_lens_membership(nodes_df, lens_config)
+    
+    # Compute metrics
+    roles_by_lens = compute_roles_by_lens(nodes_df)
+    edge_flows = compute_edge_flows_by_lens(edges_df, nodes_df)
+    
+    # Overall stats
+    total_nodes = len(nodes_df)
+    in_lens_count = len(nodes_df[nodes_df['in_region_lens'] == True])
+    out_lens_count = total_nodes - in_lens_count
+    pct_in = (in_lens_count / total_nodes * 100) if total_nodes > 0 else 0
+    
+    return {
+        'enabled': True,
+        'lens_label': lens_config.get('label', 'Custom Region'),
+        'totals': {
+            'in_lens': in_lens_count,
+            'out_lens': out_lens_count,
+            'total': total_nodes,
+            'pct_in': pct_in
+        },
+        'roles_by_lens': roles_by_lens,
+        'edge_flows': edge_flows
+    }
+
+
+def format_roles_region_section(summary: dict) -> list:
+    """
+    Format Roles × Region Lens summary as markdown lines.
+    """
+    if not summary.get('enabled', False):
+        return []
+    
+    lines = []
+    lines.append("## 🗺️ Roles × Region Lens")
+    lines.append("")
+    lines.append(f"**Lens:** {summary.get('lens_label', 'Unknown')}")
+    lines.append("")
+    
+    # Overall totals
+    totals = summary.get('totals', {})
+    in_count = totals.get('in_lens', 0)
+    out_count = totals.get('out_lens', 0)
+    pct_in = totals.get('pct_in', 0)
+    
+    lines.append(f"- **In-lens nodes:** {in_count:,} ({pct_in:.1f}%)")
+    lines.append(f"- **Out-of-lens nodes:** {out_count:,} ({100 - pct_in:.1f}%)")
+    lines.append("")
+    
+    # Roles breakdown (sorted by order, only show non-empty)
+    roles = summary.get('roles_by_lens', {})
+    sorted_roles = sorted(roles.items(), key=lambda x: x[1].get('order', 99))
+    
+    lines.append("### By Network Role")
+    lines.append("")
+    lines.append("| Role | In-Lens | Out-of-Lens | % In-Lens |")
+    lines.append("|------|---------|-------------|-----------|")
+    
+    for code, data in sorted_roles:
+        if data.get('total', 0) > 0:
+            label = data.get('label', code)
+            in_n = data.get('in', 0)
+            out_n = data.get('out', 0)
+            pct = data.get('pct_in', 0)
+            lines.append(f"| {label} | {in_n:,} | {out_n:,} | {pct:.1f}% |")
+    
+    lines.append("")
+    
+    # Edge flows
+    flows = summary.get('edge_flows', {})
+    if flows:
+        lines.append("### Grant Flows by Lens Category")
+        lines.append("")
+        lines.append("| Flow | Grants | Amount |")
+        lines.append("|------|--------|--------|")
+        
+        for cat in ['IN_IN', 'IN_OUT', 'OUT_IN', 'OUT_OUT']:
+            if cat in flows:
+                data = flows[cat]
+                label = data.get('label', cat)
+                count = data.get('count', 0)
+                amount = data.get('amount', 0)
+                if count > 0:
+                    lines.append(f"| {label} | {count:,} | ${amount:,.0f} |")
+        
+        lines.append("")
+        
+        # Interpretation
+        in_in = flows.get('IN_IN', {}).get('amount', 0)
+        in_out = flows.get('IN_OUT', {}).get('amount', 0)
+        out_in = flows.get('OUT_IN', {}).get('amount', 0)
+        out_out = flows.get('OUT_OUT', {}).get('amount', 0)
+        total_flow = in_in + in_out + out_in + out_out
+        
+        if total_flow > 0:
+            in_in_pct = in_in / total_flow * 100
+            in_out_pct = in_out / total_flow * 100
+            out_in_pct = out_in / total_flow * 100
+            
+            if in_in_pct >= 80:
+                lines.append(f"> **Interpretation:** The network is highly regional — {in_in_pct:.0f}% of funding stays within the lens boundaries.")
+            elif out_in_pct >= 80:
+                lines.append(f"> **Interpretation:** External funding into the region — {out_in_pct:.0f}% of funding comes from out-of-lens funders to in-lens grantees.")
+            elif in_out_pct >= 20:
+                lines.append(f"> **Interpretation:** Significant outflow — {in_out_pct:.0f}% of funding from in-lens funders goes to out-of-lens grantees.")
+            else:
+                lines.append(f"> **Interpretation:** Mixed flows — funding crosses lens boundaries in multiple directions.")
+            lines.append("")
+    
+    # Disclaimer
+    lines.append("---")
+    lines.append("")
+    lines.append("*Region lens is defined at project setup (client-defined scope). It is not automatic geocoding.*")
+    lines.append("")
+    
+    return lines
+
+
+# =============================================================================
 # Markdown Report Generator
 # =============================================================================
 
-def generate_markdown_report(insight_cards: dict, project_summary: dict, project_id: str = "glfn") -> str:
+def generate_markdown_report(insight_cards: dict, project_summary: dict, project_id: str = "glfn", roles_region_summary: dict = None) -> str:
     """
     Generate a complete markdown report from insight cards.
     Returns formatted markdown string.
@@ -1295,6 +1679,13 @@ def generate_markdown_report(insight_cards: dict, project_summary: dict, project
     
     lines.append("---")
     lines.append("")
+    
+    # Roles × Region Lens section (if available)
+    if roles_region_summary and roles_region_summary.get('enabled', False):
+        region_lines = format_roles_region_section(roles_region_summary)
+        lines.extend(region_lines)
+        lines.append("---")
+        lines.append("")
     
     # Each card
     cards = insight_cards.get("cards", [])
@@ -1425,6 +1816,9 @@ def run(nodes_path, edges_path, output_dir, project_id="glfn"):
     
     nodes_df, edges_df = load_and_validate(nodes_path, edges_path)
     
+    # Determine project directory for config loading
+    project_dir = Path(nodes_path).parent
+    
     print("\nBuilding graphs...")
     grant_graph = build_grant_graph(nodes_df, edges_df)
     board_graph = build_board_graph(nodes_df, edges_df)
@@ -1436,12 +1830,24 @@ def run(nodes_path, edges_path, output_dir, project_id="glfn"):
     flow_stats = compute_flow_stats(edges_df, metrics_df)
     overlap_df = compute_portfolio_overlap(edges_df)
     
+    # Compute Roles × Region Lens summary
+    print("\nComputing Roles × Region Lens...")
+    lens_config = load_region_lens_config(project_dir)
+    
+    # Derive network roles and compute lens membership
+    nodes_with_roles = derive_network_roles(nodes_df.copy(), edges_df)
+    nodes_with_lens = compute_region_lens_membership(nodes_with_roles, lens_config)
+    roles_region_summary = generate_roles_region_summary(nodes_with_lens, edges_df, lens_config)
+    
     print("\nGenerating insights...")
     insight_cards = generate_insight_cards(nodes_df, edges_df, metrics_df, interlock_graph, flow_stats, overlap_df, project_id)
     project_summary = generate_project_summary(nodes_df, edges_df, metrics_df, flow_stats)
     
+    # Add roles/region to project summary
+    project_summary['roles_region'] = roles_region_summary
+    
     # Generate markdown report
-    markdown_report = generate_markdown_report(insight_cards, project_summary, project_id)
+    markdown_report = generate_markdown_report(insight_cards, project_summary, project_id, roles_region_summary)
     
     print("\nWriting outputs...")
     output_dir = Path(output_dir)
