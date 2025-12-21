@@ -12,6 +12,13 @@ Usage:
 
 VERSION HISTORY:
 ----------------
+v3.0.7 (2025-12-21): Added HTML report rendering
+- NEW: render_html_report() function for styled HTML output
+- NEW: Embedded CSS template with C4C branding
+- NEW: Table of contents generation
+- NEW: Section wrapping and callout styling
+- Print-friendly and mobile-responsive design
+
 v3.0.6 (2025-12-21): Added manifest.json for bundle traceability
 - NEW: generate_manifest() function for structured bundle metadata
 - NEW: Bundle format version 1.0
@@ -52,6 +59,7 @@ v3.0.1 (2025-12-19): Fixed hidden broker detection bug
 import argparse
 import json
 import hashlib
+import re
 import pandas as pd
 import numpy as np
 import networkx as nx
@@ -63,8 +71,11 @@ from collections import defaultdict
 # Version
 # =============================================================================
 
-ENGINE_VERSION = "3.0.6"
+ENGINE_VERSION = "3.0.7"
 BUNDLE_FORMAT_VERSION = "1.0"
+
+# C4C logo as base64 (80px, ~4KB) for self-contained HTML reports
+C4C_LOGO_BASE64 = "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"
 
 # =============================================================================
 # Constants
@@ -1977,6 +1988,635 @@ def generate_manifest(
                 manifest["inputs"][key]["source_path"] = str(path)
     
     return manifest
+
+
+def render_html_report(
+    markdown_content: str,
+    project_summary: dict,
+    insight_cards: dict = None,
+    project_id: str = "report",
+    template_path: Path = None
+) -> str:
+    """
+    Render markdown report to styled HTML.
+    
+    Args:
+        markdown_content: The markdown report content
+        project_summary: Project summary dict with stats
+        insight_cards: Optional insight cards for health score
+        project_id: Project identifier
+        template_path: Path to HTML template (optional, uses embedded default)
+    
+    Returns:
+        Rendered HTML string
+    """
+    # Try to import markdown library
+    try:
+        import markdown
+        from markdown.extensions.toc import TocExtension
+        HAS_MARKDOWN = True
+    except ImportError:
+        HAS_MARKDOWN = False
+        print("Warning: markdown library not installed. Using basic HTML conversion.")
+    
+    # Extract health score if available
+    health_score = None
+    health_label = "Unknown"
+    health_summary = ""
+    
+    if insight_cards and "network_health" in insight_cards:
+        health = insight_cards["network_health"]
+        health_score = health.get("score")
+        health_label = health.get("label", "Unknown")
+        # Create a brief summary
+        if health_score:
+            if health_score >= 80:
+                health_summary = "Strong network with good connectivity and governance structures."
+            elif health_score >= 60:
+                health_summary = "Moderate network health with some areas for improvement."
+            elif health_score >= 40:
+                health_summary = "Network shows vulnerabilities that should be addressed."
+            else:
+                health_summary = "Network requires significant strengthening."
+    
+    # Project name from project_id
+    project_name = project_id.replace("-", " ").replace("_", " ").title()
+    
+    # Get date
+    generated_at = project_summary.get("generated_at", datetime.now().isoformat())
+    try:
+        dt = datetime.fromisoformat(generated_at.replace("Z", "+00:00"))
+        date_str = dt.strftime("%B %d, %Y")
+    except:
+        date_str = generated_at[:10] if len(generated_at) >= 10 else generated_at
+    
+    # Convert markdown to HTML
+    if HAS_MARKDOWN:
+        # Use markdown library with TOC extension
+        md = markdown.Markdown(extensions=[
+            'tables',
+            'fenced_code',
+            TocExtension(permalink=False, toc_depth=3)
+        ])
+        content_html = md.convert(markdown_content)
+        toc_html = md.toc
+    else:
+        # Basic conversion without library
+        content_html = basic_markdown_to_html(markdown_content)
+        toc_html = generate_basic_toc(markdown_content)
+    
+    # Wrap sections in <section> tags for styling
+    content_html = wrap_sections(content_html)
+    
+    # Add callout styling
+    content_html = style_callouts(content_html)
+    
+    # Build HTML from embedded template
+    html = build_html_from_template(
+        project_name=project_name,
+        project_id=project_id,
+        date=date_str,
+        version=ENGINE_VERSION,
+        health_score=health_score,
+        health_label=health_label,
+        health_summary=health_summary,
+        toc=toc_html,
+        content=content_html
+    )
+    
+    return html
+
+
+def basic_markdown_to_html(md_content: str) -> str:
+    """Basic markdown to HTML conversion without external library."""
+    lines = md_content.split('\n')
+    html_lines = []
+    in_list = False
+    in_table = False
+    table_header_done = False
+    
+    for line in lines:
+        stripped = line.strip()
+        
+        # Headers
+        if stripped.startswith('### '):
+            if in_list:
+                html_lines.append('</ul>')
+                in_list = False
+            html_lines.append(f'<h3 id="{slugify(stripped[4:])}">{stripped[4:]}</h3>')
+        elif stripped.startswith('## '):
+            if in_list:
+                html_lines.append('</ul>')
+                in_list = False
+            html_lines.append(f'<h2 id="{slugify(stripped[3:])}">{stripped[3:]}</h2>')
+        elif stripped.startswith('# '):
+            if in_list:
+                html_lines.append('</ul>')
+                in_list = False
+            html_lines.append(f'<h1 id="{slugify(stripped[2:])}">{stripped[2:]}</h1>')
+        
+        # Horizontal rule
+        elif stripped == '---':
+            if in_list:
+                html_lines.append('</ul>')
+                in_list = False
+            html_lines.append('<hr>')
+        
+        # Table
+        elif '|' in stripped and stripped.startswith('|'):
+            if not in_table:
+                html_lines.append('<table>')
+                in_table = True
+                table_header_done = False
+            
+            # Skip separator row
+            if stripped.replace('|', '').replace('-', '').replace(':', '').strip() == '':
+                table_header_done = True
+                continue
+            
+            cells = [c.strip() for c in stripped.split('|')[1:-1]]
+            if not table_header_done:
+                html_lines.append('<thead><tr>')
+                for cell in cells:
+                    html_lines.append(f'<th>{cell}</th>')
+                html_lines.append('</tr></thead><tbody>')
+            else:
+                html_lines.append('<tr>')
+                for cell in cells:
+                    html_lines.append(f'<td>{inline_format(cell)}</td>')
+                html_lines.append('</tr>')
+        
+        # List items
+        elif stripped.startswith('- ') or stripped.startswith('* '):
+            if in_table:
+                html_lines.append('</tbody></table>')
+                in_table = False
+            if not in_list:
+                html_lines.append('<ul>')
+                in_list = True
+            html_lines.append(f'<li>{inline_format(stripped[2:])}</li>')
+        
+        # Numbered list
+        elif re.match(r'^\d+\. ', stripped):
+            if in_table:
+                html_lines.append('</tbody></table>')
+                in_table = False
+            content = re.sub(r'^\d+\. ', '', stripped)
+            if not in_list:
+                html_lines.append('<ol>')
+                in_list = True
+            html_lines.append(f'<li>{inline_format(content)}</li>')
+        
+        # Empty line
+        elif stripped == '':
+            if in_list:
+                html_lines.append('</ul>' if '</li>' in html_lines[-1] else '</ol>')
+                in_list = False
+            if in_table:
+                html_lines.append('</tbody></table>')
+                in_table = False
+        
+        # Paragraph
+        else:
+            if in_table:
+                html_lines.append('</tbody></table>')
+                in_table = False
+            if stripped:
+                html_lines.append(f'<p>{inline_format(stripped)}</p>')
+    
+    # Close any open lists/tables
+    if in_list:
+        html_lines.append('</ul>')
+    if in_table:
+        html_lines.append('</tbody></table>')
+    
+    return '\n'.join(html_lines)
+
+
+def inline_format(text: str) -> str:
+    """Apply inline markdown formatting (bold, italic, code)."""
+    # Bold
+    text = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', text)
+    # Italic
+    text = re.sub(r'\*(.+?)\*', r'<em>\1</em>', text)
+    # Code
+    text = re.sub(r'`(.+?)`', r'<code>\1</code>', text)
+    return text
+
+
+def slugify(text: str) -> str:
+    """Create URL-friendly slug from text."""
+    # Remove emoji and special chars
+    slug = re.sub(r'[^\w\s-]', '', text.lower())
+    slug = re.sub(r'[\s_]+', '-', slug)
+    return slug.strip('-')
+
+
+def generate_basic_toc(md_content: str) -> str:
+    """Generate table of contents HTML from markdown headers."""
+    toc_items = []
+    for line in md_content.split('\n'):
+        if line.startswith('## '):
+            title = line[3:].strip()
+            slug = slugify(title)
+            toc_items.append(f'<li><a href="#{slug}">{title}</a></li>')
+    
+    if toc_items:
+        return f'<ul>{"".join(toc_items)}</ul>'
+    return '<ul><li>No sections found</li></ul>'
+
+
+def wrap_sections(html_content: str) -> str:
+    """Wrap H2 sections in <section> tags for styling."""
+    # Split on h2 tags
+    parts = re.split(r'(<h2[^>]*>)', html_content)
+    
+    result = []
+    in_section = False
+    
+    for part in parts:
+        if part.startswith('<h2'):
+            if in_section:
+                result.append('</section>')
+            result.append('<section>')
+            in_section = True
+        result.append(part)
+    
+    if in_section:
+        result.append('</section>')
+    
+    return ''.join(result)
+
+
+def style_callouts(html_content: str) -> str:
+    """Add callout styling for key patterns."""
+    # Style "Key Takeaway" or similar patterns
+    html_content = re.sub(
+        r'<p><strong>(Key Takeaway|Recommendation|Note|Warning|Tip):</strong>',
+        r'<div class="callout"><p><strong>\1:</strong>',
+        html_content
+    )
+    # Close divs (simple heuristic - next paragraph)
+    html_content = re.sub(
+        r'(class="callout"><p>.*?</p>)\s*<p>',
+        r'\1</div>\n<p>',
+        html_content,
+        flags=re.DOTALL
+    )
+    return html_content
+
+
+def build_html_from_template(
+    project_name: str,
+    project_id: str,
+    date: str,
+    version: str,
+    health_score: int,
+    health_label: str,
+    health_summary: str,
+    toc: str,
+    content: str
+) -> str:
+    """Build complete HTML document from embedded template."""
+    
+    # Health banner HTML (only if score exists)
+    health_banner = ""
+    if health_score is not None:
+        health_banner = f'''
+  <div class="health-banner">
+    <div class="health-score">{health_score}<span>/100</span></div>
+    <div class="health-details">
+      <h2>Network Health: {health_label}</h2>
+      <p>{health_summary}</p>
+    </div>
+  </div>
+'''
+    
+    # Complete HTML template (embedded for portability)
+    html = f'''<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{project_name} — Network Insight Report</title>
+  <style>
+    /*
+     * C4C Design Contract
+     * -------------------
+     * teal    = structure (headers, section borders)
+     * indigo  = interactive (links, focus states)
+     * orange  = emphasis (health banner, accent)
+     * green   = positive valence (success, factors-positive)
+     * red     = negative valence (warning, factors-risk)
+     */
+    :root {{
+      /* C4C Brand Palette */
+      --c4c-teal: #0C7A7A;
+      --c4c-teal-light: #0e8f8f;
+      --c4c-orange: #EB9001;
+      --c4c-indigo: #2825BE;
+      --c4c-red: #CF4C38;
+      --c4c-green: #2d6a4f;
+      --c4c-purple: #6b2e77;
+      --c4c-rose: #E8A7A5;
+      
+      /* Semantic colors */
+      --primary: var(--c4c-teal);
+      --primary-light: var(--c4c-teal-light);
+      --accent: var(--c4c-orange);
+      --warning: var(--c4c-red);
+      --success: var(--c4c-green);
+      
+      /* Neutrals */
+      --text: #1a1a1a;
+      --text-light: #444;
+      --muted: #666;
+      --bg: #fafafa;
+      --card-bg: #fff;
+      --border: #e0e0e0;
+      --border-light: #f0f0f0;
+    }}
+    * {{ box-sizing: border-box; }}
+    body {{
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      line-height: 1.65;
+      color: var(--text);
+      max-width: 900px;
+      margin: 0 auto;
+      padding: 2rem;
+      background: var(--bg);
+    }}
+    /* Links - indigo for interactive elements */
+    a {{
+      color: var(--c4c-indigo);
+      text-decoration: none;
+    }}
+    a:hover {{ text-decoration: underline; }}
+    a:focus-visible {{
+      outline: 3px solid var(--c4c-indigo);
+      outline-offset: 2px;
+      border-radius: 4px;
+    }}
+    header {{
+      border-bottom: 3px solid var(--primary);
+      padding-bottom: 1.5rem;
+      margin-bottom: 2rem;
+    }}
+    .logo {{
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      margin-bottom: 0.5rem;
+    }}
+    .logo img {{
+      height: 32px;
+      width: auto;
+    }}
+    .logo span {{
+      font-size: 0.85rem;
+      font-weight: 700;
+      color: var(--primary);
+      letter-spacing: 0.5px;
+    }}
+    header h1 {{
+      font-size: 2rem;
+      font-weight: 700;
+      margin: 0.25rem 0;
+      color: var(--primary);
+    }}
+    .subtitle {{
+      font-size: 1.15rem;
+      color: var(--muted);
+      margin: 0;
+    }}
+    .meta {{
+      font-size: 0.85rem;
+      color: var(--muted);
+      margin-top: 0.75rem;
+    }}
+    .health-banner {{
+      background: var(--accent);
+      color: white;
+      padding: 1.5rem 2rem;
+      border-radius: 10px;
+      margin-bottom: 2rem;
+      display: flex;
+      align-items: center;
+      gap: 1.5rem;
+    }}
+    .health-score {{
+      font-size: 3rem;
+      font-weight: 700;
+      line-height: 1;
+    }}
+    .health-score span {{
+      font-size: 1.5rem;
+      opacity: 0.8;
+    }}
+    .health-details h2 {{
+      margin: 0;
+      font-size: 1.25rem;
+      font-weight: 600;
+    }}
+    .health-details p {{
+      margin: 0.25rem 0 0;
+      opacity: 0.9;
+    }}
+    .toc {{
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 1.5rem 2rem;
+      margin-bottom: 2rem;
+    }}
+    .toc h2 {{
+      font-size: 0.9rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin: 0 0 1rem;
+      color: var(--muted);
+    }}
+    .toc ul {{
+      list-style: none;
+      padding: 0;
+      margin: 0;
+      columns: 2;
+      column-gap: 2rem;
+    }}
+    .toc li {{
+      margin-bottom: 0.5rem;
+    }}
+    .toc a {{
+      color: var(--c4c-indigo);
+      text-decoration: none;
+    }}
+    .toc a:hover {{
+      text-decoration: underline;
+    }}
+    section {{
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 2rem;
+      margin-bottom: 1.5rem;
+    }}
+    section h2 {{
+      margin: 0 0 1rem;
+      padding-bottom: 0.75rem;
+      border-bottom: 1px solid var(--border);
+      color: var(--primary);
+      font-size: 1.35rem;
+    }}
+    h3 {{
+      color: var(--text);
+      font-size: 1.1rem;
+      margin: 1.5rem 0 0.75rem;
+    }}
+    h4 {{
+      color: var(--text-light);
+      font-size: 1rem;
+      margin: 1.25rem 0 0.5rem;
+    }}
+    p {{ margin: 0 0 1rem; }}
+    table {{
+      width: 100%;
+      border-collapse: collapse;
+      margin: 1rem 0;
+      font-size: 0.9rem;
+      display: block;
+      overflow-x: auto;
+    }}
+    th, td {{
+      padding: 0.75rem 1rem;
+      text-align: left;
+      border-bottom: 1px solid var(--border-light);
+      vertical-align: top;
+    }}
+    th {{
+      background: var(--bg);
+      font-weight: 600;
+      color: var(--text-light);
+      font-size: 0.8rem;
+      text-transform: uppercase;
+    }}
+    tr:nth-child(even) {{ background: rgba(0,0,0,0.02); }}
+    tr:hover {{ background: rgba(0,0,0,0.04); }}
+    ul, ol {{
+      padding-left: 1.5rem;
+      margin: 0.75rem 0;
+    }}
+    li {{ margin-bottom: 0.4rem; }}
+    /* Callouts - semantic rgba backgrounds */
+    .callout {{
+      background: rgba(12, 122, 122, 0.08);
+      border-left: 4px solid var(--primary);
+      padding: 1rem 1.25rem;
+      margin: 1rem 0;
+      border-radius: 0 8px 8px 0;
+    }}
+    .callout p {{ margin: 0; }}
+    .callout strong {{ color: inherit; }}
+    .callout-warning {{
+      background: rgba(207, 76, 56, 0.10);
+      border-left-color: var(--warning);
+    }}
+    .callout-success {{
+      background: rgba(45, 106, 79, 0.10);
+      border-left-color: var(--success);
+    }}
+    .callout-info {{
+      background: rgba(40, 37, 190, 0.08);
+      border-left-color: var(--c4c-indigo);
+    }}
+    code {{
+      background: var(--bg);
+      padding: 0.15rem 0.4rem;
+      border-radius: 4px;
+      font-size: 0.85em;
+    }}
+    hr {{
+      border: none;
+      border-top: 1px solid var(--border);
+      margin: 2rem 0;
+    }}
+    footer {{
+      margin-top: 3rem;
+      padding-top: 1.5rem;
+      border-top: 1px solid var(--border);
+      text-align: center;
+      color: var(--muted);
+      font-size: 0.85rem;
+    }}
+    footer a {{
+      color: var(--c4c-indigo);
+      text-decoration: none;
+    }}
+    footer a:hover {{ text-decoration: underline; }}
+    strong {{ color: var(--text); }}
+    @media print {{
+      body {{ background: #fff; padding: 0; max-width: none; }}
+      section {{ break-inside: avoid; border: none; box-shadow: none; }}
+      .toc {{ break-after: page; }}
+      .health-banner {{ 
+        background: var(--accent);
+        -webkit-print-color-adjust: exact; 
+        print-color-adjust: exact; 
+      }}
+      a {{ text-decoration: none; color: inherit; }}
+    }}
+    @media screen {{
+      .health-banner {{
+        background: linear-gradient(135deg, var(--c4c-orange), #f5a623);
+      }}
+    }}
+    @media (max-width: 600px) {{
+      body {{ padding: 1rem; }}
+      .toc ul {{ columns: 1; }}
+      .health-banner {{ flex-direction: column; text-align: center; }}
+    }}
+  </style>
+</head>
+<body>
+  <header>
+    <div class="logo">
+      <img src="data:image/jpeg;base64,{C4C_LOGO_BASE64}" alt="C4C">
+      <span>NETWORK INSIGHT</span>
+    </div>
+    <h1>{project_name}</h1>
+    <p class="subtitle">Network Insight Report</p>
+    <p class="meta">Generated {date} • InsightGraph v{version}</p>
+  </header>
+
+{health_banner}
+
+  <nav class="toc">
+    <h2>Contents</h2>
+    {toc}
+  </nav>
+
+  <main>
+    {content}
+  </main>
+
+  <footer>
+    <p class="data-outputs">
+      <strong>Data:</strong>
+      <a href="data/nodes.csv">nodes.csv</a> •
+      <a href="data/edges.csv">edges.csv</a> •
+      <a href="data/grants_detail.csv">grants_detail.csv</a>
+    </p>
+    <p class="traceability">
+      Project: {project_id} •
+      <a href="manifest.json">View Manifest</a> •
+      <a href="report.md">Source Markdown</a>
+    </p>
+    <p class="brand">Generated by <strong>C4C InsightGraph</strong> — Network Insight Platform</p>
+  </footer>
+</body>
+</html>'''
+    
+    return html
 
 
 # =============================================================================
