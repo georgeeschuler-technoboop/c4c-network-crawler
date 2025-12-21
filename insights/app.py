@@ -80,8 +80,9 @@ from c4c_utils.c4c_supabase import C4CSupabase
 # Config
 # =============================================================================
 
-APP_VERSION = "0.10.0"  # Bundle export with manifest.json
-C4C_LOGO_URL = "https://static.wixstatic.com/media/275a3f_ed8e76c8495d4799a5d7575822009e93~mv2.png"
+APP_VERSION = "0.11.0"  # HTML report rendering in bundle
+C4C_LOGO_URL = "https://static.wixstatic.com/media/275a3f_9c48d5079fcf4b688606c81d8f34d5a5~mv2.jpg"
+INSIGHTGRAPH_ICON_URL = "https://static.wixstatic.com/media/275a3f_7736e28c9f5e40c1b2407e09dc5cb6e7~mv2.png"
 
 DEMO_DATA_DIR = REPO_ROOT / "demo_data"
 
@@ -111,7 +112,7 @@ GRANT_BUCKETS = {
 
 st.set_page_config(
     page_title="InsightGraph",
-    page_icon=C4C_LOGO_URL,
+    page_icon=INSIGHTGRAPH_ICON_URL,
     layout="wide"
 )
 
@@ -1134,8 +1135,10 @@ def render_downloads(data: dict):
     has_edges = data.get("edges_df") is not None
     
     def create_bundle_zip():
-        """Create structured bundle ZIP with manifest."""
+        """Create structured bundle ZIP with manifest and HTML report."""
         zip_buffer = BytesIO()
+        run_module = load_run_module()
+        
         with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
             # Analysis outputs
             if has_metrics:
@@ -1145,9 +1148,22 @@ def render_downloads(data: dict):
             if has_summary:
                 zf.writestr("analysis/project_summary.json", json.dumps(data["project_summary"], indent=2))
             
-            # Report
+            # Markdown report
             if has_report:
                 zf.writestr("report.md", data["markdown_report"])
+            
+            # HTML report (primary deliverable)
+            if has_report and run_module and hasattr(run_module, 'render_html_report'):
+                try:
+                    html_report = run_module.render_html_report(
+                        markdown_content=data["markdown_report"],
+                        project_summary=data.get("project_summary", {}),
+                        insight_cards=data.get("insight_cards", {}),
+                        project_id=data.get("project_id", "report")
+                    )
+                    zf.writestr("index.html", html_report)
+                except Exception as e:
+                    print(f"Warning: Could not generate HTML report: {e}")
             
             # Input data (if available)
             if has_nodes:
@@ -1159,7 +1175,6 @@ def render_downloads(data: dict):
             
             # Generate manifest
             try:
-                run_module = load_run_module()
                 if run_module and hasattr(run_module, 'generate_manifest'):
                     manifest = run_module.generate_manifest(
                         project_id=data.get("project_id", "unknown"),
@@ -1195,12 +1210,37 @@ def render_downloads(data: dict):
         return zip_buffer.getvalue()
     
     # Primary downloads
-    col1, col2 = st.columns([2, 1])
+    col1, col2, col3 = st.columns([2, 1, 1])
+    
+    # Generate HTML report for download button
+    html_report = None
+    if has_report:
+        run_module = load_run_module()
+        if run_module and hasattr(run_module, 'render_html_report'):
+            try:
+                html_report = run_module.render_html_report(
+                    markdown_content=data["markdown_report"],
+                    project_summary=data.get("project_summary", {}),
+                    insight_cards=data.get("insight_cards", {}),
+                    project_id=data.get("project_id", "report")
+                )
+            except Exception as e:
+                print(f"Warning: Could not generate HTML report: {e}")
     
     with col1:
-        if has_report:
+        if html_report:
             st.download_button(
-                "📝 Download Insight Report (Markdown)",
+                "📄 Download Report (HTML)",
+                data=html_report,
+                file_name=f"{data['project_id']}_report.html",
+                mime="text/html",
+                type="primary",
+                use_container_width=True,
+                help="Open in browser, print to PDF"
+            )
+        elif has_report:
+            st.download_button(
+                "📝 Download Report (Markdown)",
                 data=data["markdown_report"],
                 file_name="insight_report.md",
                 mime="text/markdown",
@@ -1213,12 +1253,23 @@ def render_downloads(data: dict):
     with col2:
         if has_report or has_cards or has_summary or has_metrics:
             st.download_button(
-                "📦 Download Bundle (ZIP)",
+                "📦 Bundle (ZIP)",
                 data=create_bundle_zip(),
                 file_name=f"{data['project_id']}_insights.zip",
                 mime="application/zip",
                 use_container_width=True,
-                help="Structured bundle with manifest, data, and analysis"
+                help="Full bundle with data, manifest, HTML & Markdown"
+            )
+    
+    with col3:
+        if has_report:
+            st.download_button(
+                "📝 Markdown",
+                data=data["markdown_report"],
+                file_name="insight_report.md",
+                mime="text/markdown",
+                use_container_width=True,
+                help="Source markdown file"
             )
     
     # Cloud save option
