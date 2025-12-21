@@ -12,4 +12,4 @@ networkx
 scipy
 pypdf
 openpyxl
-
+supabase>=2.0.0
