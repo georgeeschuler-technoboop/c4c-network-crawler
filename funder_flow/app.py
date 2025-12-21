@@ -352,12 +352,16 @@ def save_to_cloud(project_name: str, nodes_df: pd.DataFrame, edges_df: pd.DataFr
                     return False
             
             # Save data
+            st.info(f"🔍 Attempting save: nodes={len(nodes_df) if nodes_df is not None else 0}, edges={len(edges_df) if edges_df is not None else 0}, grants={len(grants_df) if grants_df is not None and not grants_df.empty else 0}")
+            
             results = db.save_project_data(
                 project_id=project["id"],
                 nodes_df=nodes_df,
                 edges_df=edges_df,
                 grants_df=grants_df if grants_df is not None else None
             )
+            
+            st.info(f"🔍 Results: {results}")
             
             grants_msg = f", {results.get('grants', 0)} grants" if results.get('grants', 0) > 0 else ""
             st.success(f"☁️ Saved to cloud: {results.get('nodes', 0)} nodes, {results.get('edges', 0)} edges{grants_msg}")
