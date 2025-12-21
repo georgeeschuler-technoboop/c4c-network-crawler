@@ -12,6 +12,14 @@ Usage:
 
 VERSION HISTORY:
 ----------------
+v3.0.9 (2025-12-21): HTML rendering improvements
+- FIX: Blockquotes (> lines) now render as styled callouts
+- FIX: Duplicate H1 removed (skip first H1 in markdown)
+- FIX: Health banner now appears (fixed insight_cards["health"] key)
+- NEW: Use Case labels styled with capsule
+- NEW: Signal indicators (🟢🟡🔴) styled as pills
+- NEW: CSS for .use-case, .signal-green/yellow/red classes
+
 v3.0.8 (2025-12-21): Fixed region lens membership
 - FIX: Check 'state' column first, then 'region' as fallback
 - FIX: Funders without state data default to in-lens (they define the network)
@@ -76,7 +84,7 @@ from collections import defaultdict
 # Version
 # =============================================================================
 
-ENGINE_VERSION = "3.0.8"
+ENGINE_VERSION = "3.0.9"
 BUNDLE_FORMAT_VERSION = "1.0"
 
 # C4C logo as base64 (80px, ~4KB) for self-contained HTML reports
@@ -1989,8 +1997,11 @@ def generate_manifest(
         }
     
     # Add health score if available in insight_cards
-    if insight_cards and "network_health" in insight_cards:
-        health = insight_cards["network_health"]
+    health = None
+    if insight_cards:
+        health = insight_cards.get("health") or insight_cards.get("network_health")
+    
+    if health:
         manifest["stats"]["health"] = {
             "score": health.get("score", 0),
             "label": health.get("label", "Unknown")
@@ -2039,8 +2050,12 @@ def render_html_report(
     health_label = "Unknown"
     health_summary = ""
     
-    if insight_cards and "network_health" in insight_cards:
-        health = insight_cards["network_health"]
+    # Check for health in insight_cards (can be under "health" or "network_health")
+    health = None
+    if insight_cards:
+        health = insight_cards.get("health") or insight_cards.get("network_health")
+    
+    if health:
         health_score = health.get("score")
         health_label = health.get("label", "Unknown")
         # Create a brief summary
@@ -2108,27 +2123,67 @@ def basic_markdown_to_html(md_content: str) -> str:
     html_lines = []
     in_list = False
     in_table = False
+    in_blockquote = False
     table_header_done = False
+    skip_first_h1 = True  # Skip first H1 (duplicate of header)
     
     for line in lines:
         stripped = line.strip()
         
-        # Headers
-        if stripped.startswith('### '):
+        # Close blockquote if we're leaving it
+        if in_blockquote and not stripped.startswith('>'):
+            html_lines.append('</div>')
+            in_blockquote = False
+        
+        # Blockquotes → Callouts
+        if stripped.startswith('> '):
             if in_list:
                 html_lines.append('</ul>')
                 in_list = False
-            html_lines.append(f'<h3 id="{slugify(stripped[4:])}">{stripped[4:]}</h3>')
+            if in_table:
+                html_lines.append('</tbody></table>')
+                in_table = False
+            
+            content = stripped[2:].strip()
+            
+            # Detect callout type from content
+            callout_class = 'callout'
+            if any(word in content.lower() for word in ['warning', 'risk', 'weak', 'vulnerability', 'concern']):
+                callout_class = 'callout callout-warning'
+            elif any(word in content.lower() for word in ['strong', 'positive', 'opportunity', 'strength']):
+                callout_class = 'callout callout-success'
+            elif any(word in content.lower() for word in ['note', 'info', 'signal']):
+                callout_class = 'callout callout-info'
+            
+            if not in_blockquote:
+                html_lines.append(f'<div class="{callout_class}">')
+                in_blockquote = True
+            
+            html_lines.append(f'<p>{inline_format(content)}</p>')
+            continue
+        
+        # Headers
+        if stripped.startswith('# ') and not stripped.startswith('## '):
+            if in_list:
+                html_lines.append('</ul>')
+                in_list = False
+            # Skip first H1 (already in page header)
+            if skip_first_h1:
+                skip_first_h1 = False
+                continue
+            html_lines.append(f'<h1 id="{slugify(stripped[2:])}">{inline_format(stripped[2:])}</h1>')
+        
+        elif stripped.startswith('### '):
+            if in_list:
+                html_lines.append('</ul>')
+                in_list = False
+            html_lines.append(f'<h3 id="{slugify(stripped[4:])}">{inline_format(stripped[4:])}</h3>')
+        
         elif stripped.startswith('## '):
             if in_list:
                 html_lines.append('</ul>')
                 in_list = False
-            html_lines.append(f'<h2 id="{slugify(stripped[3:])}">{stripped[3:]}</h2>')
-        elif stripped.startswith('# '):
-            if in_list:
-                html_lines.append('</ul>')
-                in_list = False
-            html_lines.append(f'<h1 id="{slugify(stripped[2:])}">{stripped[2:]}</h1>')
+            html_lines.append(f'<h2 id="{slugify(stripped[3:])}">{inline_format(stripped[3:])}</h2>')
         
         # Horizontal rule
         elif stripped == '---':
@@ -2191,15 +2246,26 @@ def basic_markdown_to_html(md_content: str) -> str:
                 html_lines.append('</tbody></table>')
                 in_table = False
         
-        # Paragraph
+        # Paragraph (with signal pill detection)
         else:
             if in_table:
                 html_lines.append('</tbody></table>')
                 in_table = False
             if stripped:
-                html_lines.append(f'<p>{inline_format(stripped)}</p>')
+                # Detect "Use Case:" labels
+                if stripped.startswith('*Use Case:'):
+                    content = stripped.replace('*Use Case:', '').replace('*', '').strip()
+                    html_lines.append(f'<p class="use-case"><span class="label">Use Case:</span> {content}</p>')
+                # Detect signal indicators
+                elif stripped.startswith('🟢') or stripped.startswith('🟡') or stripped.startswith('🔴'):
+                    signal_class = 'signal-green' if '🟢' in stripped else ('signal-yellow' if '🟡' in stripped else 'signal-red')
+                    html_lines.append(f'<p class="signal {signal_class}">{inline_format(stripped)}</p>')
+                else:
+                    html_lines.append(f'<p>{inline_format(stripped)}</p>')
     
-    # Close any open lists/tables
+    # Close any open elements
+    if in_blockquote:
+        html_lines.append('</div>')
     if in_list:
         html_lines.append('</ul>')
     if in_table:
@@ -2543,6 +2609,40 @@ def build_html_from_template(
     .callout-info {{
       background: rgba(40, 37, 190, 0.08);
       border-left-color: var(--c4c-indigo);
+    }}
+    /* Use Case labels */
+    .use-case {{
+      font-size: 0.9rem;
+      color: var(--muted);
+      margin-bottom: 0.5rem;
+    }}
+    .use-case .label {{
+      font-weight: 600;
+      color: var(--primary);
+      text-transform: uppercase;
+      font-size: 0.75rem;
+      letter-spacing: 0.5px;
+    }}
+    /* Signal indicators */
+    .signal {{
+      display: inline-block;
+      padding: 0.25rem 0.75rem;
+      border-radius: 12px;
+      font-size: 0.85rem;
+      font-weight: 500;
+      margin: 0.5rem 0;
+    }}
+    .signal-green {{
+      background: rgba(45, 106, 79, 0.15);
+      color: var(--c4c-green);
+    }}
+    .signal-yellow {{
+      background: rgba(235, 144, 1, 0.15);
+      color: #b36d00;
+    }}
+    .signal-red {{
+      background: rgba(207, 76, 56, 0.15);
+      color: var(--c4c-red);
     }}
     code {{
       background: var(--bg);
