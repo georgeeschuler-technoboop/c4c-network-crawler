@@ -1438,7 +1438,7 @@ def main():
     # ==========================================================================
     col_logo, col_title = st.columns([0.08, 0.92])
     with col_logo:
-        st.image(C4C_LOGO_URL, width=60)
+        st.image(INSIGHTGRAPH_ICON_URL, width=60)
     with col_title:
         st.title("InsightGraph")
     
