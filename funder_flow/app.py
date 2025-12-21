@@ -13,6 +13,11 @@ Outputs conform to C4C Network Schema v1 (MVP):
 
 VERSION HISTORY:
 ----------------
+UPDATED v0.17.0: Network Role in Polinode export
+- Added `Network Role` column: Funder, Grantee, Funder / Grantee, Board Member
+- Derived from edge relationships (who gives grants, receives grants, serves on boards)
+- Enables filtering/coloring by role in Polinode visualization
+
 UPDATED v0.16.0: Polinode export improvements
 - Name canonicalization (Unicode NFKC, whitespace, quotes, hyphens)
 - Duplicate node names deduplicated (prefers ORG over PERSON)
@@ -65,7 +70,7 @@ from c4c_utils.summary_helpers import build_grant_network_summary, summarize_gra
 # =============================================================================
 # Constants
 # =============================================================================
-APP_VERSION = "0.15.0"  # Added grants_detail.csv project save + append behavior
+APP_VERSION = "0.17.0"  # Added network_role to Polinode export (Funder/Grantee/Board Member)
 MAX_FILES = 50
 C4C_LOGO_URL = "https://static.wixstatic.com/media/275a3f_25063966d6cd496eb2fe3f6ee5cde0fa~mv2.png"
 SOURCE_SYSTEM = "IRS_990"
@@ -1442,6 +1447,49 @@ def generate_polinode_excel(poli_nodes: pd.DataFrame, poli_edges: pd.DataFrame) 
     return excel_buffer.getvalue()
 
 
+def derive_network_roles(nodes_df: pd.DataFrame, edges_df: pd.DataFrame) -> dict:
+    """
+    Derive network role for each node based on edge relationships.
+    
+    Roles:
+    - Funder: ORG appears as from_id in GRANT edges
+    - Grantee: ORG appears as to_id in GRANT edges
+    - Funder / Grantee: ORG appears in both positions
+    - Board Member: PERSON appears as from_id in BOARD_MEMBERSHIP edges
+    - Person: PERSON with no board edges
+    - Organization: ORG with no grant edges
+    
+    Returns:
+        dict mapping node_id -> network_role string
+    """
+    if edges_df.empty:
+        return {}
+    
+    grant_edges = edges_df[edges_df['edge_type'] == 'GRANT']
+    board_edges = edges_df[edges_df['edge_type'] == 'BOARD_MEMBERSHIP']
+    
+    funder_ids = set(grant_edges['from_id']) if not grant_edges.empty else set()
+    grantee_ids = set(grant_edges['to_id']) if not grant_edges.empty else set()
+    board_member_ids = set(board_edges['from_id']) if not board_edges.empty else set()
+    
+    roles = {}
+    for _, row in nodes_df.iterrows():
+        node_id = row['node_id']
+        node_type = row.get('node_type', '')
+        
+        if node_type == 'PERSON':
+            roles[node_id] = 'Board Member' if node_id in board_member_ids else 'Person'
+        else:
+            node_roles = []
+            if node_id in funder_ids:
+                node_roles.append('Funder')
+            if node_id in grantee_ids:
+                node_roles.append('Grantee')
+            roles[node_id] = ' / '.join(node_roles) if node_roles else 'Organization'
+    
+    return roles
+
+
 def convert_to_polinode_format(nodes_df: pd.DataFrame, edges_df: pd.DataFrame) -> tuple:
     """
     Convert internal node/edge format to Polinode-compatible format.
@@ -1461,9 +1509,13 @@ def convert_to_polinode_format(nodes_df: pd.DataFrame, edges_df: pd.DataFrame) -
     if nodes_df.empty:
         return pd.DataFrame(), pd.DataFrame()
     
+    # Compute network roles for all nodes
+    network_roles = derive_network_roles(nodes_df, edges_df)
+    
     # Build node_id → canonicalized label mapping, handling duplicates
     id_to_label = {}
     label_to_row = {}  # Track best row per label (prefer ORG over PERSON for duplicates)
+    label_to_id = {}   # Track node_id for each label (for role lookup)
     
     for idx, row in nodes_df.iterrows():
         node_id = row['node_id']
@@ -1477,8 +1529,10 @@ def convert_to_polinode_format(nodes_df: pd.DataFrame, edges_df: pd.DataFrame) -
             # If existing is PERSON and this one is ORG, replace
             if existing_type == 'PERSON' and node_type == 'ORG':
                 label_to_row[canon_label] = row
+                label_to_id[canon_label] = node_id
         else:
             label_to_row[canon_label] = row
+            label_to_id[canon_label] = node_id
         
         # Always map this ID to the canonical label
         id_to_label[node_id] = canon_label
@@ -1486,9 +1540,11 @@ def convert_to_polinode_format(nodes_df: pd.DataFrame, edges_df: pd.DataFrame) -
     # --- Nodes (deduplicated) ---
     poli_nodes_data = []
     for canon_label, row in label_to_row.items():
+        node_id = label_to_id.get(canon_label)
         node_dict = {
             'Name': canon_label,
             'Type': row.get('node_type', ''),
+            'Network Role': network_roles.get(node_id, ''),
         }
         # Add optional attributes
         if 'city' in row.index and pd.notna(row.get('city')):
