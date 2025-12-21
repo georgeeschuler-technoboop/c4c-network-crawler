@@ -6,6 +6,18 @@ Reads exported data from OrgGraph US/CA projects.
 
 VERSION HISTORY:
 ----------------
+UPDATED v0.11.0: HTML report rendering
+- NEW: HTML download button as primary (styled, print-ready)
+- NEW: index.html included in bundle ZIP
+- Three-column download layout: HTML | Bundle | Markdown
+- Updated app icon to InsightGraph icon
+
+UPDATED v0.10.0: Bundle export with manifest.json
+- NEW: Structured bundle ZIP (data/, analysis/ folders)
+- NEW: manifest.json with metadata, inputs, outputs, stats
+- Traceability: SHA256 hashes, row counts, config snapshot
+- Backward-compatible flat ZIP still available
+
 UPDATED v0.9.0: Supabase cloud storage integration
 - Added cloud save/load functionality
 - User authentication via Supabase
