@@ -265,20 +265,21 @@ def render_cloud_status():
     db = st.session_state.get("supabase_db")
     
     if not db:
-        st.sidebar.caption("☁️ Cloud offline")
+        st.sidebar.caption("☁️ Cloud unavailable")
         return None
     
     if db.is_authenticated:
         user = db.get_user()
-        st.sidebar.success(f"☁️ {user['email']}")
-        if st.sidebar.button("Logout", key="cloud_logout"):
+        # Logged in: show email + logout button
+        st.sidebar.caption(f"☁️ {user['email']}")
+        if st.sidebar.button("Logout", key="cloud_logout", use_container_width=True):
             db.logout()
             st.rerun()
         return db
     else:
-        with st.sidebar.expander("☁️ Cloud Login", expanded=False):
-            st.caption("Save projects to the cloud for backup and sharing.")
-            
+        # Not logged in: show status, then collapsible login form
+        st.sidebar.caption("☁️ Not connected")
+        with st.sidebar.expander("Login / Sign Up", expanded=False):
             tab1, tab2 = st.tabs(["Login", "Sign Up"])
             
             with tab1:
