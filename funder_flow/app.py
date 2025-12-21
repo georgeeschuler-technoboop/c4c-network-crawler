@@ -313,6 +313,11 @@ def save_to_cloud(project_name: str, nodes_df: pd.DataFrame, edges_df: pd.DataFr
         st.error("❌ Login required to save to cloud")
         return False
     
+    # Debug: check what we're receiving
+    print(f"DEBUG save_to_cloud: nodes={len(nodes_df) if nodes_df is not None else 'None'}, edges={len(edges_df) if edges_df is not None else 'None'}, grants={len(grants_df) if grants_df is not None else 'None'}")
+    if grants_df is not None and not grants_df.empty:
+        print(f"DEBUG save_to_cloud: grants_df columns = {list(grants_df.columns)}")
+    
     # Create slug from project name
     slug = project_name.lower().replace(" ", "-").replace("_", "-")
     slug = "".join(c for c in slug if c.isalnum() or c == "-")
