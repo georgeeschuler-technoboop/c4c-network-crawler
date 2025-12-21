@@ -80,7 +80,7 @@ from c4c_utils.c4c_supabase import C4CSupabase
 # Config
 # =============================================================================
 
-APP_VERSION = "0.9.0"  # Supabase cloud storage integration
+APP_VERSION = "0.10.0"  # Bundle export with manifest.json
 C4C_LOGO_URL = "https://static.wixstatic.com/media/275a3f_ed8e76c8495d4799a5d7575822009e93~mv2.png"
 
 DEMO_DATA_DIR = REPO_ROOT / "demo_data"
@@ -1130,8 +1130,57 @@ def render_downloads(data: dict):
     has_cards = data.get("insight_cards") is not None
     has_summary = data.get("project_summary") is not None
     has_metrics = data.get("metrics_df") is not None
+    has_nodes = data.get("nodes_df") is not None
+    has_edges = data.get("edges_df") is not None
     
-    def create_zip():
+    def create_bundle_zip():
+        """Create structured bundle ZIP with manifest."""
+        zip_buffer = BytesIO()
+        with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
+            # Analysis outputs
+            if has_metrics:
+                zf.writestr("analysis/node_metrics.csv", data["metrics_df"].to_csv(index=False))
+            if has_cards:
+                zf.writestr("analysis/insight_cards.json", json.dumps(data["insight_cards"], indent=2))
+            if has_summary:
+                zf.writestr("analysis/project_summary.json", json.dumps(data["project_summary"], indent=2))
+            
+            # Report
+            if has_report:
+                zf.writestr("report.md", data["markdown_report"])
+            
+            # Input data (if available)
+            if has_nodes:
+                zf.writestr("data/nodes.csv", data["nodes_df"].to_csv(index=False))
+            if has_edges:
+                zf.writestr("data/edges.csv", data["edges_df"].to_csv(index=False))
+            if data.get("grants_df") is not None and not data["grants_df"].empty:
+                zf.writestr("data/grants_detail.csv", data["grants_df"].to_csv(index=False))
+            
+            # Generate manifest
+            try:
+                run_module = load_run_module()
+                if run_module and hasattr(run_module, 'generate_manifest'):
+                    manifest = run_module.generate_manifest(
+                        project_id=data.get("project_id", "unknown"),
+                        project_summary=data.get("project_summary", {}),
+                        insight_cards=data.get("insight_cards", {}),
+                        nodes_df=data.get("nodes_df"),
+                        edges_df=data.get("edges_df"),
+                        grants_df=data.get("grants_df"),
+                        region_lens_config=data.get("region_lens_config"),
+                        cloud_project_id=data.get("cloud_project_id")
+                    )
+                    zf.writestr("manifest.json", json.dumps(manifest, indent=2))
+            except Exception as e:
+                print(f"Warning: Could not generate manifest: {e}")
+                # Continue without manifest
+        
+        zip_buffer.seek(0)
+        return zip_buffer.getvalue()
+    
+    # Legacy flat ZIP for backward compatibility
+    def create_flat_zip():
         zip_buffer = BytesIO()
         with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
             if has_metrics:
@@ -1164,11 +1213,12 @@ def render_downloads(data: dict):
     with col2:
         if has_report or has_cards or has_summary or has_metrics:
             st.download_button(
-                "📦 Download All (ZIP)",
-                data=create_zip(),
+                "📦 Download Bundle (ZIP)",
+                data=create_bundle_zip(),
                 file_name=f"{data['project_id']}_insights.zip",
                 mime="application/zip",
-                use_container_width=True
+                use_container_width=True,
+                help="Structured bundle with manifest, data, and analysis"
             )
     
     # Cloud save option
