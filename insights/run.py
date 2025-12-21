@@ -12,6 +12,11 @@ Usage:
 
 VERSION HISTORY:
 ----------------
+v3.0.11 (2025-12-21): Portfolio Twins fix
+- FIX: Portfolio Twins now shows pair names (e.g., "Funder A ↔ Funder B")
+- FIX: Added rank to each pair for proper rendering
+- FIX: Markdown rendering shows entities even without explicit rank
+
 v3.0.10 (2025-12-21): Fixed region lens funder fallback
 - FIX: Column name was 'network_role' but should be 'network_role_code'
 - Funders without state data now correctly default to in-lens
@@ -88,7 +93,7 @@ from collections import defaultdict
 # Version
 # =============================================================================
 
-ENGINE_VERSION = "3.0.10"
+ENGINE_VERSION = "3.0.11"
 BUNDLE_FORMAT_VERSION = "1.0"
 
 # C4C logo as base64 (80px, ~4KB) for self-contained HTML reports
@@ -993,13 +998,14 @@ def generate_insight_cards(nodes_df, edges_df, metrics_df, interlock_graph, flow
             twin_narrative = f"Some portfolio overlap exists, but even the closest funder pairs share few grantees."
         
         ranked_rows = []
-        for _, r in overlap_df.head(5).iterrows():
-            f1, f2 = node_labels.get(r['funder_1'], ''), node_labels.get(r['funder_2'], '')
+        for rank, (_, r) in enumerate(overlap_df.head(5).iterrows(), 1):
+            f1, f2 = node_labels.get(r['funder_1'], r['funder_1']), node_labels.get(r['funder_2'], r['funder_2'])
             ranked_rows.append({
-                "pair": f"{f1} & {f2}",
+                "rank": rank,
+                "pair": f"{f1} ↔ {f2}",
                 "shared": int(r['shared_grantees']),
-                "jaccard": r['jaccard_similarity'],
-                "narrative": f"These funders share {int(r['shared_grantees'])} grantees — natural partners for coordination."
+                "jaccard": round(r['jaccard_similarity'], 2),
+                "narrative": f"Share **{int(r['shared_grantees'])} grantees** (Jaccard: {r['jaccard_similarity']:.2f}) — natural partners for coordination."
             })
         
         cards.append({
@@ -1766,8 +1772,8 @@ def generate_markdown_report(insight_cards: dict, project_summary: dict, project
             has_narratives = any(r.get("narrative") for r in ranked_rows)
             
             if has_narratives:
-                for row in ranked_rows:
-                    rank = row.get("rank", "")
+                for idx, row in enumerate(ranked_rows, 1):
+                    rank = row.get("rank", idx)  # Default to index if no rank
                     entity = (
                         row.get("grantee") or 
                         row.get("person") or 
@@ -1778,7 +1784,7 @@ def generate_markdown_report(insight_cards: dict, project_summary: dict, project
                         ""
                     )
                     
-                    if rank and entity:
+                    if entity:
                         lines.append(f"### {rank}. {entity}")
                         lines.append("")
                     
