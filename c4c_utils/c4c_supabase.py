@@ -433,6 +433,7 @@ class C4CSupabase:
         print(f"DEBUG save_grants_detail: {len(grants_df)} rows, columns: {list(grants_df.columns)}")
         
         # Column aliases (OrgGraph exports → Supabase schema)
+        # Use alias value if target column is missing OR empty
         column_aliases = {
             "foundation_ein": "funder_id",
             "foundation_name": "funder_name",
@@ -441,12 +442,15 @@ class C4CSupabase:
             "tax_year": "fiscal_year",
         }
         
-        # Apply aliases
+        # Apply aliases - overwrite if target is missing or all null
         df = grants_df.copy()
         for old_col, new_col in column_aliases.items():
-            if old_col in df.columns and new_col not in df.columns:
-                df[new_col] = df[old_col]
-                print(f"DEBUG: Aliased {old_col} → {new_col}")
+            if old_col in df.columns:
+                # Check if target column is missing or all empty/null
+                target_empty = new_col not in df.columns or df[new_col].isna().all() or (df[new_col].astype(str).str.strip() == '').all()
+                if target_empty:
+                    df[new_col] = df[old_col]
+                    print(f"DEBUG: Aliased {old_col} → {new_col}")
         
         # Generate grant_id if not present
         if "grant_id" not in df.columns:
@@ -667,8 +671,11 @@ class C4CSupabase:
         if edges_df is not None:
             results["edges"] = self.save_edges(project_id, edges_df)
         
+        print(f"DEBUG save_project_data: grants_df is None={grants_df is None}, empty={grants_df.empty if grants_df is not None else 'N/A'}")
         if grants_df is not None:
+            print(f"DEBUG save_project_data: calling save_grants_detail with {len(grants_df)} rows")
             results["grants"] = self.save_grants_detail(project_id, grants_df)
+            print(f"DEBUG save_project_data: save_grants_detail returned {results.get('grants', 'MISSING')}")
         
         if project_summary is not None:
             self.save_artifact(project_id, "project_summary", project_summary)
