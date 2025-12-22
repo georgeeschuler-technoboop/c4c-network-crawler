@@ -12,6 +12,12 @@ Usage:
 
 VERSION HISTORY:
 ----------------
+v3.0.23 (2025-12-22): Synthesis guides wired into export
+- NEW: write_synthesis_guides() embeds guide content directly in run.py
+- NEW: write_export_bundle() writes manifest.json + guides in one call
+- NEW: run() now writes manifest.json and guides/ folder automatically
+- Guides embedded as constants (no external template files needed)
+
 v3.0.22 (2025-12-22): Synthesis metadata in manifest
 - NEW: manifest["synthesis"] block with downstream tool guidance
 - NEW: synthesis_guides output paths in manifest
@@ -173,7 +179,7 @@ from collections import defaultdict
 # Version
 # =============================================================================
 
-ENGINE_VERSION = "3.0.22"
+ENGINE_VERSION = "3.0.23"
 BUNDLE_FORMAT_VERSION = "1.0"
 
 # C4C logo as base64 (80px, ~4KB) for self-contained HTML reports
@@ -2438,6 +2444,292 @@ def generate_manifest(
     return manifest
 
 
+# =============================================================================
+# Synthesis Guide Content (embedded for self-contained exports)
+# =============================================================================
+
+SYNTHESIS_MODE_PROMPT_CONTENT = """# Synthesis Mode Prompt
+
+**Purpose:** Instructions for AI tools generating summaries or visualizations from this report.
+
+---
+
+## Context
+
+You are processing an InsightGraph network analysis report. This report contains **structural signals** about a funding network — it does **not** contain recommendations.
+
+Your role is to synthesize these signals into accessible formats (summaries, slides, infographics) while preserving the report's epistemic discipline.
+
+---
+
+## Core Constraints
+
+### 1. Never Imply Recommendations
+The report describes **how teams typically use** each signal. It does not prescribe actions.
+
+**Transform this:**
+> "High overlap suggests potential for coordination"
+
+**Into this:**
+> "Teams often use high-overlap signals to decide whether coordination conversations would add value"
+
+### 2. Preserve Signal Intensity Labels
+Every insight in this report has a signal intensity:
+- **Low-intensity signal:** Primarily confirmatory / contextual
+- **Moderate-intensity signal:** Worth discussion or light exploration
+- **High-intensity signal:** Merits active follow-up
+
+Always include these labels in your synthesis.
+
+### 3. Normalize Inaction
+Every section includes: *"In many cases, the appropriate outcome of this analysis is to confirm that no coordination or intervention is needed."*
+
+This framing must be preserved in summaries.
+
+### 4. Use Descriptive Usage Framing
+Replace implied recommendations with descriptive usage patterns:
+
+| Instead of... | Use... |
+|---------------|--------|
+| "This suggests you should..." | "Teams often use this signal to decide whether..." |
+| "Opportunity to coordinate" | "Potential touchpoint (if coordination is a goal)" |
+| "Natural partners" | "Shared investment patterns" |
+| "This reveals a gap" | "This signal is commonly used to assess..." |
+
+---
+
+## Output Format Guidelines
+
+### For Slide Decks
+- One signal per slide
+- Include signal intensity badge
+- Add "What this does NOT mean" bullet
+
+### For Executive Summaries
+- Lead with "What this report shows"
+- Include "How teams typically use this"
+- End with "What's not in scope"
+
+### For Infographics
+- Use visual hierarchy to show signal intensity
+- Include legend explaining interpretation
+- Add footer: "Signals support judgment; they are not recommendations"
+
+---
+
+## Validation Checklist
+
+Before finalizing your synthesis:
+
+- [ ] No "should/must/recommend" language
+- [ ] No "this suggests [action]" phrasing
+- [ ] No "opportunity to [action]" phrasing
+- [ ] Signal intensity labels preserved
+- [ ] "No action" normalized as valid outcome
+- [ ] Decision Options framed as team behaviors, not prescriptions
+
+---
+
+*This prompt is part of the C4C Report Authoring Contract.*
+"""
+
+VISUAL_SYNTHESIS_GUIDE_CONTENT = """# Visual Synthesis Guide
+
+**Purpose:** Guidance for creating non-prescriptive visual summaries of InsightGraph reports.
+
+---
+
+## Core Principles
+
+### 1. Signals, Not Recommendations
+Visual summaries should present **structural signals**, not implied actions.
+
+❌ **Avoid:** "You should coordinate with these funders"  
+✅ **Use:** "Teams often use this signal to decide whether coordination would add value"
+
+### 2. Preserve Signal Intensity
+Every visualization should indicate the signal intensity level:
+
+| Level | Visual Treatment | Meaning |
+|-------|------------------|---------|
+| **Low** | Gray / muted | Primarily confirmatory / contextual |
+| **Moderate** | Standard / neutral | Worth discussion or light exploration |
+| **High** | Highlighted / emphasized | Merits active follow-up |
+
+### 3. Normalize Inaction
+Every visual should implicitly or explicitly acknowledge that **no action may be the appropriate outcome**.
+
+---
+
+## Visual Element Guidelines
+
+### Network Diagrams
+- Show structure, not implied relationships
+- Label nodes with roles, not recommendations
+- Use color for signal intensity, not importance ranking
+- Include legend explaining what connections mean (and don't mean)
+
+### Bar Charts / Rankings
+- Frame as "distribution" not "priority"
+- Avoid language like "top funders to contact"
+- Use: "Funders by portfolio size" not "Key funders"
+
+### Summary Cards
+- Lead with "What this shows" not "What to do"
+- Include guardrail text: "This does not imply..."
+- Reference signal intensity in header
+
+---
+
+## Language Patterns
+
+### Allowed Phrasing
+- "This signal is commonly used to assess whether..."
+- "Teams often use this to decide..."
+- "This pattern may warrant discussion"
+- "Worth exploring if coordination is a goal"
+
+### Disallowed Phrasing
+- "You should..."
+- "We recommend..."
+- "This suggests you need to..."
+- "Natural partners" (without qualification)
+- "Opportunity to..." (implies action)
+
+---
+
+## Checklist Before Publishing
+
+- [ ] No prescriptive language ("should", "must", "recommend")
+- [ ] Signal intensity labels present
+- [ ] "No action" normalized as valid outcome
+- [ ] Guardrails visible for high-interpretation sections
+- [ ] Source attribution to InsightGraph report
+
+---
+
+*This guide is part of the C4C Report Authoring Contract.*
+"""
+
+SYNTHESIS_CHECKLIST_CONTENT = """# Synthesis Checklist
+
+**Purpose:** Quick validation checklist for reviewing AI-generated or human-created summaries of InsightGraph reports.
+
+---
+
+## Pre-Publication Review
+
+Use this checklist before sharing any synthesized content (slides, infographics, summaries, facilitation guides).
+
+### Language Compliance
+
+- [ ] **No prescriptive words:** "should", "must", "recommend", "best practice"
+- [ ] **No implied recommendations:** "this suggests [action]", "this points to [action]"
+- [ ] **No opportunity framing:** "opportunity to...", "this reveals an opportunity"
+- [ ] **No semantic inflation:** "natural partners", "natural hub", "strong consensus"
+
+### Signal Integrity
+
+- [ ] **Signal intensity preserved:** Low / Moderate / High labels visible
+- [ ] **Source attribution:** References InsightGraph report and date
+- [ ] **Guardrails included:** "What this does NOT mean" present for high-interpretation sections
+
+### Epistemic Discipline
+
+- [ ] **Inaction normalized:** "No coordination needed" acknowledged as valid outcome
+- [ ] **Usage framing:** "Teams often use this to decide..." (not "you should")
+- [ ] **Structural vs. performance:** Clear that signals show structure, not effectiveness
+
+### Portfolio Twins Specific
+
+- [ ] **Low overlap = healthy:** Not framed as a problem
+- [ ] **Primary use stated:** "Decide where coordination is NOT needed"
+- [ ] **No coordination necessity implied:** Shared grantees ≠ required alignment
+
+---
+
+## Quick Reference: Find & Replace
+
+If you find these phrases, replace them:
+
+| Find | Replace With |
+|------|--------------|
+| "This suggests you should..." | "Teams often use this signal to decide whether..." |
+| "Opportunity to coordinate" | "Potential touchpoint (if coordination is a goal)" |
+| "Natural partners" | "Shared investment patterns" |
+| "This reveals a gap" | "This signal is commonly used to assess..." |
+| "You need to address" | "Teams often explore whether..." |
+| "Strong consensus" | "Shared investment priorities" |
+
+---
+
+## Reviewer Sign-Off
+
+| Check | Reviewer | Date |
+|-------|----------|------|
+| Language compliance | | |
+| Signal integrity | | |
+| Epistemic discipline | | |
+| Portfolio Twins specific | | |
+
+**Approved for distribution:** ☐ Yes ☐ No (requires revision)
+
+---
+
+*This checklist is part of the C4C Report Authoring Contract.*
+"""
+
+
+def write_synthesis_guides(output_dir: Path) -> None:
+    """
+    Write synthesis guide files to the output directory.
+    
+    Creates:
+        output_dir/guides/SYNTHESIS_MODE_PROMPT.md
+        output_dir/guides/VISUAL_SYNTHESIS_GUIDE.md
+        output_dir/guides/SYNTHESIS_CHECKLIST.md
+    """
+    guides_dir = output_dir / "guides"
+    guides_dir.mkdir(parents=True, exist_ok=True)
+    
+    (guides_dir / "SYNTHESIS_MODE_PROMPT.md").write_text(SYNTHESIS_MODE_PROMPT_CONTENT.strip())
+    (guides_dir / "VISUAL_SYNTHESIS_GUIDE.md").write_text(VISUAL_SYNTHESIS_GUIDE_CONTENT.strip())
+    (guides_dir / "SYNTHESIS_CHECKLIST.md").write_text(SYNTHESIS_CHECKLIST_CONTENT.strip())
+
+
+def write_export_bundle(
+    output_dir: Path,
+    manifest: dict,
+    include_synthesis_guides: bool = True
+) -> None:
+    """
+    Write complete export bundle including manifest and synthesis guides.
+    
+    Args:
+        output_dir: Path to export directory
+        manifest: Dict from generate_manifest()
+        include_synthesis_guides: Whether to write synthesis guide files
+    
+    Creates:
+        output_dir/manifest.json
+        output_dir/guides/SYNTHESIS_MODE_PROMPT.md
+        output_dir/guides/VISUAL_SYNTHESIS_GUIDE.md
+        output_dir/guides/SYNTHESIS_CHECKLIST.md
+    """
+    import json
+    
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Write manifest
+    with open(output_dir / "manifest.json", "w", encoding="utf-8") as f:
+        json.dump(manifest, f, indent=2)
+    
+    # Write synthesis guides
+    if include_synthesis_guides:
+        write_synthesis_guides(output_dir)
+
+
 def preprocess_decision_lens(md_content: str) -> str:
     """
     Preprocess decision-lens blocks to HTML before markdown library processing.
@@ -3673,7 +3965,20 @@ def run(nodes_path, edges_path, output_dir, project_id="glfn"):
     with open(output_dir / "insight_report.md", "w") as f:
         f.write(markdown_report)
     
+    # Generate and write manifest + synthesis guides
+    manifest = generate_manifest(
+        project_id=project_id,
+        project_summary=project_summary,
+        insight_cards=insight_cards,
+        nodes_df=nodes_df,
+        edges_df=edges_df,
+        region_lens_config=lens_config,
+        input_paths={"nodes": nodes_path, "edges": edges_path}
+    )
+    write_export_bundle(output_dir, manifest, include_synthesis_guides=True)
+    
     print(f"\n✅ Done! Outputs in {output_dir}")
+    print(f"   📄 manifest.json + synthesis guides written")
     return project_summary, markdown_report
 
 
