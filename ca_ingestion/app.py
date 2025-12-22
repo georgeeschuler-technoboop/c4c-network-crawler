@@ -13,6 +13,11 @@ Outputs conform to C4C Network Schema v1 (MVP):
 
 VERSION HISTORY:
 ----------------
+UPDATED v0.13.0: Phase 1b - Unified CSV column ordering
+- Exports now use standardized column order from coregraph_schema
+- All nodes.csv and edges.csv exports have consistent structure
+- Compatible with OrgGraph US exports for easy merging
+
 UPDATED v0.12.0: CoreGraph v1 schema normalization (Phase 1a)
 - node_type normalized to lowercase: ORG→organization, PERSON→person
 - edge_type normalized to lowercase: GRANT→grant, BOARD_MEMBERSHIP→board
@@ -84,7 +89,7 @@ from enum import Enum
 # Config
 # =============================================================================
 
-APP_VERSION = "0.12.0"  # CoreGraph v1 schema normalization (Phase 1a)
+APP_VERSION = "0.13.0"  # Phase 1b: Unified CSV column ordering
 C4C_LOGO_URL = "https://static.wixstatic.com/media/275a3f_bcf888c01ebe499ca978b82f5291947b~mv2.png"
 SOURCE_SYSTEM = "CHARITYDATA_CA"
 JURISDICTION = "CA"
@@ -101,6 +106,7 @@ DEMO_PROJECT_NAME = "_demo"  # Reserved name for demo dataset
 sys.path.insert(0, str(REPO_ROOT))
 
 from c4c_utils.c4c_supabase import C4CSupabase
+from c4c_utils.coregraph_schema import prepare_unified_nodes_csv, prepare_unified_edges_csv
 
 st.set_page_config(
     page_title="OrgGraph (CA)",
@@ -2045,6 +2051,12 @@ def render_downloads(nodes_df: pd.DataFrame, edges_df: pd.DataFrame,
     
     if nodes_df is None or nodes_df.empty:
         return
+    
+    # ==========================================================================
+    # Phase 1b: Apply unified schema column ordering
+    # ==========================================================================
+    nodes_df = prepare_unified_nodes_csv(nodes_df, SOURCE_APP)
+    edges_df = prepare_unified_edges_csv(edges_df, SOURCE_APP)
     
     st.divider()
     st.subheader("📥 Download Data")
