@@ -13,6 +13,12 @@ Outputs conform to C4C Network Schema v1 (MVP):
 
 VERSION HISTORY:
 ----------------
+UPDATED v0.22.0: Phase 1c - ZIP bundle format with manifest.json
+- Download All ZIP now includes manifest.json with bundle metadata
+- Files at root level (removed c4c_schema/ subfolder)
+- Polinode files in polinode/ folder (renamed from polinode_schema/)
+- Manifest includes: schema version, source app, timestamps, row counts
+
 UPDATED v0.21.0: Phase 1b - Unified CSV column ordering
 - Exports now use standardized column order from coregraph_schema
 - All nodes.csv and edges.csv exports have consistent structure
@@ -95,12 +101,12 @@ from c4c_utils.board_extractor import BoardExtractor
 from c4c_utils.irs_return_qa import compute_confidence, render_return_qa_panel
 from c4c_utils.irs_return_dispatcher import parse_irs_return
 from c4c_utils.summary_helpers import build_grant_network_summary, summarize_grants
-from c4c_utils.coregraph_schema import prepare_unified_nodes_csv, prepare_unified_edges_csv, namespace_id
+from c4c_utils.coregraph_schema import prepare_unified_nodes_csv, prepare_unified_edges_csv, namespace_id, COREGRAPH_VERSION
 
 # =============================================================================
 # Constants
 # =============================================================================
-APP_VERSION = "0.21.0"  # Phase 1b: Unified CSV column ordering
+APP_VERSION = "0.22.0"  # Phase 1c: ZIP bundle format with manifest.json
 MAX_FILES = 50
 C4C_LOGO_URL = "https://static.wixstatic.com/media/275a3f_25063966d6cd496eb2fe3f6ee5cde0fa~mv2.png"
 SOURCE_SYSTEM = "IRS_990"
@@ -1623,6 +1629,67 @@ def validate_polinode_export(poli_nodes: pd.DataFrame, poli_edges: pd.DataFrame)
     return len(errors) == 0, errors
 
 
+def generate_bundle_manifest(
+    nodes_df: pd.DataFrame,
+    edges_df: pd.DataFrame,
+    grants_detail_df: pd.DataFrame = None,
+    project_name: str = None
+) -> dict:
+    """
+    Generate manifest.json for Phase 1c ZIP bundle.
+    
+    Returns:
+        Dictionary to be serialized as manifest.json
+    """
+    from datetime import datetime, timezone
+    
+    # Count node types
+    node_counts = {}
+    if nodes_df is not None and not nodes_df.empty and 'node_type' in nodes_df.columns:
+        node_counts = nodes_df['node_type'].value_counts().to_dict()
+    
+    # Count edge types
+    edge_counts = {}
+    if edges_df is not None and not edges_df.empty and 'edge_type' in edges_df.columns:
+        edge_counts = edges_df['edge_type'].value_counts().to_dict()
+    
+    # Build file list
+    files = []
+    if nodes_df is not None and not nodes_df.empty:
+        files.append({"path": "nodes.csv", "rows": len(nodes_df)})
+    if edges_df is not None and not edges_df.empty:
+        files.append({"path": "edges.csv", "rows": len(edges_df)})
+    if grants_detail_df is not None and not grants_detail_df.empty:
+        files.append({"path": "grants_detail.csv", "rows": len(grants_detail_df)})
+    
+    manifest = {
+        "schema_version": COREGRAPH_VERSION,
+        "bundle_version": "1.0",
+        "source_app": SOURCE_APP,
+        "app_version": APP_VERSION,
+        "exported_at": datetime.now(timezone.utc).isoformat(),
+        "project_name": project_name or "unnamed",
+        "jurisdiction": JURISDICTION,
+        "contents": {
+            "files": files,
+            "node_count": len(nodes_df) if nodes_df is not None else 0,
+            "edge_count": len(edges_df) if edges_df is not None else 0,
+            "node_types": node_counts,
+            "edge_types": edge_counts,
+        },
+        "polinode": {
+            "included": True,
+            "files": [
+                "polinode/nodes_polinode.csv",
+                "polinode/edges_polinode.csv",
+                "polinode/polinode_import.xlsx"
+            ]
+        }
+    }
+    
+    return manifest
+
+
 def generate_polinode_excel(poli_nodes: pd.DataFrame, poli_edges: pd.DataFrame) -> bytes:
     """Generate a single Excel file with Nodes and Edges sheets for Polinode import.
     
@@ -2083,28 +2150,44 @@ def render_downloads(nodes_df: pd.DataFrame, edges_df: pd.DataFrame,
                 help="Polinode-compatible format"
             )
     
-    # ZIP download with everything
+    # ZIP download with everything (Phase 1c bundle format)
     if not export_nodes.empty or not export_edges.empty:
         zip_buffer = BytesIO()
         with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
-            # C4C schema files
-            if not export_nodes.empty:
-                zip_file.writestr('c4c_schema/nodes.csv', export_nodes.to_csv(index=False))
-            if not export_edges.empty:
-                zip_file.writestr('c4c_schema/edges.csv', export_edges.to_csv(index=False))
-            
-            # Polinode-compatible files
-            if not poli_nodes.empty:
-                zip_file.writestr('polinode_schema/nodes_polinode.csv', poli_nodes.to_csv(index=False))
-            if not poli_edges.empty:
-                zip_file.writestr('polinode_schema/edges_polinode.csv', poli_edges.to_csv(index=False))
-            if polinode_excel:
-                zip_file.writestr('polinode_schema/orggraph_polinode.xlsx', polinode_excel)
-            
-            # Grants detail (canonical schema)
+            # =================================================================
+            # Phase 1c: Unified bundle structure
+            # =================================================================
+            # Prepare grants_detail for manifest
+            grants_detail = None
             if export_grants is not None and not export_grants.empty:
                 grants_detail = ensure_grants_detail_columns(export_grants)
+            
+            # manifest.json at root
+            manifest = generate_bundle_manifest(
+                nodes_df=export_nodes,
+                edges_df=export_edges,
+                grants_detail_df=grants_detail,
+                project_name=project_name
+            )
+            zip_file.writestr('manifest.json', json.dumps(manifest, indent=2))
+            
+            # Core data files at root (unified schema applied earlier)
+            if not export_nodes.empty:
+                zip_file.writestr('nodes.csv', export_nodes.to_csv(index=False))
+            if not export_edges.empty:
+                zip_file.writestr('edges.csv', export_edges.to_csv(index=False))
+            if grants_detail is not None and not grants_detail.empty:
                 zip_file.writestr('grants_detail.csv', grants_detail.to_csv(index=False))
+            
+            # Polinode-compatible files (in polinode/ folder)
+            if not poli_nodes.empty:
+                zip_file.writestr('polinode/nodes_polinode.csv', poli_nodes.to_csv(index=False))
+            if not poli_edges.empty:
+                zip_file.writestr('polinode/edges_polinode.csv', poli_edges.to_csv(index=False))
+            if polinode_excel:
+                zip_file.writestr('polinode/polinode_import.xlsx', polinode_excel)
+            
+            # Diagnostics
             if parse_results:
                 zip_file.writestr('parse_log.json', json.dumps(parse_results, indent=2, default=str))
         
@@ -2112,12 +2195,9 @@ def render_downloads(nodes_df: pd.DataFrame, edges_df: pd.DataFrame,
         
         file_prefix = project_name if project_name else "orggraph"
         
-        # Explain what's in the ZIP
         st.caption("""
-        **Complete export includes:**
-        `c4c_schema/nodes.csv` + `c4c_schema/edges.csv` + `grants_detail.csv` (C4C schema) •
-        `polinode_schema/nodes_polinode.csv` + `polinode_schema/edges_polinode.csv` + `polinode_schema/orggraph_polinode.xlsx` (Polinode-ready) •
-        `parse_log.json` (diagnostics)
+        **Bundle contents:** manifest.json • nodes.csv • edges.csv • grants_detail.csv • 
+        `polinode/` — nodes_polinode.csv, edges_polinode.csv, polinode_import.xlsx • parse_log.json
         """)
         
         st.download_button(
