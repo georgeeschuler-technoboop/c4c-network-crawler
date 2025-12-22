@@ -6,6 +6,10 @@ Reads exported data from OrgGraph US/CA projects.
 
 VERSION HISTORY:
 ----------------
+UPDATED v0.11.2: Fixed HTML download timing
+- FIX: Generate HTML once and reuse for both ZIP and download button
+- Prevents race condition where HTML button fails but ZIP works
+
 UPDATED v0.11.1: Fixed HTML download
 - FIX: Encode HTML as UTF-8 bytes for Safari compatibility
 - NEW: Show error message if HTML generation fails
@@ -96,7 +100,7 @@ from c4c_utils.c4c_supabase import C4CSupabase
 # Config
 # =============================================================================
 
-APP_VERSION = "0.11.1"  # Fixed HTML download encoding
+APP_VERSION = "0.11.2"  # Fixed HTML download timing issue
 C4C_LOGO_URL = "https://static.wixstatic.com/media/275a3f_9c48d5079fcf4b688606c81d8f34d5a5~mv2.jpg"
 INSIGHTGRAPH_ICON_URL = "https://static.wixstatic.com/media/275a3f_7736e28c9f5e40c1b2407e09dc5cb6e7~mv2.png"
 
@@ -1150,10 +1154,30 @@ def render_downloads(data: dict):
     has_nodes = data.get("nodes_df") is not None
     has_edges = data.get("edges_df") is not None
     
+    # Generate HTML report ONCE (used for both ZIP and standalone download)
+    html_report = None
+    html_error = None
+    run_module = load_run_module()
+    
+    if has_report and run_module and hasattr(run_module, 'render_html_report'):
+        try:
+            html_report = run_module.render_html_report(
+                markdown_content=data["markdown_report"],
+                project_summary=data.get("project_summary", {}),
+                insight_cards=data.get("insight_cards", {}),
+                project_id=data.get("project_id", "report")
+            )
+        except Exception as e:
+            html_error = str(e)
+            print(f"Warning: Could not generate HTML report: {e}")
+    elif has_report and run_module:
+        html_error = "render_html_report function not found in run.py"
+    elif has_report:
+        html_error = "Could not load run.py module"
+    
     def create_bundle_zip():
         """Create structured bundle ZIP with manifest and HTML report."""
         zip_buffer = BytesIO()
-        run_module = load_run_module()
         
         with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
             # Analysis outputs
@@ -1168,18 +1192,9 @@ def render_downloads(data: dict):
             if has_report:
                 zf.writestr("report.md", data["markdown_report"])
             
-            # HTML report (primary deliverable)
-            if has_report and run_module and hasattr(run_module, 'render_html_report'):
-                try:
-                    html_report = run_module.render_html_report(
-                        markdown_content=data["markdown_report"],
-                        project_summary=data.get("project_summary", {}),
-                        insight_cards=data.get("insight_cards", {}),
-                        project_id=data.get("project_id", "report")
-                    )
-                    zf.writestr("index.html", html_report)
-                except Exception as e:
-                    print(f"Warning: Could not generate HTML report: {e}")
+            # HTML report (use pre-generated from outer scope)
+            if html_report:
+                zf.writestr("index.html", html_report)
             
             # Input data (if available)
             if has_nodes:
@@ -1227,27 +1242,6 @@ def render_downloads(data: dict):
     
     # Primary downloads
     col1, col2, col3 = st.columns([2, 1, 1])
-    
-    # Generate HTML report for download button
-    html_report = None
-    html_error = None
-    if has_report:
-        run_module = load_run_module()
-        if run_module and hasattr(run_module, 'render_html_report'):
-            try:
-                html_report = run_module.render_html_report(
-                    markdown_content=data["markdown_report"],
-                    project_summary=data.get("project_summary", {}),
-                    insight_cards=data.get("insight_cards", {}),
-                    project_id=data.get("project_id", "report")
-                )
-            except Exception as e:
-                html_error = str(e)
-                print(f"Warning: Could not generate HTML report: {e}")
-        elif run_module:
-            html_error = "render_html_report function not found in run.py"
-        else:
-            html_error = "Could not load run.py module"
     
     with col1:
         if html_report:
