@@ -12,6 +12,14 @@ Usage:
 
 VERSION HISTORY:
 ----------------
+v3.0.20 (2025-12-22): Language audit + markdown rendering fix
+- FIX: Section subtitle now renders as HTML (not raw _underscores_)
+- FIX: Removed "natural partners/hub/alignment" over-claiming language
+- FIX: Replaced "should/must" with conditional phrasing
+- FIX: "strong consensus" → "shared investment priorities"
+- CSS: Added .section-subtitle class
+- Authoring contract enforced (no prescriptive language)
+
 v3.0.19 (2025-12-22): Signal Intensity Framework (interpretive governance)
 - NEW: signal_intensity field (low/medium/high) governs reader attention
 - NEW: Global "no action is valid" sentence in every Decision Lens footer
@@ -151,7 +159,7 @@ from collections import defaultdict
 # Version
 # =============================================================================
 
-ENGINE_VERSION = "3.0.19"
+ENGINE_VERSION = "3.0.20"
 BUNDLE_FORMAT_VERSION = "1.0"
 
 # C4C logo as base64 (80px, ~4KB) for self-contained HTML reports
@@ -630,7 +638,7 @@ def describe_funder_with_recommendation(
     if is_isolated and grantee_count > 20:
         recs.append(
             "Despite isolation, their broad portfolio suggests shared interests with other funders. "
-            "Map potential overlap to identify natural coordination partners."
+            "Map potential overlap to identify coordination touchpoints worth exploring."
         )
     
     if not recs:
@@ -657,19 +665,19 @@ def describe_grantee(label, funder_count, total_received, funder_labels):
     if funder_count >= 4:
         blurb = (
             f"**{label}** receives from {funder_count} network funders (${total_received:,.0f} from {funders_str}). "
-            f"This exceptional overlap signals strong funder consensus around their work — a natural coordination hub."
+            f"This indicates shared investment priorities — a potential touchpoint for coordination conversations."
         )
-        rec = "Convene their funders for joint impact measurement, aligned reporting, or a co-funding conversation. This grantee could anchor a funder learning community."
+        rec = "Could be a candidate for joint impact measurement, aligned reporting, or a brief funder check-in. This grantee may anchor shared learning."
     elif funder_count >= 3:
         blurb = (
             f"**{label}** receives from {funder_count} funders (${total_received:,.0f} from {funders_str}). "
-            f"This overlap suggests shared priorities and potential for deeper alignment."
+            f"This overlap suggests shared priorities worth exploring."
         )
-        rec = "Explore joint site visits, shared evaluation, or coordinated grant timing among these funders."
+        rec = "Consider whether joint site visits, shared evaluation, or coordinated grant timing would add value."
     else:
         blurb = (
             f"**{label}** receives from {funder_count} funders (${total_received:,.0f} from {funders_str}). "
-            f"This natural alignment could seed deeper coordination."
+            f"This shared funding may warrant a brief check-in among funders."
         )
         rec = "Introduce these funders to explore whether their investments could be more intentionally aligned."
     
@@ -739,7 +747,7 @@ def generate_strategic_recommendations(
     else:
         intro = (
             "The network appears **fragmented**. Funders operate largely in silos with minimal coordination. "
-            "Building basic connective tissue should be the priority."
+            "Consider whether building basic connective tissue would be valuable."
         )
     
     sections.append(f"### 🧭 How to Read This\n\n{intro}\n")
@@ -754,8 +762,8 @@ def generate_strategic_recommendations(
         )
     elif multi_funder_pct < 5:
         coord_recs.append(
-            "**Nurture natural alignment:** A small number of shared grantees exist. Use these as anchors — "
-            "convene funders around specific grantees to build relationships and explore joint action."
+            "**Explore existing touchpoints:** A small number of shared grantees exist. These could serve as anchors — "
+            "consider convening funders around specific grantees to build relationships and explore joint action."
         )
     
     if coord_recs:
@@ -793,8 +801,8 @@ def generate_strategic_recommendations(
     top5_share = flow_stats.get("top_5_funders_share", 0)
     if top5_share >= 95:
         conc_recs.append(
-            "**Monitor concentration risk:** A handful of funders control nearly all capital. Track whether "
-            "this creates field-shaping power that should be balanced with broader funder voice."
+            "**Monitor concentration risk:** A handful of funders control nearly all capital. Consider whether "
+            "this field-shaping power could benefit from broader funder input."
         )
         conc_recs.append(
             "**Engage smaller funders strategically:** Though they control less capital, smaller funders may "
@@ -897,7 +905,7 @@ def generate_insight_cards(nodes_df, edges_df, metrics_df, interlock_graph, flow
     if multi_funder_pct >= 10:
         mf_interpretation = f"Strong signal — {multi_funder_pct:.1f}% of grantees have multiple funders, indicating active co-investment"
     elif multi_funder_pct >= 5:
-        mf_interpretation = f"Moderate — {multi_funder_pct:.1f}% have multiple funders, some natural coordination exists"
+        mf_interpretation = f"Moderate — {multi_funder_pct:.1f}% have multiple funders, suggesting coordination touchpoints"
     elif multi_funder_pct >= 1:
         mf_interpretation = f"Weak signal — only {multi_funder_pct:.1f}% have multiple funders, funders rarely co-invest"
     else:
@@ -997,14 +1005,14 @@ def generate_insight_cards(nodes_df, edges_df, metrics_df, interlock_graph, flow
         elif overlap_pct < 5:
             overlap_emoji, overlap_label = "🟡", "Limited overlap"
             overlap_narrative = (
-                f"**{len(multi_funder)} grantees** ({overlap_pct:.1f}%) receive from 2+ funders. Some natural alignment exists, "
-                f"but most grantees depend on a single funder. These shared grantees represent organic coordination points."
+                f"**{len(multi_funder)} grantees** ({overlap_pct:.1f}%) receive from 2+ funders. These shared investments "
+                f"represent potential coordination touchpoints, though most grantees depend on a single funder."
             )
         else:
             overlap_emoji, overlap_label = "🟢", "Meaningful overlap"
             overlap_narrative = (
                 f"**{len(multi_funder)} grantees** ({overlap_pct:.1f}%) receive from multiple funders. "
-                f"This overlap suggests shared priorities and real potential for deeper coordination."
+                f"This overlap suggests shared priorities worth exploring for coordination."
             )
         
         ranked_rows = []
@@ -1078,9 +1086,9 @@ def generate_insight_cards(nodes_df, edges_df, metrics_df, interlock_graph, flow
             
             # Tier-consistent per-pair narrative
             if jaccard >= 0.15:
-                pair_desc = f"High overlap — natural partners for coordination."
+                pair_desc = f"High overlap — worth a coordination conversation."
             elif jaccard >= 0.05:
-                pair_desc = f"Meaningful overlap — potential for alignment."
+                pair_desc = f"Moderate overlap — a potential touchpoint."
             else:
                 pair_desc = f"Shared touchpoints, but portfolios largely distinct."
             
@@ -2078,7 +2086,9 @@ def generate_markdown_report(insight_cards: dict, project_summary: dict, project
         # Add speed bump subtitle if available (for skimmers)
         subtitle = SECTION_SUBTITLES.get(card_id, "")
         if subtitle:
-            lines.append(f"_{subtitle}_")
+            # Use HTML directly - markdown underscores don't reliably convert
+            lines.append(f'<p class="section-subtitle">{subtitle}</p>')
+            lines.append("")
         
         lines.append(f"*Use Case: {use_case}*")
         lines.append("")
@@ -2540,7 +2550,7 @@ def render_html_report(
             elif health_score >= 60:
                 health_summary = "Moderate network health with some areas for improvement."
             elif health_score >= 40:
-                health_summary = "Network shows vulnerabilities that should be addressed."
+                health_summary = "Network shows vulnerabilities that may warrant attention."
             else:
                 health_summary = "Network requires significant strengthening."
     
@@ -3374,6 +3384,13 @@ def build_html_from_template(
       text-transform: uppercase;
       font-size: 0.75rem;
       letter-spacing: 0.5px;
+    }}
+    /* Section subtitle (speed bump for skimmers) */
+    .section-subtitle {{
+      font-size: 0.92rem;
+      color: var(--muted);
+      font-style: italic;
+      margin: -0.25rem 0 0.5rem;
     }}
     /* Signal indicators */
     .signal {{
