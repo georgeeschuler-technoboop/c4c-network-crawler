@@ -1,133 +1,129 @@
-# C4C Report Authoring Guide
-
-**Applies to:** InsightGraph / OrgGraph-derived reports  
-**Version:** 1.1  
-**Last updated:** 2025-12-22
+# C4C InsightGraph — Report Authoring Guide
+Version: 1.0  
+Status: Canonical  
+Applies to: InsightGraph / OrgGraph / Network Intelligence reports
 
 ---
 
-## 1. What these reports are
+## 1. Purpose of InsightGraph Reports
 
-C4C reports surface **decision-relevant structural signals** in a funding/network ecosystem. They are designed to support:
-- shared understanding
+InsightGraph reports surface **structural signals** in funding and organizational networks to support:
+- strategic sensemaking
 - prioritization
 - coordination conversations
-- deeper inquiry with expert facilitation
+- expert-facilitated decision processes
 
-## 2. What these reports are not
-
-Reports are **not**:
-- evaluations of performance
-- prescriptive recommendations
-- proof of intent, alignment, or impact
-- complete representations of reality (data is partial)
+These reports are designed to **inform judgment**, not replace it.
 
 ---
 
-## 3. Canonical Report Structure (required)
+## 2. What These Reports Are NOT
 
-Every report must follow this structure:
+InsightGraph reports do NOT:
+- evaluate funder or grantee performance
+- prescribe actions or “best practices”
+- prove intent, alignment, or impact
+- provide complete or causal explanations
 
-1. **Title**
-2. **Executive Summary**
-3. **Table of Contents**
-4. **Sections** (each section must include: intro + Decision Lens + analysis)
-5. **Data Notes / Methodology**
-6. **Manifest / Traceability**
-
----
-
-## 4. Executive Summary Contract (required)
-
-Executive Summary must include:
-- One paragraph: what this report does / doesn't do
-- 4–6 "Key Signals" bullets (plain language)
-- One sentence: "How teams typically use this report"
-
-Rules:
-- No section-by-section repetition
-- No recommendations
-- Minimize metrics (include only if essential)
+All signals are **directional and contextual**.
 
 ---
 
-## 5. Section Intro Rules (required)
+## 3. Canonical Report Structure (Required)
 
-Each section begins with a 1–2 sentence intro that answers:
-- What is this about?
-- Why does it matter?
+Every report MUST include:
+
+1. Title + metadata
+2. Executive summary
+3. Table of contents
+4. Analytical sections  
+5. Data notes / methodology
+6. Manifest & traceability links
+
+---
+
+## 4. Executive Summary Contract
+
+The Executive Summary must:
+- State clearly what the report *does and does not* do
+- Present 4–6 **plain-language signals**
+- Include one sentence answering:  
+  *“How do teams typically use this report?”*
 
 Avoid:
-- "This section analyzes…"
-- dense method descriptions
-- numeric claims without context
+- metrics without interpretation
+- section-by-section repetition
+- recommendations
 
 ---
 
-## 6. Decision Lens Contract (required for every analytical section)
+## 5. Section Authoring Rules (Critical)
 
-Each analytical section MUST include a Decision Lens block that answers:
+Each analytical section MUST include:
 
-1. **Signal intensity** (Low / Moderate / High)  
-2. **What this tells you** (plain-language interpretation)  
-3. **Why it matters** (decision relevance)  
-4. **What teams often do next** (descriptive actions, not prescriptions)  
-5. **What not to over-interpret** (guardrail)  
-6. **Permission for no action** (explicit normalization — included globally in component)
+1. **Section intro (1–2 sentences)**  
+   - What this section examines  
+   - Why it matters at a high level  
 
-### Language constraints
+2. **Decision Lens block (required)**  
+3. **Supporting analysis / tables / visuals**
 
-**Allowed phrasing:**
-- "signals suggest…"
-- "may indicate…"
-- "can be used to assess…"
-- "teams often use this to decide…"
-- "could be worth exploring"
-- "a potential touchpoint"
-- "worth a coordination conversation"
-
-**Disallowed phrasing:**
-- "should"
-- "must"
-- "we recommend"
-- "best practice"
-- "natural partners" (unless qualified with uncertainty)
-- "natural hub" (unless qualified)
-- "strong consensus" (use "shared investment priorities" instead)
+No section with metrics may ship without a Decision Lens.
 
 ---
 
-## 7. Signal Intensity Framework
+## 6. Decision Lens Contract (Required Everywhere)
 
-Every section must declare a signal intensity level:
+The Decision Lens translates analysis into **decision context**.
 
-| Level | Meaning | Reader Action |
-|-------|---------|---------------|
-| **Low** | Primarily confirmatory / contextual | No action typically required |
-| **Moderate** | Worth discussion or light exploration | Consider a brief check-in |
-| **High** | Merits active follow-up or strategy review | Prioritize for discussion |
+Each Decision Lens MUST include:
 
-Sections currently assigned:
-- **Low:** Portfolio Twins, Roles × Region, Board Conduits, Isolated Funders
-- **Moderate:** Network Health, Funding Concentration, Multi-Funder Grantees, Hidden Brokers, Bridges
-- **High:** (reserved for urgent/dynamic findings)
+### Required fields
+- **Signal intensity**: Low / Moderate / High
+- **What this tells you**  
+- **Why it matters**
+- **What teams often do next**
+- **What not to over-interpret**
+
+### Language rules
+Use:
+- “signals suggest…”
+- “may indicate…”
+- “teams often use this to decide…”
+
+Avoid:
+- “should / must”
+- “we recommend”
+- “best practice”
+- “natural partners / hubs” (unless explicitly qualified)
+
+### Normalization rule
+Every Decision Lens must explicitly permit **no action** as a valid outcome.
 
 ---
 
-## 8. Portfolio Overlap / "Portfolio Twins" Specific Contract
+## 7. Signal Intensity Guidance
 
-This section must explicitly state:
-- shared touchpoints ≠ aligned strategy
-- low similarity is normal and often healthy
-- primary practical use is to decide where coordination is NOT needed
+- **Low-intensity signal**  
+  Contextual or confirmatory; often used to rule things out
 
-Every pair listing must include:
-- Shared grantees (count)
-- Portfolio sizes (A size, B size)
-- Similarity score (Jaccard or equivalent)
-- A plain label: "low / moderate / high overlap"
+- **Moderate-intensity signal**  
+  Worth discussion or light exploration
 
-Never imply coordination necessity from overlap alone.
+- **High-intensity signal**  
+  Merits closer review or facilitated conversation
+
+---
+
+## 8. Portfolio Twins (Special Handling)
+
+This section MUST explicitly state:
+
+- Shared grantees ≠ aligned strategy
+- Low overlap is normal and often healthy
+- Primary use is deciding **where coordination is NOT needed**
+
+Never imply action from overlap alone.
 
 ---
 
@@ -135,56 +131,28 @@ Never imply coordination necessity from overlap alone.
 
 Markdown is the source of truth.
 
-The HTML must never contain raw markdown artifacts such as:
-- `_italic_` → must become `<em>italic</em>`
-- `**bold**` → must become `<strong>bold</strong>`
-- backticks for inline code when unintended
+The final HTML MUST NOT contain raw markdown artifacts:
+- `_italic_`
+- `**bold**`
+- backticks
+- fenced code blocks
 
-All markdown content must be rendered to HTML before insertion into the HTML template.
-
-**Known patterns to catch:**
-- Section subtitles (use `<p class="section-subtitle">` directly)
-- Decision Lens text (preprocess before markdown library)
+All markdown must be rendered before injection into HTML templates.
 
 ---
 
-## 10. Definition of Done (report quality)
+## 10. Definition of Done (Quality Gate)
 
-A report is "valid" when:
-
-- [ ] Every section contains intro + Decision Lens + analysis
-- [ ] No prescriptive language appears ("should", "must", "recommend")
-- [ ] No semantic inflation ("natural partners", "strong consensus")
-- [ ] Signal intensity is present everywhere
-- [ ] "No action required" is normalized where appropriate
-- [ ] No raw markdown artifacts appear in the final HTML output
-- [ ] A non-technical reader can answer:
-  - What is this telling me?
+A report is valid when:
+- Every analytical section has a Decision Lens
+- No prescriptive language appears
+- Signal intensity is present and appropriate
+- “No action” is normalized where relevant
+- No raw markdown appears in HTML
+- A non-technical reader can answer:
+  - What does this tell me?
   - Why does it matter?
   - What kind of decision could this inform?
 
 ---
-
-## 11. Traceability Contract
-
-Each report must link to:
-- manifest (inputs, config, version)
-- source markdown (report.md)
-- outputs (csv/xlsx/json artifacts)
-
----
-
-## 12. Quick Reference: Find & Replace
-
-| Find | Replace With |
-|------|--------------|
-| "natural partners" | "potential coordination touchpoints" |
-| "natural hub" | "shared investment node (context needed)" |
-| "strong consensus" | "shared investment priorities" |
-| "should" | "could" / "may" / "consider" |
-| "must" | "may want to" / "could" |
-| "recommend" | "some teams find value in" |
-
----
-
-*End of guide.*
+End of guide.
