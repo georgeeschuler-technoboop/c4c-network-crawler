@@ -13,6 +13,11 @@ Outputs conform to C4C Network Schema v1 (MVP):
 
 VERSION HISTORY:
 ----------------
+UPDATED v0.21.0: Phase 1b - Unified CSV column ordering
+- Exports now use standardized column order from coregraph_schema
+- All nodes.csv and edges.csv exports have consistent structure
+- Compatible with OrgGraph CA exports for easy merging
+
 UPDATED v0.20.0: CoreGraph v1 schema normalization (Phase 1a)
 - node_type normalized to lowercase: ORG→organization, PERSON→person
 - edge_type normalized to lowercase: GRANT→grant, BOARD_MEMBERSHIP→board
@@ -90,12 +95,12 @@ from c4c_utils.board_extractor import BoardExtractor
 from c4c_utils.irs_return_qa import compute_confidence, render_return_qa_panel
 from c4c_utils.irs_return_dispatcher import parse_irs_return
 from c4c_utils.summary_helpers import build_grant_network_summary, summarize_grants
-from c4c_utils.coregraph_schema import normalize_nodes_df, normalize_edges_df, namespace_id
+from c4c_utils.coregraph_schema import prepare_unified_nodes_csv, prepare_unified_edges_csv, namespace_id
 
 # =============================================================================
 # Constants
 # =============================================================================
-APP_VERSION = "0.20.0"  # CoreGraph v1 schema normalization (Phase 1a)
+APP_VERSION = "0.21.0"  # Phase 1b: Unified CSV column ordering
 MAX_FILES = 50
 C4C_LOGO_URL = "https://static.wixstatic.com/media/275a3f_25063966d6cd496eb2fe3f6ee5cde0fa~mv2.png"
 SOURCE_SYSTEM = "IRS_990"
@@ -1946,11 +1951,12 @@ def render_downloads(nodes_df: pd.DataFrame, edges_df: pd.DataFrame,
         export_nodes, export_edges, export_grants = nodes_df, edges_df, grants_df
     
     # ==========================================================================
-    # CoreGraph v1 Normalization (Phase 1a)
+    # Phase 1b: Apply unified schema column ordering
     # ==========================================================================
-    # Normalize node_type, edge_type, namespace IDs, add source_app
-    export_nodes = normalize_nodes_df(export_nodes, SOURCE_APP)
-    export_edges = normalize_edges_df(export_edges, SOURCE_APP)
+    # Normalize node_type, edge_type, namespace IDs, add source_app, and
+    # standardize column order for cross-app compatibility
+    export_nodes = prepare_unified_nodes_csv(export_nodes, SOURCE_APP)
+    export_edges = prepare_unified_edges_csv(export_edges, SOURCE_APP)
     
     # Save options (Local + Cloud)
     if project_name and project_name != DEMO_PROJECT_NAME:
