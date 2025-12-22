@@ -12,6 +12,14 @@ Usage:
 
 VERSION HISTORY:
 ----------------
+v3.0.19 (2025-12-22): Signal Intensity Framework (interpretive governance)
+- NEW: signal_intensity field (low/medium/high) governs reader attention
+- NEW: Global "no action is valid" sentence in every Decision Lens footer
+- NEW: Intensity-specific badge colors (gray/indigo/orange)
+- REMOVED: badge and practical_use fields (replaced by signal_intensity)
+- GOVERNANCE: This is the interpretive architecture lock - Portfolio Twins frozen
+- CSS: .decision-lens__badge--low/medium/high, .decision-lens__footer
+
 v3.0.18 (2025-12-22): Decision Lens grid layout + badges
 - NEW: Decision Lens rendered as 3-column grid (responsive)
 - NEW: Optional badge support (Directional signal, High leverage, etc.)
@@ -143,7 +151,7 @@ from collections import defaultdict
 # Version
 # =============================================================================
 
-ENGINE_VERSION = "3.0.18"
+ENGINE_VERSION = "3.0.19"
 BUNDLE_FORMAT_VERSION = "1.0"
 
 # C4C logo as base64 (80px, ~4KB) for self-contained HTML reports
@@ -1375,8 +1383,10 @@ ROLE_VOCABULARY = {
 #   - why_matters: decision context  
 #   - teams_do_next: action guidance (descriptive, not prescriptive)
 #   - not_over_interpret: misinterpretation guardrail (prevents client over-reaction)
-#   - badge: optional qualifier (Directional signal, High leverage, Structural insight, etc.)
-#   - practical_use: one-sentence action-shaped "so what" (legitimizes inaction)
+#   - signal_intensity: low / medium / high (governs reader attention)
+#     - low: primarily confirmatory / contextual
+#     - medium: worth discussion or light exploration  
+#     - high: merits active follow-up or strategy review
 
 DECISION_LENS = {
     "network_health": {
@@ -1384,72 +1394,78 @@ DECISION_LENS = {
         "why_matters": "When coordination infrastructure is weak, new funding or initiatives often underperform. This signal helps prioritize where to invest in connective tissue before changing grant strategy.",
         "teams_do_next": "High scores suggest existing infrastructure to leverage. Low scores suggest investing in convening, shared learning, or backbone capacity before expecting coordination to emerge.",
         "not_over_interpret": "Health scores reflect structure, not performance. A low score doesn't mean the network is failing — it means coordination requires intentional effort.",
-        "badge": "Structural insight",
+        "signal_intensity": "medium",
     },
     "roles_region_lens": {
         "what_tells_you": "This shows how organizations are distributed relative to the defined regional lens, revealing alignment between funding sources and place-based impact.",
         "why_matters": "Regional strategies depend on understanding which actors operate within vs. outside the target geography. Misalignment between funder location and grantee location can affect accountability and coordination.",
         "teams_do_next": "Use this to clarify which actors are 'in scope' for regional coordination and which require different engagement strategies.",
         "not_over_interpret": "Out-of-lens funders are not problems — many effective funders operate nationally. This lens shows geographic distribution, not quality.",
-        "badge": "Directional signal",
+        "signal_intensity": "low",
     },
     "funding_concentration": {
         "what_tells_you": "Grant concentration shows how evenly or unevenly funding is distributed across organizations. It helps assess system resilience and exposure to single-funder risk.",
         "why_matters": "High concentration increases fragility — if key funders shift priorities, dependent organizations are exposed. Moderate concentration may reflect intentional focus.",
         "teams_do_next": "High concentration → assess dependency risk and succession planning. Moderate → check if specialization is intentional. Low → portfolios are distributed; resilience may be higher.",
         "not_over_interpret": "Concentration does not imply inefficiency or favoritism. Some issue areas require focused funding by design.",
-        "badge": "High leverage",
+        "signal_intensity": "medium",
     },
     "multi_funder_grantees": {
         "what_tells_you": "This identifies where multiple funders already support the same organizations — revealing latent alignment even without formal coordination.",
         "why_matters": "Shared grantees represent the lowest-friction entry points for funder coordination. These are places where alignment already exists organically.",
         "teams_do_next": "Dense clusters → opportunities for shared learning or coordination. Sparse overlap → funders operate independently (which may be intentional).",
         "not_over_interpret": "Low overlap doesn't indicate misalignment. Many funders intentionally differentiate portfolios to maximize collective coverage.",
-        "badge": "High leverage",
+        "signal_intensity": "medium",
     },
     "portfolio_twins": {
         "what_tells_you": "Portfolio overlap signals identify shared grantee touchpoints, not necessarily aligned strategies. Most funder pairs show limited overall similarity even when they fund some of the same organizations.",
         "why_matters": "This helps answer a practical question: Where might coordination be worth exploring — and where is it unlikely to add value?",
         "teams_do_next": "High similarity → review duplication, co-funding, or shared learning. Moderate overlap → consider light coordination (timing, convenings). Low overlap → no action required; portfolios are complementary.",
         "not_over_interpret": "Low similarity does not imply misalignment or inefficiency. Shared grantees do not imply redundant strategies. In most regions, distinct portfolios reflect healthy diversity.",
-        "badge": "Directional signal",
-        "practical_use": "For most funders, the practical use of this analysis is to decide where not to invest coordination time, and where a brief conversation might be worthwhile.",
+        "signal_intensity": "low",
     },
     "hidden_brokers": {
         "what_tells_you": "Brokers are organizations that connect otherwise separate parts of the network. They often enable coordination, information flow, and alignment across domains.",
         "why_matters": "High-brokerage actors are critical for coordination and knowledge transfer. Few brokers overall creates fragmentation risk if those actors disengage.",
         "teams_do_next": "Identify whether key brokers are aware of their structural role. Consider engagement, support, or risk mitigation for these connective organizations.",
         "not_over_interpret": "Brokerage is a structural role, not a value judgment. Brokers are not inherently leaders or decision-makers. Peripheral organizations may be highly impactful in niche roles.",
-        "badge": "Structural insight",
+        "signal_intensity": "medium",
     },
     "single_point_bridges": {
         "what_tells_you": "Some connections between network components rely on only one organization or relationship. These create structural fragility.",
         "why_matters": "Single-point bridges are not necessarily problems, but they represent risk. If the bridging actor disengages, entire parts of the network may disconnect.",
         "teams_do_next": "Assess whether bridge actors are stable and well-supported. Consider whether redundancy, diversification, or intentional cross-connection is needed.",
         "not_over_interpret": "Bridges are not failures — they often reflect natural network structure. The question is whether the risk is understood and managed.",
-        "badge": "Structural insight",
+        "signal_intensity": "medium",
     },
     "shared_board_conduits": {
         "what_tells_you": "Shared board memberships create informal pathways for coordination and influence across the network.",
         "why_matters": "In mature networks, informal governance ties are often how alignment happens without formal coordination structures. These are relationship-based coordination channels.",
         "teams_do_next": "Consider whether these connectors are aware of their bridging role and could be engaged more intentionally for network-wide coordination.",
         "not_over_interpret": "Board overlaps indicate potential for coordination, not actual coordination. Shared governance doesn't guarantee aligned strategies.",
-        "badge": "Exploratory",
+        "signal_intensity": "low",
     },
     "shared_board_conduits_empty": {
         "what_tells_you": "There are few or no informal governance ties connecting organizations across the network.",
         "why_matters": "In the absence of organic governance ties, coordination will not emerge naturally. Alignment efforts will need to be intentional rather than emergent.",
         "teams_do_next": "Consider formal convenings, intermediaries, or governance experiments to create the connective tissue that doesn't currently exist organically.",
         "not_over_interpret": "Lack of board overlaps is common and not inherently problematic. Many effective networks coordinate through other mechanisms.",
-        "badge": "Exploratory",
+        "signal_intensity": "low",
     },
     "isolated_funders": {
         "what_tells_you": "These funders have no shared board members with other network foundations, limiting informal coordination pathways.",
         "why_matters": "Without informal governance connections, peer learning and organic coordination are structurally unlikely. This doesn't mean coordination is impossible — just that it requires more intentional effort.",
         "teams_do_next": "Consider whether introductions, joint convenings, or shared initiatives could create connective tissue. Prioritize funders with aligned portfolios.",
         "not_over_interpret": "Governance isolation is common, especially for national funders or those with different geographic focus. It indicates structural distance, not misalignment.",
-        "badge": "Directional signal",
+        "signal_intensity": "low",
     },
+}
+
+# Signal Intensity labels (for rendering)
+SIGNAL_INTENSITY_LABELS = {
+    "low": "Low-intensity signal",
+    "medium": "Moderate-intensity signal",
+    "high": "High-intensity signal",
 }
 
 # Section intro text (human-readable, accessible)
@@ -1954,11 +1970,9 @@ def generate_markdown_report(insight_cards: dict, project_summary: dict, project
     # Decision Lens block
     lens = DECISION_LENS.get("network_health", {})
     if lens:
-        badge = lens.get("badge", "")
-        if badge:
-            lines.append(f':::decision-lens badge="{badge}"')
-        else:
-            lines.append(":::decision-lens")
+        intensity = lens.get("signal_intensity", "medium")
+        intensity_label = SIGNAL_INTENSITY_LABELS.get(intensity, "Signal")
+        lines.append(f':::decision-lens intensity="{intensity}"')
         lines.append(f"**What this tells you**")
         lines.append(lens.get("what_tells_you", ""))
         lines.append("")
@@ -1971,10 +1985,6 @@ def generate_markdown_report(insight_cards: dict, project_summary: dict, project
             lines.append("")
             lines.append(f"**What not to over-interpret**")
             lines.append(lens.get("not_over_interpret", ""))
-        if lens.get("practical_use"):
-            lines.append("")
-            lines.append(f"**Practical use**")
-            lines.append(lens.get("practical_use", ""))
         lines.append(":::")
         lines.append("")
     
@@ -2026,11 +2036,8 @@ def generate_markdown_report(insight_cards: dict, project_summary: dict, project
         # Decision Lens block
         lens = DECISION_LENS.get("roles_region_lens", {})
         if lens:
-            badge = lens.get("badge", "")
-            if badge:
-                lines.append(f':::decision-lens badge="{badge}"')
-            else:
-                lines.append(":::decision-lens")
+            intensity = lens.get("signal_intensity", "medium")
+            lines.append(f':::decision-lens intensity="{intensity}"')
             lines.append(f"**What this tells you**")
             lines.append(lens.get("what_tells_you", ""))
             lines.append("")
@@ -2043,10 +2050,6 @@ def generate_markdown_report(insight_cards: dict, project_summary: dict, project
                 lines.append("")
                 lines.append(f"**What not to over-interpret**")
                 lines.append(lens.get("not_over_interpret", ""))
-            if lens.get("practical_use"):
-                lines.append("")
-                lines.append(f"**Practical use**")
-                lines.append(lens.get("practical_use", ""))
             lines.append(":::")
             lines.append("")
         
@@ -2094,11 +2097,8 @@ def generate_markdown_report(insight_cards: dict, project_summary: dict, project
         
         lens = DECISION_LENS.get(lens_key, {})
         if lens:
-            badge = lens.get("badge", "")
-            if badge:
-                lines.append(f':::decision-lens badge="{badge}"')
-            else:
-                lines.append(":::decision-lens")
+            intensity = lens.get("signal_intensity", "medium")
+            lines.append(f':::decision-lens intensity="{intensity}"')
             lines.append(f"**What this tells you**")
             lines.append(lens.get("what_tells_you", ""))
             lines.append("")
@@ -2111,10 +2111,6 @@ def generate_markdown_report(insight_cards: dict, project_summary: dict, project
                 lines.append("")
                 lines.append(f"**What not to over-interpret**")
                 lines.append(lens.get("not_over_interpret", ""))
-            if lens.get("practical_use"):
-                lines.append("")
-                lines.append(f"**Practical use**")
-                lines.append(lens.get("practical_use", ""))
             lines.append(":::")
             lines.append("")
         
@@ -2383,6 +2379,118 @@ def generate_manifest(
     return manifest
 
 
+def preprocess_decision_lens(md_content: str) -> str:
+    """
+    Preprocess decision-lens blocks to HTML before markdown library processing.
+    
+    Converts :::decision-lens intensity="low" ... ::: to HTML divs.
+    This is needed because the markdown library doesn't handle custom fence syntax.
+    """
+    lines = md_content.split('\n')
+    result_lines = []
+    in_decision_lens = False
+    decision_lens_intensity = "medium"
+    decision_lens_content = {}
+    current_field = None
+    
+    for line in lines:
+        stripped = line.strip()
+        
+        if stripped.startswith(':::decision-lens'):
+            in_decision_lens = True
+            decision_lens_content = {}
+            decision_lens_intensity = "medium"
+            current_field = None
+            
+            # Parse intensity
+            intensity_match = re.search(r'intensity="([^"]+)"', stripped)
+            if intensity_match:
+                decision_lens_intensity = intensity_match.group(1)
+            continue
+        
+        if stripped == ':::' and in_decision_lens:
+            # Render the decision lens HTML
+            intensity_labels = {
+                "low": "Low-intensity signal",
+                "medium": "Moderate-intensity signal",
+                "high": "High-intensity signal",
+            }
+            intensity_label = intensity_labels.get(decision_lens_intensity, "Signal")
+            
+            result_lines.append(f'<div class="decision-lens decision-lens--{decision_lens_intensity}" role="note" aria-label="Decision Lens">')
+            result_lines.append('  <div class="decision-lens__header">')
+            result_lines.append('    <p class="decision-lens__title">Decision Lens</p>')
+            result_lines.append(f'    <span class="decision-lens__badge decision-lens__badge--{decision_lens_intensity}">{intensity_label}</span>')
+            result_lines.append('  </div>')
+            result_lines.append('  <div class="decision-lens__grid">')
+            
+            # What this tells you
+            result_lines.append('    <div class="decision-lens__item">')
+            result_lines.append('      <p class="decision-lens__label">What this tells you</p>')
+            result_lines.append(f'      <p class="decision-lens__text">{decision_lens_content.get("tells_you", "")}</p>')
+            result_lines.append('    </div>')
+            
+            # Why it matters
+            result_lines.append('    <div class="decision-lens__item">')
+            result_lines.append('      <p class="decision-lens__label">Why it matters</p>')
+            result_lines.append(f'      <p class="decision-lens__text">{decision_lens_content.get("why_matters", "")}</p>')
+            result_lines.append('    </div>')
+            
+            # What teams often do next
+            result_lines.append('    <div class="decision-lens__item">')
+            result_lines.append('      <p class="decision-lens__label">What teams often do next</p>')
+            result_lines.append(f'      <p class="decision-lens__text">{decision_lens_content.get("next_steps", "")}</p>')
+            result_lines.append('    </div>')
+            
+            result_lines.append('  </div>')
+            
+            # Guardrail (if present)
+            if decision_lens_content.get("guardrail"):
+                result_lines.append('  <div class="decision-lens__guardrail">')
+                result_lines.append('    <p class="decision-lens__guardrail-title">What not to over-interpret</p>')
+                result_lines.append(f'    <p class="decision-lens__guardrail-text">{decision_lens_content.get("guardrail", "")}</p>')
+                result_lines.append('  </div>')
+            
+            # Global no-action normalization (always present)
+            result_lines.append('  <div class="decision-lens__footer">')
+            result_lines.append('    <p class="decision-lens__footer-text">In many cases, the appropriate outcome of this analysis is to confirm that no coordination or intervention is needed.</p>')
+            result_lines.append('  </div>')
+            
+            result_lines.append('</div>')
+            result_lines.append('')
+            
+            in_decision_lens = False
+            decision_lens_content = {}
+            decision_lens_intensity = "medium"
+            current_field = None
+            continue
+        
+        if in_decision_lens:
+            if stripped.startswith('**') and stripped.endswith('**'):
+                field_name = stripped[2:-2].lower()
+                if 'tells you' in field_name:
+                    current_field = 'tells_you'
+                elif 'why it matters' in field_name or 'matters for decisions' in field_name:
+                    current_field = 'why_matters'
+                elif 'teams often do' in field_name or 'next' in field_name:
+                    current_field = 'next_steps'
+                elif 'not to over-interpret' in field_name or 'over-interpret' in field_name:
+                    current_field = 'guardrail'
+                else:
+                    current_field = None
+            elif stripped and current_field:
+                # Apply basic inline formatting
+                text = stripped
+                text = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', text)
+                text = re.sub(r'\*(.+?)\*', r'<em>\1</em>', text)
+                decision_lens_content[current_field] = text
+            continue
+        
+        result_lines.append(line)
+    
+    return '\n'.join(result_lines)
+
+
 def render_html_report(
     markdown_content: str,
     project_summary: dict,
@@ -2455,7 +2563,9 @@ def render_html_report(
             'fenced_code',
             TocExtension(permalink=False, toc_depth=3)
         ])
-        content_html = md.convert(markdown_content)
+        # Preprocess decision-lens blocks (custom syntax not handled by markdown library)
+        preprocessed_md = preprocess_decision_lens(markdown_content)
+        content_html = md.convert(preprocessed_md)
         toc_html = md.toc
     else:
         # Basic conversion without library
@@ -2497,35 +2607,43 @@ def basic_markdown_to_html(md_content: str) -> str:
     
     # Track decision lens content for grid rendering
     decision_lens_content = {}
-    decision_lens_badge = ""
+    decision_lens_intensity = "medium"
     current_dl_field = None
     
     for line in lines:
         stripped = line.strip()
         
-        # Handle decision-lens blocks (with optional badge)
+        # Handle decision-lens blocks (with intensity)
         if stripped.startswith(':::decision-lens'):
             if in_list:
                 html_lines.append('</ul>')
                 in_list = False
             in_decision_lens = True
             decision_lens_content = {}
-            decision_lens_badge = ""
+            decision_lens_intensity = "medium"
             current_dl_field = None
             
-            # Parse optional badge: :::decision-lens badge="Directional signal"
-            badge_match = re.search(r'badge="([^"]+)"', stripped)
-            if badge_match:
-                decision_lens_badge = badge_match.group(1)
+            # Parse intensity: :::decision-lens intensity="low"
+            intensity_match = re.search(r'intensity="([^"]+)"', stripped)
+            if intensity_match:
+                decision_lens_intensity = intensity_match.group(1)
             continue
         
         if stripped == ':::' and in_decision_lens:
+            # Get intensity label
+            intensity_labels = {
+                "low": "Low-intensity signal",
+                "medium": "Moderate-intensity signal",
+                "high": "High-intensity signal",
+            }
+            intensity_label = intensity_labels.get(decision_lens_intensity, "Signal")
+            intensity_class = f"decision-lens--{decision_lens_intensity}"
+            
             # Render the decision lens grid
-            html_lines.append('<div class="decision-lens" role="note" aria-label="Decision Lens">')
+            html_lines.append(f'<div class="decision-lens {intensity_class}" role="note" aria-label="Decision Lens">')
             html_lines.append('  <div class="decision-lens__header">')
             html_lines.append('    <p class="decision-lens__title">Decision Lens</p>')
-            if decision_lens_badge:
-                html_lines.append(f'    <span class="decision-lens__badge">{decision_lens_badge}</span>')
+            html_lines.append(f'    <span class="decision-lens__badge decision-lens__badge--{decision_lens_intensity}">{intensity_label}</span>')
             html_lines.append('  </div>')
             html_lines.append('  <div class="decision-lens__grid">')
             
@@ -2556,18 +2674,16 @@ def basic_markdown_to_html(md_content: str) -> str:
                 html_lines.append(f'    <p class="decision-lens__guardrail-text">{decision_lens_content.get("guardrail", "")}</p>')
                 html_lines.append('  </div>')
             
-            # Practical use (if present) - action-shaped "so what"
-            if decision_lens_content.get("practical_use"):
-                html_lines.append('  <div class="decision-lens__guardrail">')
-                html_lines.append('    <p class="decision-lens__guardrail-title">Practical use</p>')
-                html_lines.append(f'    <p class="decision-lens__guardrail-text">{decision_lens_content.get("practical_use", "")}</p>')
-                html_lines.append('  </div>')
+            # Global no-action normalization (always present)
+            html_lines.append('  <div class="decision-lens__footer">')
+            html_lines.append('    <p class="decision-lens__footer-text">In many cases, the appropriate outcome of this analysis is to confirm that no coordination or intervention is needed.</p>')
+            html_lines.append('  </div>')
             
             html_lines.append('</div>')
             
             in_decision_lens = False
             decision_lens_content = {}
-            decision_lens_badge = ""
+            decision_lens_intensity = "medium"
             current_dl_field = None
             continue
         
@@ -2584,8 +2700,6 @@ def basic_markdown_to_html(md_content: str) -> str:
                     current_dl_field = 'next_steps'
                 elif 'not to over-interpret' in field_name or 'over-interpret' in field_name:
                     current_dl_field = 'guardrail'
-                elif 'practical use' in field_name:
-                    current_dl_field = 'practical_use'
                 else:
                     current_dl_field = None
             elif stripped and current_dl_field:
@@ -3196,6 +3310,35 @@ def build_html_from_template(
       font-size: 0.92rem;
       color: var(--text-light);
       font-style: italic;
+    }}
+    /* Signal Intensity Badge Colors */
+    .decision-lens__badge--low {{
+      background: rgba(102, 102, 102, 0.12);
+      border-color: rgba(102, 102, 102, 0.3);
+      color: #555;
+    }}
+    .decision-lens__badge--medium {{
+      background: rgba(40, 37, 190, 0.12);
+      border-color: rgba(40, 37, 190, 0.3);
+      color: var(--c4c-indigo);
+    }}
+    .decision-lens__badge--high {{
+      background: rgba(235, 144, 1, 0.15);
+      border-color: rgba(235, 144, 1, 0.4);
+      color: #b87000;
+    }}
+    /* Decision Lens Footer (global no-action normalization) */
+    .decision-lens__footer {{
+      margin-top: 0.9rem;
+      padding-top: 0.65rem;
+      border-top: 1px solid rgba(40, 37, 190, 0.12);
+    }}
+    .decision-lens__footer-text {{
+      margin: 0;
+      font-size: 0.82rem;
+      color: var(--muted);
+      font-style: italic;
+      text-align: center;
     }}
     /* Legacy callout-decision (for backward compat) */
     .callout-decision {{
