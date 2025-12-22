@@ -12,6 +12,14 @@ Usage:
 
 VERSION HISTORY:
 ----------------
+v3.0.16 (2025-12-22): Portfolio Twins tier-consistent language
+- FIX: Per-pair narratives now match overall tier (weak/moderate/strong)
+- FIX: "Natural partners" only used for high Jaccard (>= 0.15)
+- NEW: Portfolio size context (e.g., "20 of 620 vs 540")
+- NEW: Adjusted thresholds: Strong >= 0.15, Moderate >= 0.05, Weak < 0.05
+- FIX: Opportunity text now tier-appropriate
+- FIX: Decision Lens text now tier-neutral
+
 v3.0.15 (2025-12-21): Decision Lens + Executive Summary (C4C Authoring Guide v1.0)
 - NEW: Executive Summary section after header with key signals
 - NEW: Decision Lens blocks for each section (What/Why/Next)
@@ -120,7 +128,7 @@ from collections import defaultdict
 # Version
 # =============================================================================
 
-ENGINE_VERSION = "3.0.15"
+ENGINE_VERSION = "3.0.16"
 BUNDLE_FORMAT_VERSION = "1.0"
 
 # C4C logo as base64 (80px, ~4KB) for self-contained HTML reports
@@ -396,6 +404,8 @@ def compute_portfolio_overlap(edges_df: pd.DataFrame) -> pd.DataFrame:
                 overlaps.append({
                     "funder_1": f1, "funder_2": f2,
                     "shared_grantees": len(shared),
+                    "funder_1_portfolio": len(funder_grantees[f1]),
+                    "funder_2_portfolio": len(funder_grantees[f2]),
                     "jaccard_similarity": round(jaccard, 3),
                     "shared_grantee_ids": list(shared),
                 })
@@ -1001,45 +1011,75 @@ def generate_insight_cards(nodes_df, edges_df, metrics_df, interlock_graph, flow
     # =========================================================================
     # Card 4: Portfolio Twins
     # =========================================================================
+    # Thresholds: Strong >= 0.15, Moderate >= 0.05, Weak < 0.05
+    # (These are calibrated for philanthropic networks where 0.10+ is meaningful)
     if not overlap_df.empty:
         top = overlap_df.iloc[0]
         top_jaccard = top['jaccard_similarity']
         
-        if top_jaccard >= 0.3:
+        # Tier-consistent framing
+        if top_jaccard >= 0.15:
             twin_emoji, twin_label = "🟢", "Strong alignment found"
             twin_narrative = (
                 f"**{len(overlap_df)} funder pairs** share at least one grantee. The most aligned — "
                 f"{node_labels.get(top['funder_1'], '')} & {node_labels.get(top['funder_2'], '')} — "
                 f"share {int(top['shared_grantees'])} grantees (Jaccard: {top_jaccard:.2f}). "
-                f"This level of overlap suggests natural partnership potential."
+                f"High overlap suggests potential for coordination conversations or intentional co-funding."
             )
-        elif top_jaccard >= 0.1:
+            opportunity_text = "💡 **Opportunity:** These funder pairs show meaningful alignment — consider joint learning, aligned timing, or shared reporting pilots."
+        elif top_jaccard >= 0.05:
             twin_emoji, twin_label = "🟡", "Moderate alignment"
             twin_narrative = (
                 f"**{len(overlap_df)} funder pairs** share grantees. Top pair: "
                 f"{node_labels.get(top['funder_1'], '')} & {node_labels.get(top['funder_2'], '')} "
-                f"({int(top['shared_grantees'])} shared, Jaccard: {top_jaccard:.2f})."
+                f"({int(top['shared_grantees'])} shared, Jaccard: {top_jaccard:.2f}). "
+                f"Meaningful overlap exists — worth checking for avoidable duplication or alignment opportunities."
             )
+            opportunity_text = "💡 **Opportunity:** Moderate overlap suggests shared touchpoints. Consider lightweight coordination (shared learning, grant timing) before deeper alignment."
         else:
-            twin_emoji, twin_label = "⚪", "Weak alignment"
-            twin_narrative = f"Some portfolio overlap exists, but even the closest funder pairs share few grantees."
+            twin_emoji, twin_label = "⚪", "Limited overlap"
+            twin_narrative = (
+                f"**{len(overlap_df)} funder pairs** share at least one grantee, but similarity is low. "
+                f"Even the closest pair ({node_labels.get(top['funder_1'], '')} & {node_labels.get(top['funder_2'], '')}) "
+                f"has Jaccard of {top_jaccard:.2f}. Portfolios are largely distinct."
+            )
+            opportunity_text = "💡 **Context:** Low overlap doesn't mean coordination isn't valuable — it means portfolios are largely distinct. Shared touchpoints may still anchor lightweight coordination."
         
         ranked_rows = []
         for rank, (_, r) in enumerate(overlap_df.head(5).iterrows(), 1):
             f1, f2 = node_labels.get(r['funder_1'], r['funder_1']), node_labels.get(r['funder_2'], r['funder_2'])
+            shared = int(r['shared_grantees'])
+            jaccard = r['jaccard_similarity']
+            p1 = r.get('funder_1_portfolio', 0)
+            p2 = r.get('funder_2_portfolio', 0)
+            
+            # Tier-consistent per-pair narrative
+            if jaccard >= 0.15:
+                pair_desc = f"High overlap — natural partners for coordination."
+            elif jaccard >= 0.05:
+                pair_desc = f"Meaningful overlap — potential for alignment."
+            else:
+                pair_desc = f"Shared touchpoints, but portfolios largely distinct."
+            
+            # Include portfolio context if available
+            if p1 and p2:
+                narrative = f"Share **{shared} grantees** ({shared} of {p1} vs {p2}, Jaccard: {jaccard:.2f}) — {pair_desc}"
+            else:
+                narrative = f"Share **{shared} grantees** (Jaccard: {jaccard:.2f}) — {pair_desc}"
+            
             ranked_rows.append({
                 "rank": rank,
                 "pair": f"{f1} ↔ {f2}",
-                "shared": int(r['shared_grantees']),
-                "jaccard": round(r['jaccard_similarity'], 2),
-                "narrative": f"Share **{int(r['shared_grantees'])} grantees** (Jaccard: {r['jaccard_similarity']:.2f}) — natural partners for coordination."
+                "shared": shared,
+                "jaccard": round(jaccard, 2),
+                "narrative": narrative
             })
         
         cards.append({
             "card_id": "portfolio_twins",
             "use_case": "Funding Concentration",
             "title": "Portfolio Twins",
-            "summary": f"{twin_emoji} **{twin_label}**\n\n{twin_narrative}\n\n💡 **Opportunity:** Funder pairs with high overlap could pilot joint reporting, co-investment, or aligned grantmaking.",
+            "summary": f"{twin_emoji} **{twin_label}**\n\n{twin_narrative}\n\n{opportunity_text}",
             "ranked_rows": ranked_rows,
             "evidence": {"node_ids": [], "edge_ids": []},
         })
@@ -1340,9 +1380,9 @@ DECISION_LENS = {
         "teams_do_next": "Funders use this insight to identify peers for exploratory conversations, co-learning efforts, or time-bound coordination experiments.",
     },
     "portfolio_twins": {
-        "what_tells_you": "Some funder pairs exhibit unusually similar grantmaking behavior.",
-        "why_matters": "Highly similar portfolios may indicate duplication, missed coordination opportunities, or potential leverage through alignment.",
-        "teams_do_next": "Teams use this pattern to explore whether funders are aware of each other's strategies and whether intentional differentiation or coordination would add value.",
+        "what_tells_you": "This analysis measures how similar funder portfolios are by counting shared grantees and computing Jaccard similarity (overlap relative to total portfolio size).",
+        "why_matters": "Portfolio similarity can indicate natural alignment, unintentional duplication, or opportunities for coordination. Low similarity means portfolios are largely distinct.",
+        "teams_do_next": "Teams use this pattern to identify which funder pairs might benefit from coordination conversations — or to confirm that portfolios are intentionally differentiated.",
     },
     "hidden_brokers": {
         "what_tells_you": "Certain organizations quietly connect multiple parts of the network without being highly visible or formally recognized.",
