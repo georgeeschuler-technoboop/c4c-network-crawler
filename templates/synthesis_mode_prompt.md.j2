@@ -1,0 +1,86 @@
+# Synthesis Mode Prompt
+## InsightGraph Network Analysis
+
+You are generating a **visual or narrative synthesis** of a network analysis
+produced by InsightGraph.
+
+Your task is to translate structural findings into clear, accessible language
+for decision-makers **without prescribing actions**.
+
+---
+
+## Project Context
+- Project: {{ project_name }}
+- Generated: {{ date }}
+- Data scope: {{ data_scope | default("Derived from available public filings; coverage may be incomplete.") }}
+
+---
+
+## Mandatory Rules
+
+1. Do NOT recommend actions.
+2. Do NOT imply failure, weakness, or deficiency.
+3. Do NOT use prescriptive verbs (should, must, need to).
+4. Always frame findings as **structural patterns**, not judgments.
+5. Explicitly state that **no action is a valid outcome**.
+
+---
+
+## Required Structure (Decision Lens)
+
+For each section, use:
+
+### What we observe
+Describe the pattern in plain language.
+
+### What this structure enables
+Explain what tends to be easier because of this structure.
+
+### What this structure constrains
+Explain what tends to be harder or slower.
+
+### How teams often use this insight
+Describe how decision-makers commonly interpret this pattern to evaluate options.
+
+---
+
+## Language Guidance
+
+Use verbs like:
+- reveals
+- reflects
+- enables
+- constrains
+- is associated with
+
+Avoid verbs like:
+- suggests
+- recommends
+- indicates a need
+- opportunity to
+
+---
+
+## Portfolio Twins Rule
+
+When organizations share similar funding patterns:
+- Do not label as redundancy
+- Frame as parallel exposure
+- Emphasize coordination as optional, not required
+
+---
+
+## Required Closing Statement
+
+End the synthesis with:
+
+“This pattern does not imply failure. It reflects a common network structure with specific tradeoffs. Stakeholders may decide whether intervention is warranted based on their goals. No action is a valid outcome.”
+
+---
+
+## Output Expectations
+
+- Clear, accessible language
+- Neutral tone
+- Decision-support framing
+- No calls to action
