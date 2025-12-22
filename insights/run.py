@@ -12,6 +12,14 @@ Usage:
 
 VERSION HISTORY:
 ----------------
+v3.0.18 (2025-12-22): Decision Lens grid layout + badges
+- NEW: Decision Lens rendered as 3-column grid (responsive)
+- NEW: Optional badge support (Directional signal, High leverage, etc.)
+- NEW: Practical use sentence for action-shaped "so what"
+- NEW: Speed bump subtitle for Portfolio Twins (prevents skimmer misread)
+- CSS: .decision-lens component with header, grid, guardrail, badge styling
+- Follows C4C Report Authoring Guide v1.0 schema
+
 v3.0.17 (2025-12-22): Decision Lens guardrails + improved framing
 - NEW: "What not to over-interpret" guardrail in every Decision Lens
 - IMPROVED: All section intros now clarify what the analysis does NOT show
@@ -135,7 +143,7 @@ from collections import defaultdict
 # Version
 # =============================================================================
 
-ENGINE_VERSION = "3.0.17"
+ENGINE_VERSION = "3.0.18"
 BUNDLE_FORMAT_VERSION = "1.0"
 
 # C4C logo as base64 (80px, ~4KB) for self-contained HTML reports
@@ -1367,6 +1375,8 @@ ROLE_VOCABULARY = {
 #   - why_matters: decision context  
 #   - teams_do_next: action guidance (descriptive, not prescriptive)
 #   - not_over_interpret: misinterpretation guardrail (prevents client over-reaction)
+#   - badge: optional qualifier (Directional signal, High leverage, Structural insight, etc.)
+#   - practical_use: one-sentence action-shaped "so what" (legitimizes inaction)
 
 DECISION_LENS = {
     "network_health": {
@@ -1374,60 +1384,71 @@ DECISION_LENS = {
         "why_matters": "When coordination infrastructure is weak, new funding or initiatives often underperform. This signal helps prioritize where to invest in connective tissue before changing grant strategy.",
         "teams_do_next": "High scores suggest existing infrastructure to leverage. Low scores suggest investing in convening, shared learning, or backbone capacity before expecting coordination to emerge.",
         "not_over_interpret": "Health scores reflect structure, not performance. A low score doesn't mean the network is failing — it means coordination requires intentional effort.",
+        "badge": "Structural insight",
     },
     "roles_region_lens": {
         "what_tells_you": "This shows how organizations are distributed relative to the defined regional lens, revealing alignment between funding sources and place-based impact.",
         "why_matters": "Regional strategies depend on understanding which actors operate within vs. outside the target geography. Misalignment between funder location and grantee location can affect accountability and coordination.",
         "teams_do_next": "Use this to clarify which actors are 'in scope' for regional coordination and which require different engagement strategies.",
         "not_over_interpret": "Out-of-lens funders are not problems — many effective funders operate nationally. This lens shows geographic distribution, not quality.",
+        "badge": "Directional signal",
     },
     "funding_concentration": {
         "what_tells_you": "Grant concentration shows how evenly or unevenly funding is distributed across organizations. It helps assess system resilience and exposure to single-funder risk.",
         "why_matters": "High concentration increases fragility — if key funders shift priorities, dependent organizations are exposed. Moderate concentration may reflect intentional focus.",
         "teams_do_next": "High concentration → assess dependency risk and succession planning. Moderate → check if specialization is intentional. Low → portfolios are distributed; resilience may be higher.",
         "not_over_interpret": "Concentration does not imply inefficiency or favoritism. Some issue areas require focused funding by design.",
+        "badge": "High leverage",
     },
     "multi_funder_grantees": {
         "what_tells_you": "This identifies where multiple funders already support the same organizations — revealing latent alignment even without formal coordination.",
         "why_matters": "Shared grantees represent the lowest-friction entry points for funder coordination. These are places where alignment already exists organically.",
         "teams_do_next": "Dense clusters → opportunities for shared learning or coordination. Sparse overlap → funders operate independently (which may be intentional).",
         "not_over_interpret": "Low overlap doesn't indicate misalignment. Many funders intentionally differentiate portfolios to maximize collective coverage.",
+        "badge": "High leverage",
     },
     "portfolio_twins": {
         "what_tells_you": "Portfolio overlap signals identify shared grantee touchpoints, not necessarily aligned strategies. Most funder pairs show limited overall similarity even when they fund some of the same organizations.",
         "why_matters": "This helps answer a practical question: Where might coordination be worth exploring — and where is it unlikely to add value?",
         "teams_do_next": "High similarity → review duplication, co-funding, or shared learning. Moderate overlap → consider light coordination (timing, convenings). Low overlap → no action required; portfolios are complementary.",
         "not_over_interpret": "Low similarity does not imply misalignment or inefficiency. Shared grantees do not imply redundant strategies. In most regions, distinct portfolios reflect healthy diversity.",
+        "badge": "Directional signal",
+        "practical_use": "For most funders, the practical use of this analysis is to decide where not to invest coordination time, and where a brief conversation might be worthwhile.",
     },
     "hidden_brokers": {
         "what_tells_you": "Brokers are organizations that connect otherwise separate parts of the network. They often enable coordination, information flow, and alignment across domains.",
         "why_matters": "High-brokerage actors are critical for coordination and knowledge transfer. Few brokers overall creates fragmentation risk if those actors disengage.",
         "teams_do_next": "Identify whether key brokers are aware of their structural role. Consider engagement, support, or risk mitigation for these connective organizations.",
         "not_over_interpret": "Brokerage is a structural role, not a value judgment. Brokers are not inherently leaders or decision-makers. Peripheral organizations may be highly impactful in niche roles.",
+        "badge": "Structural insight",
     },
     "single_point_bridges": {
         "what_tells_you": "Some connections between network components rely on only one organization or relationship. These create structural fragility.",
         "why_matters": "Single-point bridges are not necessarily problems, but they represent risk. If the bridging actor disengages, entire parts of the network may disconnect.",
         "teams_do_next": "Assess whether bridge actors are stable and well-supported. Consider whether redundancy, diversification, or intentional cross-connection is needed.",
         "not_over_interpret": "Bridges are not failures — they often reflect natural network structure. The question is whether the risk is understood and managed.",
+        "badge": "Structural insight",
     },
     "shared_board_conduits": {
         "what_tells_you": "Shared board memberships create informal pathways for coordination and influence across the network.",
         "why_matters": "In mature networks, informal governance ties are often how alignment happens without formal coordination structures. These are relationship-based coordination channels.",
         "teams_do_next": "Consider whether these connectors are aware of their bridging role and could be engaged more intentionally for network-wide coordination.",
         "not_over_interpret": "Board overlaps indicate potential for coordination, not actual coordination. Shared governance doesn't guarantee aligned strategies.",
+        "badge": "Exploratory",
     },
     "shared_board_conduits_empty": {
         "what_tells_you": "There are few or no informal governance ties connecting organizations across the network.",
         "why_matters": "In the absence of organic governance ties, coordination will not emerge naturally. Alignment efforts will need to be intentional rather than emergent.",
         "teams_do_next": "Consider formal convenings, intermediaries, or governance experiments to create the connective tissue that doesn't currently exist organically.",
         "not_over_interpret": "Lack of board overlaps is common and not inherently problematic. Many effective networks coordinate through other mechanisms.",
+        "badge": "Exploratory",
     },
     "isolated_funders": {
         "what_tells_you": "These funders have no shared board members with other network foundations, limiting informal coordination pathways.",
         "why_matters": "Without informal governance connections, peer learning and organic coordination are structurally unlikely. This doesn't mean coordination is impossible — just that it requires more intentional effort.",
         "teams_do_next": "Consider whether introductions, joint convenings, or shared initiatives could create connective tissue. Prioritize funders with aligned portfolios.",
         "not_over_interpret": "Governance isolation is common, especially for national funders or those with different geographic focus. It indicates structural distance, not misalignment.",
+        "badge": "Directional signal",
     },
 }
 
@@ -1443,6 +1464,12 @@ SECTION_INTROS = {
     "single_point_bridges": "This section identifies structural vulnerabilities where removing a single node would fragment the network. Bridges are not failures — they're features that may require monitoring.",
     "shared_board_conduits": "This section examines whether shared board memberships create informal pathways for coordination. Board overlaps indicate potential channels, not guaranteed alignment.",
     "isolated_funders": "This section identifies funders with no governance connections to other network foundations. Isolation is structural, not a judgment — many effective funders operate independently.",
+}
+
+# Section subtitles (speed bumps for skimmers)
+# These are short qualifiers rendered in lighter text directly under the section header
+SECTION_SUBTITLES = {
+    "portfolio_twins": "Most funder pairs show limited overlap; this section highlights where shared touchpoints exist.",
 }
 
 # Default region lens for GLFN (can be overridden by project_config.json)
@@ -1927,7 +1954,11 @@ def generate_markdown_report(insight_cards: dict, project_summary: dict, project
     # Decision Lens block
     lens = DECISION_LENS.get("network_health", {})
     if lens:
-        lines.append(":::decision-lens")
+        badge = lens.get("badge", "")
+        if badge:
+            lines.append(f':::decision-lens badge="{badge}"')
+        else:
+            lines.append(":::decision-lens")
         lines.append(f"**What this tells you**")
         lines.append(lens.get("what_tells_you", ""))
         lines.append("")
@@ -1940,6 +1971,10 @@ def generate_markdown_report(insight_cards: dict, project_summary: dict, project
             lines.append("")
             lines.append(f"**What not to over-interpret**")
             lines.append(lens.get("not_over_interpret", ""))
+        if lens.get("practical_use"):
+            lines.append("")
+            lines.append(f"**Practical use**")
+            lines.append(lens.get("practical_use", ""))
         lines.append(":::")
         lines.append("")
     
@@ -1991,7 +2026,11 @@ def generate_markdown_report(insight_cards: dict, project_summary: dict, project
         # Decision Lens block
         lens = DECISION_LENS.get("roles_region_lens", {})
         if lens:
-            lines.append(":::decision-lens")
+            badge = lens.get("badge", "")
+            if badge:
+                lines.append(f':::decision-lens badge="{badge}"')
+            else:
+                lines.append(":::decision-lens")
             lines.append(f"**What this tells you**")
             lines.append(lens.get("what_tells_you", ""))
             lines.append("")
@@ -2004,6 +2043,10 @@ def generate_markdown_report(insight_cards: dict, project_summary: dict, project
                 lines.append("")
                 lines.append(f"**What not to over-interpret**")
                 lines.append(lens.get("not_over_interpret", ""))
+            if lens.get("practical_use"):
+                lines.append("")
+                lines.append(f"**Practical use**")
+                lines.append(lens.get("practical_use", ""))
             lines.append(":::")
             lines.append("")
         
@@ -2028,6 +2071,12 @@ def generate_markdown_report(insight_cards: dict, project_summary: dict, project
         summary_text = card.get("summary", "")
         
         lines.append(f"## {title}")
+        
+        # Add speed bump subtitle if available (for skimmers)
+        subtitle = SECTION_SUBTITLES.get(card_id, "")
+        if subtitle:
+            lines.append(f"_{subtitle}_")
+        
         lines.append(f"*Use Case: {use_case}*")
         lines.append("")
         
@@ -2045,7 +2094,11 @@ def generate_markdown_report(insight_cards: dict, project_summary: dict, project
         
         lens = DECISION_LENS.get(lens_key, {})
         if lens:
-            lines.append(":::decision-lens")
+            badge = lens.get("badge", "")
+            if badge:
+                lines.append(f':::decision-lens badge="{badge}"')
+            else:
+                lines.append(":::decision-lens")
             lines.append(f"**What this tells you**")
             lines.append(lens.get("what_tells_you", ""))
             lines.append("")
@@ -2058,6 +2111,10 @@ def generate_markdown_report(insight_cards: dict, project_summary: dict, project
                 lines.append("")
                 lines.append(f"**What not to over-interpret**")
                 lines.append(lens.get("not_over_interpret", ""))
+            if lens.get("practical_use"):
+                lines.append("")
+                lines.append(f"**Practical use**")
+                lines.append(lens.get("practical_use", ""))
             lines.append(":::")
             lines.append("")
         
@@ -2438,32 +2495,102 @@ def basic_markdown_to_html(md_content: str) -> str:
     table_header_done = False
     skip_first_h1 = True  # Skip first H1 (duplicate of header)
     
+    # Track decision lens content for grid rendering
+    decision_lens_content = {}
+    decision_lens_badge = ""
+    current_dl_field = None
+    
     for line in lines:
         stripped = line.strip()
         
-        # Handle decision-lens blocks
-        if stripped == ':::decision-lens':
+        # Handle decision-lens blocks (with optional badge)
+        if stripped.startswith(':::decision-lens'):
             if in_list:
                 html_lines.append('</ul>')
                 in_list = False
-            html_lines.append('<div class="callout callout-decision">')
-            html_lines.append('<span class="decision-label">Decision Lens</span>')
             in_decision_lens = True
+            decision_lens_content = {}
+            decision_lens_badge = ""
+            current_dl_field = None
+            
+            # Parse optional badge: :::decision-lens badge="Directional signal"
+            badge_match = re.search(r'badge="([^"]+)"', stripped)
+            if badge_match:
+                decision_lens_badge = badge_match.group(1)
             continue
         
         if stripped == ':::' and in_decision_lens:
+            # Render the decision lens grid
+            html_lines.append('<div class="decision-lens" role="note" aria-label="Decision Lens">')
+            html_lines.append('  <div class="decision-lens__header">')
+            html_lines.append('    <p class="decision-lens__title">Decision Lens</p>')
+            if decision_lens_badge:
+                html_lines.append(f'    <span class="decision-lens__badge">{decision_lens_badge}</span>')
+            html_lines.append('  </div>')
+            html_lines.append('  <div class="decision-lens__grid">')
+            
+            # What this tells you
+            html_lines.append('    <div class="decision-lens__item">')
+            html_lines.append('      <p class="decision-lens__label">What this tells you</p>')
+            html_lines.append(f'      <p class="decision-lens__text">{decision_lens_content.get("tells_you", "")}</p>')
+            html_lines.append('    </div>')
+            
+            # Why it matters
+            html_lines.append('    <div class="decision-lens__item">')
+            html_lines.append('      <p class="decision-lens__label">Why it matters</p>')
+            html_lines.append(f'      <p class="decision-lens__text">{decision_lens_content.get("why_matters", "")}</p>')
+            html_lines.append('    </div>')
+            
+            # What teams often do next
+            html_lines.append('    <div class="decision-lens__item">')
+            html_lines.append('      <p class="decision-lens__label">What teams often do next</p>')
+            html_lines.append(f'      <p class="decision-lens__text">{decision_lens_content.get("next_steps", "")}</p>')
+            html_lines.append('    </div>')
+            
+            html_lines.append('  </div>')
+            
+            # Guardrail (if present)
+            if decision_lens_content.get("guardrail"):
+                html_lines.append('  <div class="decision-lens__guardrail">')
+                html_lines.append('    <p class="decision-lens__guardrail-title">What not to over-interpret</p>')
+                html_lines.append(f'    <p class="decision-lens__guardrail-text">{decision_lens_content.get("guardrail", "")}</p>')
+                html_lines.append('  </div>')
+            
+            # Practical use (if present) - action-shaped "so what"
+            if decision_lens_content.get("practical_use"):
+                html_lines.append('  <div class="decision-lens__guardrail">')
+                html_lines.append('    <p class="decision-lens__guardrail-title">Practical use</p>')
+                html_lines.append(f'    <p class="decision-lens__guardrail-text">{decision_lens_content.get("practical_use", "")}</p>')
+                html_lines.append('  </div>')
+            
             html_lines.append('</div>')
+            
             in_decision_lens = False
+            decision_lens_content = {}
+            decision_lens_badge = ""
+            current_dl_field = None
             continue
         
-        # Inside decision-lens, format content
+        # Inside decision-lens, collect content by field
         if in_decision_lens:
             if stripped.startswith('**') and stripped.endswith('**'):
-                # Bold header like "**What this tells you**"
-                text = stripped[2:-2]
-                html_lines.append(f'<p><strong>{text}</strong></p>')
-            elif stripped:
-                html_lines.append(f'<p>{inline_format(stripped)}</p>')
+                # Field header like "**What this tells you**"
+                field_name = stripped[2:-2].lower()
+                if 'tells you' in field_name:
+                    current_dl_field = 'tells_you'
+                elif 'why it matters' in field_name or 'matters for decisions' in field_name:
+                    current_dl_field = 'why_matters'
+                elif 'teams often do' in field_name or 'next' in field_name:
+                    current_dl_field = 'next_steps'
+                elif 'not to over-interpret' in field_name or 'over-interpret' in field_name:
+                    current_dl_field = 'guardrail'
+                elif 'practical use' in field_name:
+                    current_dl_field = 'practical_use'
+                else:
+                    current_dl_field = None
+            elif stripped and current_dl_field:
+                # Content for current field
+                decision_lens_content[current_dl_field] = inline_format(stripped)
             continue
         
         # Close blockquote if we're leaving it
@@ -2986,14 +3113,99 @@ def build_html_from_template(
       background: rgba(40, 37, 190, 0.08);
       border-left-color: var(--c4c-indigo);
     }}
+    /* Decision Lens Component (C4C) */
+    .decision-lens {{
+      margin: 1rem 0 1.25rem;
+      padding: 1rem 1.25rem;
+      border-radius: 12px;
+      border: 1px solid rgba(40, 37, 190, 0.18);
+      background: rgba(40, 37, 190, 0.06);
+    }}
+    .decision-lens__header {{
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.75rem;
+      margin-bottom: 0.75rem;
+    }}
+    .decision-lens__title {{
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      font-weight: 800;
+      letter-spacing: 0.2px;
+      color: var(--c4c-indigo);
+      margin: 0;
+      font-size: 0.95rem;
+      text-transform: uppercase;
+    }}
+    .decision-lens__badge {{
+      font-size: 0.75rem;
+      font-weight: 700;
+      padding: 0.2rem 0.55rem;
+      border-radius: 999px;
+      border: 1px solid rgba(40, 37, 190, 0.25);
+      background: rgba(255, 255, 255, 0.65);
+      color: var(--c4c-indigo);
+      white-space: nowrap;
+    }}
+    .decision-lens__grid {{
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 0.75rem;
+    }}
+    @media (min-width: 720px) {{
+      .decision-lens__grid {{
+        grid-template-columns: 1fr 1fr 1fr;
+      }}
+    }}
+    .decision-lens__item {{
+      background: rgba(255, 255, 255, 0.75);
+      border: 1px solid rgba(0, 0, 0, 0.06);
+      border-radius: 10px;
+      padding: 0.75rem 0.85rem;
+    }}
+    .decision-lens__label {{
+      font-size: 0.75rem;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: 0.4px;
+      color: var(--muted);
+      margin: 0 0 0.35rem;
+    }}
+    .decision-lens__text {{
+      margin: 0;
+      font-size: 0.92rem;
+      color: var(--text);
+    }}
+    .decision-lens__guardrail {{
+      margin-top: 0.9rem;
+      padding-top: 0.75rem;
+      border-top: 1px dashed rgba(40, 37, 190, 0.22);
+    }}
+    .decision-lens__guardrail-title {{
+      margin: 0 0 0.35rem;
+      font-size: 0.78rem;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: 0.4px;
+      color: var(--muted);
+    }}
+    .decision-lens__guardrail-text {{
+      margin: 0;
+      font-size: 0.92rem;
+      color: var(--text-light);
+      font-style: italic;
+    }}
+    /* Legacy callout-decision (for backward compat) */
     .callout-decision {{
-      background: rgba(107, 46, 119, 0.06);
-      border-left-color: var(--c4c-purple);
+      background: rgba(40, 37, 190, 0.06);
+      border-left-color: var(--c4c-indigo);
       margin: 1.25rem 0 1.5rem;
     }}
     .callout-decision .decision-label {{
       font-weight: 700;
-      color: var(--c4c-purple);
+      color: var(--c4c-indigo);
       font-size: 0.85rem;
       text-transform: uppercase;
       letter-spacing: 0.5px;
@@ -3071,7 +3283,7 @@ def build_html_from_template(
       section {{ break-inside: avoid; border: none; box-shadow: none; }}
       .toc {{ break-after: page; }}
       .skip-link, .section-toggle {{ display: none; }}
-      .health-banner, .callout, .callout-warning, .callout-success, .callout-info, .callout-decision, .factors-positive, .factors-risk {{ 
+      .health-banner, .callout, .callout-warning, .callout-success, .callout-info, .callout-decision, .decision-lens, .factors-positive, .factors-risk {{ 
         -webkit-print-color-adjust: exact; 
         print-color-adjust: exact; 
       }}
