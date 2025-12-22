@@ -12,6 +12,13 @@ Usage:
 
 VERSION HISTORY:
 ----------------
+v3.0.22 (2025-12-22): Synthesis metadata in manifest
+- NEW: manifest["synthesis"] block with downstream tool guidance
+- NEW: synthesis_guides output paths in manifest
+- NEW: VISUAL_SYNTHESIS_GUIDE.md, SYNTHESIS_MODE_PROMPT.md, SYNTHESIS_CHECKLIST.md
+- PURPOSE: Self-describing exports for NotebookLM, slide tools, infographics
+- CONSTRAINT: Embedded epistemic discipline for AI-generated summaries
+
 v3.0.21 (2025-12-22): Soft recommendation language fix + Decision Options rename
 - FIX: Replaced "this suggests/indicates/reveals" with descriptive usage framing
 - FIX: Replaced "Opportunity:" labels with "Decision Option:"
@@ -166,7 +173,7 @@ from collections import defaultdict
 # Version
 # =============================================================================
 
-ENGINE_VERSION = "3.0.21"
+ENGINE_VERSION = "3.0.22"
 BUNDLE_FORMAT_VERSION = "1.0"
 
 # C4C logo as base64 (80px, ~4KB) for self-contained HTML reports
@@ -2328,7 +2335,7 @@ def generate_manifest(
                     "Hidden Brokers",
                     "Single-Point Bridges",
                     "Roles × Region Lens",
-                    "Recommendations"
+                    "Decision Options"
                 ]
             },
             "project_summary": {
@@ -2340,6 +2347,11 @@ def generate_manifest(
             },
             "node_metrics": {
                 "path": "analysis/node_metrics.csv"
+            },
+            "synthesis_guides": {
+                "visual_synthesis_guide": "guides/VISUAL_SYNTHESIS_GUIDE.md",
+                "synthesis_mode_prompt": "guides/SYNTHESIS_MODE_PROMPT.md",
+                "synthesis_checklist": "guides/SYNTHESIS_CHECKLIST.md"
             }
         },
         
@@ -2399,6 +2411,29 @@ def generate_manifest(
         for key, path in input_paths.items():
             if key in manifest["inputs"] and path:
                 manifest["inputs"][key]["source_path"] = str(path)
+    
+    # Add synthesis metadata (guidance for downstream tools)
+    manifest["synthesis"] = {
+        "purpose": (
+            "Guidance for generating non-prescriptive visual or narrative "
+            "summaries of this report."
+        ),
+        "visual_synthesis_guide": "guides/VISUAL_SYNTHESIS_GUIDE.md",
+        "synthesis_mode_prompt": "guides/SYNTHESIS_MODE_PROMPT.md",
+        "synthesis_checklist": "guides/SYNTHESIS_CHECKLIST.md",
+        "intended_use": [
+            "NotebookLM",
+            "slide generation tools",
+            "infographic drafting",
+            "facilitated discussion prep"
+        ],
+        "constraints": [
+            "Do not imply recommendations from structural signals",
+            "Preserve signal intensity labels (Low/Moderate/High)",
+            "Include 'no action may be appropriate' framing",
+            "Use 'teams often use this to decide' phrasing"
+        ]
+    }
     
     return manifest
 
