@@ -6,6 +6,10 @@ enabling interoperability between OrgGraph (US/CA), ActorGraph, and InsightGraph
 
 VERSION HISTORY:
 ----------------
+v1.2.0 (2025-12-22): Phase 1c - ZIP bundle format support
+- Added manifest schema documentation
+- Bundle version 1.0 specification
+
 v1.1.0 (2025-12-22): Phase 1b - Unified CSV column ordering
 - Revised UNIFIED_NODE_COLUMNS to practical OrgGraph set
 - Revised UNIFIED_EDGE_COLUMNS to practical OrgGraph set
