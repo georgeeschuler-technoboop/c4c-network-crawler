@@ -6,6 +6,11 @@ enabling interoperability between OrgGraph (US/CA), ActorGraph, and InsightGraph
 
 VERSION HISTORY:
 ----------------
+v1.1.0 (2025-12-22): Phase 1b - Unified CSV column ordering
+- Revised UNIFIED_NODE_COLUMNS to practical OrgGraph set
+- Revised UNIFIED_EDGE_COLUMNS to practical OrgGraph set
+- Column order standardized for cross-app compatibility
+
 v1.0.0 (2025-12-22): Initial Phase 1a implementation
 - Canonical node_type vocabulary (lowercase)
 - Canonical edge_type vocabulary (lowercase)
@@ -114,62 +119,75 @@ VALID_SOURCE_APPS = frozenset({
 # =============================================================================
 
 # Column order matters for consistent exports
+# This is the practical set for OrgGraph US/CA - ActorGraph fields can be added later
 UNIFIED_NODE_COLUMNS = [
-    'node_id',        # Required: Namespaced ID (orggraph:org_001)
+    # === Identity (Required) ===
+    'node_id',        # Required: Namespaced ID (orggraph_us:org-123)
+    'node_type',      # Required: person, organization
     'label',          # Required: Display name
-    'node_type',      # Required: person, organization, company, school
+    
+    # === Organization Fields ===
     'org_type',       # Optional: funder, grantee, both
-    'ein',            # Optional: IRS EIN (US orgs)
-    'tax_id',         # Optional: CRA BN (CA orgs)
-    'linkedin_url',   # Optional: ActorGraph
-    'title',          # Optional: Job title (person)
-    'industry',       # Optional: Company industry
-    'employee_count', # Optional: Company size
-    'city',           # Optional
-    'state',          # Optional: ISO-2 state/province
-    'country',        # Optional: ISO-2 country
-    'region',         # Optional: Legacy region field
-    'location_raw',   # Optional: Original free-text
-    'source_app',     # Required for export
-    'source_system',  # Optional: IRS_990, CHARITYDATA_CA, etc.
-    'source_ref',     # Optional: Reference to source document
+    'org_slug',       # Optional: URL-friendly org name
+    'tax_id',         # Optional: CRA BN (CA) or EIN (US)
     'assets_latest',  # Optional: Latest assets value
     'assets_year',    # Optional: Year of assets value
+    
+    # === Person Fields ===
     'first_name',     # Optional: Person first name
     'last_name',      # Optional: Person last name
-    'org_slug',       # Optional: URL-friendly org name
-    'jurisdiction',   # Optional: US, CA, etc.
+    
+    # === Location ===
+    'city',           # Optional
+    'region',         # Optional: State/province code
+    'jurisdiction',   # Optional: US, CA
+    
+    # === Provenance ===
+    'source_app',     # Required: orggraph_us, orggraph_ca, actorgraph
+    'source_system',  # Optional: IRS_990, CHARITYDATA_CA
+    'source_ref',     # Optional: Reference to source document
 ]
 
 # =============================================================================
 # Unified Edge Schema (Phase 1b)
 # =============================================================================
 
+# Column order matters for consistent exports
+# This is the practical set for OrgGraph US/CA
 UNIFIED_EDGE_COLUMNS = [
+    # === Identity (Required) ===
     'edge_id',        # Optional: Unique edge identifier
     'from_id',        # Required: Source node (namespaced)
     'to_id',          # Required: Target node (namespaced)
-    'edge_type',      # Required: grant, board, employment, etc.
-    'directed',       # Optional: Default based on edge_type
-    'amount',         # Optional: Grant amount
+    'edge_type',      # Required: grant, board
+    
+    # === Graph Properties ===
+    'directed',       # Optional: Default True for grant/board
+    'weight',         # Optional: Default 1
+    
+    # === Grant Fields ===
+    'amount',         # Optional: Total grant amount
     'amount_cash',    # Optional: Cash portion
     'amount_in_kind', # Optional: In-kind portion
     'currency',       # Optional: USD, CAD
-    'year',           # Optional: Grant year
     'fiscal_year',    # Optional: Fiscal year
-    'reporting_period', # Optional: Reporting period
+    'reporting_period', # Optional: Reporting period string
+    'purpose',        # Optional: Grant purpose/description
+    
+    # === Board/Employment Fields ===
     'role',           # Optional: Job title, board role
-    'purpose',        # Optional: Grant purpose
-    'start_date',     # Optional: Employment/education start
-    'end_date',       # Optional: Employment/education end
-    'is_current',     # Optional: Currently active
-    'at_arms_length', # Optional: Board member relationship
-    'weight',         # Optional: Edge weight (default 1)
-    'city',           # Optional: Location
-    'region',         # Optional: State/province
-    'source_app',     # Required for export
-    'source_system',  # Optional
-    'source_ref',     # Optional
+    'start_date',     # Optional: Start date
+    'end_date',       # Optional: End date
+    'at_arms_length', # Optional: Board member arm's length flag
+    
+    # === Location ===
+    'city',           # Optional: Grantee city
+    'region',         # Optional: Grantee state/province
+    
+    # === Provenance ===
+    'source_app',     # Required: orggraph_us, orggraph_ca
+    'source_system',  # Optional: IRS_990, CHARITYDATA_CA
+    'source_ref',     # Optional: Reference to source document
 ]
 
 # =============================================================================
