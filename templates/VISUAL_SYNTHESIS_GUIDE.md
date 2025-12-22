@@ -1,113 +1,81 @@
 # Visual Synthesis Guide
-## InsightGraph Network Reports & Infographics
 
-This guide defines how InsightGraph outputs should be translated into
-infographics, presentations, and narrative summaries using external tools
-(e.g., NotebookLM, slide generators, design tools).
-
-The goal is **clarity without prescription**.
-
-InsightGraph reveals structural patterns.
-It does not recommend actions.
+**Purpose:** Guidance for creating non-prescriptive visual summaries of InsightGraph reports.
 
 ---
 
-## Core Principle
+## Core Principles
 
-> **Describe the network so decision-makers can decide.**
+### 1. Signals, Not Recommendations
+Visual summaries should present **structural signals**, not implied actions.
 
-Do **not**:
-- prescribe actions
-- imply failure
-- frame findings as deficiencies
-- assume coordination is inherently desirable
+❌ **Avoid:** "You should coordinate with these funders"  
+✅ **Use:** "Teams often use this signal to decide whether coordination would add value"
 
-Do:
-- surface tradeoffs
-- explain structural implications
-- name what choices the structure enables or constrains
+### 2. Preserve Signal Intensity
+Every visualization should indicate the signal intensity level:
 
----
+| Level | Visual Treatment | Meaning |
+|-------|------------------|---------|
+| **Low** | Gray / muted | Primarily confirmatory / contextual |
+| **Moderate** | Standard / neutral | Worth discussion or light exploration |
+| **High** | Highlighted / emphasized | Merits active follow-up |
 
-## Required Framing Language
-
-Every synthesis artifact MUST include:
-
-- A statement that patterns **do not imply failure**
-- A statement that **multiple responses are valid**
-- A statement that **no action is a valid choice**
-
-Example:
-> “This pattern does not imply failure. It reflects a common network structure with specific tradeoffs. Stakeholders may decide whether intervention is warranted based on their goals.”
+### 3. Normalize Inaction
+Every visual should implicitly or explicitly acknowledge that **no action may be the appropriate outcome**.
 
 ---
 
-## Decision Lens Pattern (Required)
+## Visual Element Guidelines
 
-All sections should follow this structure:
+### Network Diagrams
+- Show structure, not implied relationships
+- Label nodes with roles, not recommendations
+- Use color for signal intensity, not importance ranking
+- Include legend explaining what connections mean (and don't mean)
 
-### What we observe
-Plain-language description of the structural pattern.
+### Bar Charts / Rankings
+- Frame as "distribution" not "priority"
+- Avoid language like "top funders to contact"
+- Use: "Funders by portfolio size" not "Key funders"
 
-### What this structure enables
-How information, funding, or influence tends to flow.
+### Summary Cards
+- Lead with "What this shows" not "What to do"
+- Include guardrail text: "This does not imply..."
+- Reference signal intensity in header
 
-### What this structure constrains
-What is harder, slower, or more fragile as a result.
-
-### How teams often use this insight
-Neutral examples of how decision-makers might use the pattern to evaluate options.
-
-⚠️ Never say what teams *should* do.
-
----
-
-## Language Rules
-
-### Allowed verbs
-- reveals
-- reflects
-- enables
-- constrains
-- is consistent with
-- is associated with
-- teams often use this to decide whether…
-
-### Disallowed verbs
-- suggests
-- recommends
-- indicates a need for
-- opportunity to
-- should
-- must
-- fix / solve / address
+### Infographics
+- Use descriptive headers: "Network Structure" not "Action Items"
+- Include Decision Lens framing for each insight
+- Add footer: "These signals support judgment; they are not recommendations"
 
 ---
 
-## Portfolio Twins (Special Handling)
+## Language Patterns
 
-When two or more organizations show highly similar funding patterns:
+### Allowed Phrasing
+- "This signal is commonly used to assess whether..."
+- "Teams often use this to decide..."
+- "This pattern may warrant discussion"
+- "Worth exploring if coordination is a goal"
 
-- Do NOT label as redundancy or inefficiency
-- Frame as **parallel exposure**
-- Emphasize risk diversification vs coordination tradeoff
-
-Required phrasing:
-> “Portfolio similarity may reflect shared priorities rather than duplication. Stakeholders often examine this pattern to decide whether coordination would add value.”
-
----
-
-## Visual Design Guidance
-
-- Prefer **structure metaphors** over directional arrows
-- Avoid checklists or roadmaps
-- Use comparative visuals (before/after, clustered vs bridged)
-- Use soft qualifiers (“often”, “tends to”, “may”)
+### Disallowed Phrasing
+- "You should..."
+- "We recommend..."
+- "This suggests you need to..."
+- "Natural partners" (without qualification)
+- "Opportunity to..." (implies action)
 
 ---
 
-## Closing Disclaimer (Required)
+## Checklist Before Publishing
 
-Every infographic or slide deck must end with:
+- [ ] No prescriptive language ("should", "must", "recommend")
+- [ ] Signal intensity labels present
+- [ ] "No action" normalized as valid outcome
+- [ ] Guardrails visible for high-interpretation sections
+- [ ] Source attribution to InsightGraph report
 
-> “InsightGraph surfaces structural patterns to support decision-making. It does not recommend actions or evaluate performance. No action is a valid outcome.”
+---
+
+*This guide is part of the C4C Report Authoring Contract.*
