@@ -12,6 +12,13 @@ Usage:
 
 VERSION HISTORY:
 ----------------
+v3.0.21 (2025-12-22): Soft recommendation language fix + Decision Options rename
+- FIX: Replaced "this suggests/indicates/reveals" with descriptive usage framing
+- FIX: Replaced "Opportunity:" labels with "Decision Option:"
+- RENAME: "Strategic Recommendations" → "Decision Options"
+- NEW: Section note clarifying these are not recommendations
+- Language pattern: "Teams often use this signal to decide whether…"
+
 v3.0.20 (2025-12-22): Language audit + markdown rendering fix
 - FIX: Section subtitle now renders as HTML (not raw _underscores_)
 - FIX: Removed "natural partners/hub/alignment" over-claiming language
@@ -159,7 +166,7 @@ from collections import defaultdict
 # Version
 # =============================================================================
 
-ENGINE_VERSION = "3.0.20"
+ENGINE_VERSION = "3.0.21"
 BUNDLE_FORMAT_VERSION = "1.0"
 
 # C4C logo as base64 (80px, ~4KB) for self-contained HTML reports
@@ -665,23 +672,23 @@ def describe_grantee(label, funder_count, total_received, funder_labels):
     if funder_count >= 4:
         blurb = (
             f"**{label}** receives from {funder_count} network funders (${total_received:,.0f} from {funders_str}). "
-            f"This indicates shared investment priorities — a potential touchpoint for coordination conversations."
+            f"Teams often use shared investment patterns like this to identify potential coordination touchpoints."
         )
-        rec = "Could be a candidate for joint impact measurement, aligned reporting, or a brief funder check-in. This grantee may anchor shared learning."
+        rec = "Could be a candidate for joint impact measurement, aligned reporting, or a brief funder check-in."
     elif funder_count >= 3:
         blurb = (
             f"**{label}** receives from {funder_count} funders (${total_received:,.0f} from {funders_str}). "
-            f"This overlap suggests shared priorities worth exploring."
+            f"Overlap at this level is commonly used to assess whether coordination conversations would add value."
         )
-        rec = "Consider whether joint site visits, shared evaluation, or coordinated grant timing would add value."
+        rec = "Some teams explore joint site visits, shared evaluation, or coordinated grant timing."
     else:
         blurb = (
             f"**{label}** receives from {funder_count} funders (${total_received:,.0f} from {funders_str}). "
-            f"This shared funding may warrant a brief check-in among funders."
+            f"Shared funding at this level is often used to decide whether a brief funder check-in is warranted."
         )
-        rec = "Introduce these funders to explore whether their investments could be more intentionally aligned."
+        rec = "Some teams use these touchpoints to explore whether investments could be more intentionally aligned."
     
-    return blurb, f"💡 **Opportunity:** {rec}"
+    return blurb, f"💡 **Decision Option:** {rec}"
 
 
 def describe_board_connector(label, board_count, org_labels):
@@ -713,7 +720,7 @@ def describe_board_connector(label, board_count, org_labels):
 
 
 # =============================================================================
-# Strategic Recommendations Engine
+# Decision Options Engine
 # =============================================================================
 
 def generate_strategic_recommendations(
@@ -728,26 +735,33 @@ def generate_strategic_recommendations(
     n_board_conduits: int,
 ) -> str:
     """
-    Generate rule-based strategic recommendations.
+    Generate rule-based decision options based on network signals.
     Returns markdown string.
     """
     sections = []
     
+    # Section note (authoring contract requirement)
+    section_note = (
+        "_The options below describe common ways teams apply these signals in practice; "
+        "they are not recommendations._"
+    )
+    sections.append(section_note + "\n")
+    
     # Framing based on health
     if health_score >= 70:
         intro = (
-            "The funding network shows **healthy coordination signals**. Focus on **deepening strategic "
-            "relationships** and **protecting what works** rather than building basic connectivity."
+            "The funding network shows **healthy coordination signals**. Teams with similar patterns "
+            "often focus on **deepening strategic relationships** and **protecting what works**."
         )
     elif health_score >= 40:
         intro = (
             "The network shows **mixed signals**. Some coordination exists, but structural gaps limit "
-            "how effectively funders can align. Targeted interventions could unlock significant value."
+            "how effectively funders can align. Teams often assess whether targeted interventions would add value."
         )
     else:
         intro = (
             "The network appears **fragmented**. Funders operate largely in silos with minimal coordination. "
-            "Consider whether building basic connective tissue would be valuable."
+            "Teams often assess whether building basic connective tissue would be valuable."
         )
     
     sections.append(f"### 🧭 How to Read This\n\n{intro}\n")
@@ -1000,7 +1014,7 @@ def generate_insight_cards(nodes_df, edges_df, metrics_df, interlock_graph, flow
             overlap_emoji, overlap_label = "🔴", "Minimal overlap"
             overlap_narrative = (
                 f"Only **{len(multi_funder)} grantees** ({overlap_pct:.1f}%) receive funding from multiple network members. "
-                f"This suggests funders are operating in near-complete silos with almost no shared investments."
+                f"Funders appear to be operating in near-complete silos with almost no shared investments."
             )
         elif overlap_pct < 5:
             overlap_emoji, overlap_label = "🟡", "Limited overlap"
@@ -1012,7 +1026,7 @@ def generate_insight_cards(nodes_df, edges_df, metrics_df, interlock_graph, flow
             overlap_emoji, overlap_label = "🟢", "Meaningful overlap"
             overlap_narrative = (
                 f"**{len(multi_funder)} grantees** ({overlap_pct:.1f}%) receive from multiple funders. "
-                f"This overlap suggests shared priorities worth exploring for coordination."
+                f"Teams often use overlap at this level to assess whether coordination would add value."
             )
         
         ranked_rows = []
@@ -1055,18 +1069,18 @@ def generate_insight_cards(nodes_df, edges_df, metrics_df, interlock_graph, flow
                 f"**{len(overlap_df)} funder pairs** share at least one grantee. The most aligned — "
                 f"{node_labels.get(top['funder_1'], '')} & {node_labels.get(top['funder_2'], '')} — "
                 f"share {int(top['shared_grantees'])} grantees (Jaccard: {top_jaccard:.2f}). "
-                f"High overlap suggests potential for coordination conversations or intentional co-funding."
+                f"Teams often use high overlap like this to assess whether coordination conversations would add value."
             )
-            opportunity_text = "💡 **Opportunity:** These funder pairs show meaningful alignment — consider joint learning, aligned timing, or shared reporting pilots."
+            opportunity_text = "💡 **Decision Option:** High-overlap pairs are commonly used to decide whether joint learning, aligned timing, or shared reporting pilots merit exploration."
         elif top_jaccard >= 0.05:
             twin_emoji, twin_label = "🟡", "Moderate alignment"
             twin_narrative = (
                 f"**{len(overlap_df)} funder pairs** share grantees. Top pair: "
                 f"{node_labels.get(top['funder_1'], '')} & {node_labels.get(top['funder_2'], '')} "
                 f"({int(top['shared_grantees'])} shared, Jaccard: {top_jaccard:.2f}). "
-                f"Meaningful overlap exists — worth checking for avoidable duplication or alignment opportunities."
+                f"Teams use moderate overlap to decide whether checking for duplication or alignment is warranted."
             )
-            opportunity_text = "💡 **Opportunity:** Moderate overlap suggests shared touchpoints. Consider lightweight coordination (shared learning, grant timing) before deeper alignment."
+            opportunity_text = "💡 **Decision Option:** Moderate overlap is often used to assess whether lightweight coordination (shared learning, grant timing) would add value."
         else:
             twin_emoji, twin_label = "⚪", "Limited overlap"
             twin_narrative = (
@@ -1198,7 +1212,7 @@ def generate_insight_cards(nodes_df, edges_df, metrics_df, interlock_graph, flow
             "card_id": "no_board_interlocks",
             "use_case": "Board Network & Conduits",
             "title": "Foundations with No Board Interlocks",
-            "summary": f"{disc_emoji} **{disc_label}**\n\n{disc_narrative}\n\n💡 **Opportunity:** Consider introductions between isolated funders with aligned portfolios.",
+            "summary": f"{disc_emoji} **{disc_label}**\n\n{disc_narrative}\n\n💡 **Decision Option:** Teams sometimes use governance isolation data to decide whether introductions between funders with aligned portfolios would add value.",
             "ranked_rows": ranked_rows,
             "evidence": {"node_ids": [], "edge_ids": []},
         })
@@ -1352,9 +1366,9 @@ def generate_insight_cards(nodes_df, edges_df, metrics_df, interlock_graph, flow
     )
     
     cards.append({
-        "card_id": "strategic_recommendations",
-        "use_case": "Strategic Recommendations",
-        "title": "Strategic Recommendations",
+        "card_id": "decision_options",
+        "use_case": "Decision Options",
+        "title": "Decision Options",
         "summary": recommendations_md,
         "ranked_rows": [],
         "evidence": {"node_ids": [], "edge_ids": []},
