@@ -1,12 +1,23 @@
 #!/usr/bin/env python3
 """
-lint_report.py — Validates InsightGraph HTML reports for quality regressions.
+c4c_utils/lint_report.py — Validates InsightGraph HTML reports for quality regressions.
 
-Usage:
-    python lint_report.py path/to/report.html
-    python lint_report.py path/to/report.html --require-signal-level
+Part of the C4C Report Authoring Contract (see docs/REPORT_AUTHORING_GUIDE.md).
+
+Usage (CLI):
+    python -m c4c_utils.lint_report path/to/report.html
+    python -m c4c_utils.lint_report path/to/report.html --require-signal-level
+
+Usage (as module):
+    from c4c_utils.lint_report import lint_html, LintIssue
+    issues = lint_html(html_content, enforce_signal_level=True)
 
 Returns exit code 0 if OK, 1 if issues found.
+
+VERSION HISTORY:
+----------------
+v1.1 (2025-12-22): Added signal intensity checks, semantic inflation patterns
+v1.0 (2025-12-22): Initial version with raw markdown and prescriptive language checks
 """
 from __future__ import annotations
 
