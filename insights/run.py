@@ -12,6 +12,15 @@ Usage:
 
 VERSION HISTORY:
 ----------------
+v3.0.15 (2025-12-21): Decision Lens + Executive Summary (C4C Authoring Guide v1.0)
+- NEW: Executive Summary section after header with key signals
+- NEW: Decision Lens blocks for each section (What/Why/Next)
+- NEW: Human-readable section intros
+- NEW: .callout-decision CSS class with purple accent
+- NEW: :::decision-lens markdown syntax support
+- NEW: DECISION_LENS and SECTION_INTROS content constants
+- Follows C4C Report Authoring Guide v1.0 structure
+
 v3.0.14 (2025-12-21): Collapsible sections + polish
 - NEW: Collapsible sections with Expand/Collapse buttons
 - NEW: Skip-link now off-screen until focused (better UX)
@@ -111,7 +120,7 @@ from collections import defaultdict
 # Version
 # =============================================================================
 
-ENGINE_VERSION = "3.0.14"
+ENGINE_VERSION = "3.0.15"
 BUNDLE_FORMAT_VERSION = "1.0"
 
 # C4C logo as base64 (80px, ~4KB) for self-contained HTML reports
@@ -1303,6 +1312,78 @@ ROLE_VOCABULARY = {
     'INDIVIDUAL':     {'label': 'Individual',        'order': 6},
 }
 
+# =============================================================================
+# Decision Lens Content (per C4C Report Authoring Guide v1.0)
+# =============================================================================
+# Each section includes: what_tells_you, why_matters, teams_do_next
+# These blocks are descriptive, not prescriptive (no "should", "must", "recommend")
+
+DECISION_LENS = {
+    "network_health": {
+        "what_tells_you": "The network is structurally connected, but coordination and reinforcement mechanisms are limited.",
+        "why_matters": "When coordination is weak, new funding or initiatives often underperform unless the connective tissue of the network is strengthened first.",
+        "teams_do_next": "Teams use this signal to decide whether to invest in convening, shared learning, backbone capacity, or coordination pilots before changing grant strategy.",
+    },
+    "roles_region_lens": {
+        "what_tells_you": "This shows how organizations are distributed relative to the defined regional lens, revealing alignment between funding sources and place-based impact.",
+        "why_matters": "This affects how influence, accountability, and place-based coordination are understood — and whether regional strategies align with actual funding behavior.",
+        "teams_do_next": "Network stewards use this insight to clarify which actors should be considered 'in scope' for regional coordination and which require different engagement strategies.",
+    },
+    "funding_concentration": {
+        "what_tells_you": "A relatively small number of organizations receive a disproportionate share of funding.",
+        "why_matters": "High concentration increases systemic risk and can limit innovation, resilience, and equitable participation across the network.",
+        "teams_do_next": "Funders and intermediaries use this signal to assess diversification strategies, capacity-building needs, or safeguards against over-dependence.",
+    },
+    "multi_funder_grantees": {
+        "what_tells_you": "Certain funders share multiple grantees, indicating latent alignment even without formal coordination.",
+        "why_matters": "Shared portfolios represent the lowest-friction entry points for collaboration or alignment.",
+        "teams_do_next": "Funders use this insight to identify peers for exploratory conversations, co-learning efforts, or time-bound coordination experiments.",
+    },
+    "portfolio_twins": {
+        "what_tells_you": "Some funder pairs exhibit unusually similar grantmaking behavior.",
+        "why_matters": "Highly similar portfolios may indicate duplication, missed coordination opportunities, or potential leverage through alignment.",
+        "teams_do_next": "Teams use this pattern to explore whether funders are aware of each other's strategies and whether intentional differentiation or coordination would add value.",
+    },
+    "hidden_brokers": {
+        "what_tells_you": "Certain organizations quietly connect multiple parts of the network without being highly visible or formally recognized.",
+        "why_matters": "These actors can accelerate coordination — or become single points of failure — depending on how they are supported.",
+        "teams_do_next": "Network stewards use this signal to consider engagement, support, or risk mitigation strategies for key connective organizations.",
+    },
+    "single_point_bridges": {
+        "what_tells_you": "Some connections between network components rely on only one organization or relationship.",
+        "why_matters": "Single-point bridges create fragility; if they fail, entire parts of the network may disconnect.",
+        "teams_do_next": "Teams use this insight to decide where redundancy, diversification, or intentional cross-connection is most needed.",
+    },
+    "shared_board_conduits": {
+        "what_tells_you": "Shared board memberships create informal pathways for coordination and influence across the network.",
+        "why_matters": "In mature networks, informal governance ties are often how alignment happens without formal coordination structures.",
+        "teams_do_next": "Network stewards consider whether these connectors are aware of their bridging role and could be engaged more intentionally.",
+    },
+    "shared_board_conduits_empty": {
+        "what_tells_you": "There are few informal governance ties connecting organizations across the network.",
+        "why_matters": "In the absence of organic governance ties, coordination will not emerge naturally.",
+        "teams_do_next": "Network stewards consider formal convenings, intermediaries, or governance experiments to compensate for the lack of informal alignment channels.",
+    },
+    "isolated_funders": {
+        "what_tells_you": "Most funders have no shared board members with other network foundations.",
+        "why_matters": "Without informal governance connections, peer learning and organic coordination are structurally unlikely.",
+        "teams_do_next": "Teams consider whether introductions, joint convenings, or shared initiatives could create the connective tissue that doesn't currently exist.",
+    },
+}
+
+# Section intro text (human-readable, accessible)
+SECTION_INTROS = {
+    "network_health": "This section provides an overall assessment of network connectivity and coordination capacity, revealing whether the structural foundations exist for effective collaboration.",
+    "roles_region_lens": "This section examines how organizations are distributed relative to the defined regional focus, showing alignment between where funding originates and where impact occurs.",
+    "funding_concentration": "This section examines how concentrated or diversified funding relationships are across the network, revealing whether influence and risk are broadly shared or narrowly held.",
+    "multi_funder_grantees": "This section identifies grantees supported by multiple funders, revealing where informal alignment already exists and coordination is most feasible.",
+    "portfolio_twins": "This section identifies funder pairs with similar grantmaking patterns, revealing potential for coordination or unintentional duplication.",
+    "hidden_brokers": "This section identifies organizations that quietly bridge otherwise disconnected parts of the network, often without formal recognition of their structural importance.",
+    "single_point_bridges": "This section identifies critical structural vulnerabilities where removing a single node would fragment the network.",
+    "shared_board_conduits": "This section examines whether shared board memberships create informal pathways for coordination and influence across organizations.",
+    "isolated_funders": "This section identifies funders with no governance connections to other network foundations, highlighting potential barriers to organic coordination.",
+}
+
 # Default region lens for GLFN (can be overridden by project_config.json)
 DEFAULT_REGION_LENS = {
     "enabled": True,
@@ -1582,16 +1663,23 @@ def generate_roles_region_summary(nodes_df: pd.DataFrame, edges_df: pd.DataFrame
     }
 
 
-def format_roles_region_section(summary: dict) -> list:
+def format_roles_region_section(summary: dict, skip_header: bool = False) -> list:
     """
     Format Roles × Region Lens summary as markdown lines.
+    
+    Args:
+        summary: Region lens summary dict
+        skip_header: If True, skip the section header (used when header is already rendered)
     """
     if not summary.get('enabled', False):
         return []
     
     lines = []
-    lines.append("## 🗺️ Roles × Region Lens")
-    lines.append("")
+    
+    if not skip_header:
+        lines.append("## 🗺️ Roles × Region Lens")
+        lines.append("")
+    
     lines.append(f"**Lens:** {summary.get('lens_label', 'Unknown')}")
     lines.append("")
     
@@ -1681,6 +1769,12 @@ def format_roles_region_section(summary: dict) -> list:
 def generate_markdown_report(insight_cards: dict, project_summary: dict, project_id: str = "glfn", roles_region_summary: dict = None) -> str:
     """
     Generate a complete markdown report from insight cards.
+    
+    Structure follows C4C Report Authoring Guide v1.0:
+    - Executive Summary after header
+    - Human-readable section intros
+    - Decision Lens blocks for each section
+    
     Returns formatted markdown string.
     """
     lines = []
@@ -1704,11 +1798,57 @@ def generate_markdown_report(insight_cards: dict, project_summary: dict, project
     lines.append("---")
     lines.append("")
     
-    # Health overview
+    # ==========================================================================
+    # EXECUTIVE SUMMARY (new)
+    # ==========================================================================
     health = insight_cards.get("health", {})
     health_score = health.get("score", 0)
     health_label = health.get("label", "Unknown")
+    positive_factors = health.get("positive", [])
+    risk_factors = health.get("risk", [])
     
+    lines.append("## Executive Summary")
+    lines.append("")
+    lines.append("This report provides a structural view of the funding network, focusing on how resources, relationships, and influence are distributed across funders and grantees.")
+    lines.append("")
+    lines.append("Rather than prescribing actions, the analysis surfaces decision-relevant signals that help teams decide where coordination, investment, or deeper inquiry may be most valuable.")
+    lines.append("")
+    lines.append("**Key signals:**")
+    lines.append("")
+    
+    # Dynamic key signals based on actual data
+    lines.append(f"- Overall network health is **{health_label.lower()}** ({health_score}/100), indicating {'strong' if health_score >= 70 else 'moderate' if health_score >= 40 else 'limited'} coordination capacity.")
+    
+    # Add signals from positive/risk factors
+    if positive_factors:
+        # Extract a key positive signal
+        lines.append(f"- {positive_factors[0].replace('🟢 ', '').replace('**', '')}")
+    if risk_factors:
+        # Extract a key risk signal
+        lines.append(f"- {risk_factors[0].replace('🔴 ', '').replace('**', '')}")
+    
+    # Add funding concentration signal
+    top_5_share = funding.get("top_5_share", 0)
+    if top_5_share:
+        lines.append(f"- Funding flows show {'significant' if top_5_share > 80 else 'moderate' if top_5_share > 60 else 'distributed'} concentration (top 5 funders control {top_5_share:.0f}%).")
+    
+    # Add governance signal
+    governance = summary.get("governance", {})
+    multi_board = governance.get("multi_board_people", 0)
+    if multi_board == 0:
+        lines.append("- Informal governance pathways (shared board memberships) are minimal, suggesting coordination will need to be intentional.")
+    else:
+        lines.append(f"- {multi_board} individuals serve on multiple boards, creating informal coordination pathways.")
+    
+    lines.append("")
+    lines.append("Many organizations use this report as a first-pass diagnostic, followed by facilitated interpretation, peer conversations, or deeper scenario design.")
+    lines.append("")
+    lines.append("---")
+    lines.append("")
+    
+    # ==========================================================================
+    # NETWORK HEALTH SECTION
+    # ==========================================================================
     if health_score >= 70:
         health_emoji = "🟢"
     elif health_score >= 40:
@@ -1718,6 +1858,25 @@ def generate_markdown_report(insight_cards: dict, project_summary: dict, project
     
     lines.append(f"## {health_emoji} Network Health: {health_score}/100 ({health_label})")
     lines.append("")
+    
+    # Section intro
+    lines.append(SECTION_INTROS.get("network_health", ""))
+    lines.append("")
+    
+    # Decision Lens block
+    lens = DECISION_LENS.get("network_health", {})
+    if lens:
+        lines.append(":::decision-lens")
+        lines.append(f"**What this tells you**")
+        lines.append(lens.get("what_tells_you", ""))
+        lines.append("")
+        lines.append(f"**Why it matters for decisions**")
+        lines.append(lens.get("why_matters", ""))
+        lines.append("")
+        lines.append(f"**What teams often do next**")
+        lines.append(lens.get("teams_do_next", ""))
+        lines.append(":::")
+        lines.append("")
     
     # Health indicators from the network_health card
     cards = insight_cards.get("cards", [])
@@ -1736,36 +1895,58 @@ def generate_markdown_report(insight_cards: dict, project_summary: dict, project
                 lines.append("")
     
     # Health factors
-    positive = health.get("positive", [])
-    risk = health.get("risk", [])
-    
-    if positive:
+    if positive_factors:
         lines.append("### ✅ Positive Factors")
         lines.append("")
-        for f in positive:
+        for f in positive_factors:
             lines.append(f"- {f}")
         lines.append("")
     
-    if risk:
+    if risk_factors:
         lines.append("### ⚠️ Risk Factors")
         lines.append("")
-        for f in risk:
+        for f in risk_factors:
             lines.append(f"- {f}")
         lines.append("")
     
     lines.append("---")
     lines.append("")
     
-    # Roles × Region Lens section (if available)
+    # ==========================================================================
+    # ROLES × REGION LENS SECTION
+    # ==========================================================================
     if roles_region_summary and roles_region_summary.get('enabled', False):
-        region_lines = format_roles_region_section(roles_region_summary)
+        lines.append("## 🗺️ Roles × Region Lens")
+        lines.append("")
+        
+        # Section intro
+        lines.append(SECTION_INTROS.get("roles_region_lens", ""))
+        lines.append("")
+        
+        # Decision Lens block
+        lens = DECISION_LENS.get("roles_region_lens", {})
+        if lens:
+            lines.append(":::decision-lens")
+            lines.append(f"**What this tells you**")
+            lines.append(lens.get("what_tells_you", ""))
+            lines.append("")
+            lines.append(f"**Why it matters for decisions**")
+            lines.append(lens.get("why_matters", ""))
+            lines.append("")
+            lines.append(f"**What teams often do next**")
+            lines.append(lens.get("teams_do_next", ""))
+            lines.append(":::")
+            lines.append("")
+        
+        # Add the actual region data (from existing format_roles_region_section logic)
+        region_lines = format_roles_region_section(roles_region_summary, skip_header=True)
         lines.extend(region_lines)
         lines.append("---")
         lines.append("")
     
-    # Each card
-    cards = insight_cards.get("cards", [])
-    
+    # ==========================================================================
+    # REMAINING CARDS (with Decision Lens blocks)
+    # ==========================================================================
     for card in cards:
         card_id = card.get("card_id", "")
         
@@ -1780,6 +1961,34 @@ def generate_markdown_report(insight_cards: dict, project_summary: dict, project
         lines.append(f"## {title}")
         lines.append(f"*Use Case: {use_case}*")
         lines.append("")
+        
+        # Section intro (if available)
+        intro = SECTION_INTROS.get(card_id, "")
+        if intro:
+            lines.append(intro)
+            lines.append("")
+        
+        # Decision Lens block (if available)
+        # Handle special case for empty shared_board_conduits
+        lens_key = card_id
+        if card_id == "shared_board_conduits" and "No multi-board" in summary_text:
+            lens_key = "shared_board_conduits_empty"
+        
+        lens = DECISION_LENS.get(lens_key, {})
+        if lens:
+            lines.append(":::decision-lens")
+            lines.append(f"**What this tells you**")
+            lines.append(lens.get("what_tells_you", ""))
+            lines.append("")
+            lines.append(f"**Why it matters for decisions**")
+            lines.append(lens.get("why_matters", ""))
+            lines.append("")
+            lines.append(f"**What teams often do next**")
+            lines.append(lens.get("teams_do_next", ""))
+            lines.append(":::")
+            lines.append("")
+        
+        # Original summary/analysis content
         lines.append(summary_text)
         lines.append("")
         
@@ -2152,11 +2361,37 @@ def basic_markdown_to_html(md_content: str) -> str:
     in_list = False
     in_table = False
     in_blockquote = False
+    in_decision_lens = False
     table_header_done = False
     skip_first_h1 = True  # Skip first H1 (duplicate of header)
     
     for line in lines:
         stripped = line.strip()
+        
+        # Handle decision-lens blocks
+        if stripped == ':::decision-lens':
+            if in_list:
+                html_lines.append('</ul>')
+                in_list = False
+            html_lines.append('<div class="callout callout-decision">')
+            html_lines.append('<span class="decision-label">Decision Lens</span>')
+            in_decision_lens = True
+            continue
+        
+        if stripped == ':::' and in_decision_lens:
+            html_lines.append('</div>')
+            in_decision_lens = False
+            continue
+        
+        # Inside decision-lens, format content
+        if in_decision_lens:
+            if stripped.startswith('**') and stripped.endswith('**'):
+                # Bold header like "**What this tells you**"
+                text = stripped[2:-2]
+                html_lines.append(f'<p><strong>{text}</strong></p>')
+            elif stripped:
+                html_lines.append(f'<p>{inline_format(stripped)}</p>')
+            continue
         
         # Close blockquote if we're leaving it
         if in_blockquote and not stripped.startswith('>'):
@@ -2678,6 +2913,27 @@ def build_html_from_template(
       background: rgba(40, 37, 190, 0.08);
       border-left-color: var(--c4c-indigo);
     }}
+    .callout-decision {{
+      background: rgba(107, 46, 119, 0.06);
+      border-left-color: var(--c4c-purple);
+      margin: 1.25rem 0 1.5rem;
+    }}
+    .callout-decision .decision-label {{
+      font-weight: 700;
+      color: var(--c4c-purple);
+      font-size: 0.85rem;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 0.75rem;
+      display: block;
+    }}
+    .callout-decision p {{
+      margin: 0.5rem 0;
+      font-size: 0.95rem;
+    }}
+    .callout-decision p:last-child {{
+      margin-bottom: 0;
+    }}
     /* Use Case labels */
     .use-case {{
       font-size: 0.9rem;
@@ -2742,7 +2998,7 @@ def build_html_from_template(
       section {{ break-inside: avoid; border: none; box-shadow: none; }}
       .toc {{ break-after: page; }}
       .skip-link, .section-toggle {{ display: none; }}
-      .health-banner, .callout, .callout-warning, .callout-success, .callout-info, .factors-positive, .factors-risk {{ 
+      .health-banner, .callout, .callout-warning, .callout-success, .callout-info, .callout-decision, .factors-positive, .factors-risk {{ 
         -webkit-print-color-adjust: exact; 
         print-color-adjust: exact; 
       }}
