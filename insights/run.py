@@ -12,6 +12,12 @@ Usage:
 
 VERSION HISTORY:
 ----------------
+v3.0.24 (2025-12-22): CoreGraph v1 schema compatibility (Phase 1a)
+- FIX: Accept lowercase node_type values (organization, person)
+- FIX: Accept lowercase edge_type values (grant, board)
+- FIX: Case-insensitive matching for all node/edge type filters
+- COMPAT: Backwards compatible with uppercase ORG/PERSON/GRANT/BOARD_MEMBERSHIP
+
 v3.0.23 (2025-12-22): Synthesis guides wired into export
 - NEW: write_synthesis_guides() embeds guide content directly in run.py
 - NEW: write_export_bundle() writes manifest.json + guides in one call
@@ -179,7 +185,7 @@ from collections import defaultdict
 # Version
 # =============================================================================
 
-ENGINE_VERSION = "3.0.23"
+ENGINE_VERSION = "3.0.24"
 BUNDLE_FORMAT_VERSION = "1.0"
 
 # C4C logo as base64 (80px, ~4KB) for self-contained HTML reports
@@ -234,11 +240,11 @@ def load_and_validate(nodes_path: Path, edges_path: Path) -> tuple:
 def build_grant_graph(nodes_df: pd.DataFrame, edges_df: pd.DataFrame) -> nx.DiGraph:
     """Build directed grant graph: ORG → ORG, weighted by amount."""
     G = nx.DiGraph()
-    org_nodes = nodes_df[nodes_df["node_type"] == "ORG"]
+    org_nodes = nodes_df[nodes_df["node_type"].str.lower().isin(["org", "organization"])]
     for _, row in org_nodes.iterrows():
         G.add_node(row["node_id"], **row.to_dict())
     
-    grant_edges = edges_df[edges_df["edge_type"] == "GRANT"]
+    grant_edges = edges_df[edges_df["edge_type"].str.lower().isin(["grant"])]
     for _, row in grant_edges.iterrows():
         amount = row.get("amount", 0) or 0
         if G.has_edge(row["from_id"], row["to_id"]):
@@ -257,9 +263,9 @@ def build_board_graph(nodes_df: pd.DataFrame, edges_df: pd.DataFrame) -> nx.Grap
     for _, row in nodes_df.iterrows():
         G.add_node(row["node_id"], **row.to_dict())
     
-    board_edges = edges_df[edges_df["edge_type"] == "BOARD_MEMBERSHIP"]
+    board_edges = edges_df[edges_df["edge_type"].str.lower().isin(["board", "board_membership"])]
     for _, row in board_edges.iterrows():
-        G.add_edge(row["from_id"], row["to_id"], edge_type="BOARD_MEMBERSHIP")
+        G.add_edge(row["from_id"], row["to_id"], edge_type="board")
     
     print(f"✓ Board graph: {G.number_of_nodes()} nodes, {G.number_of_edges()} edges")
     return G
@@ -268,11 +274,11 @@ def build_board_graph(nodes_df: pd.DataFrame, edges_df: pd.DataFrame) -> nx.Grap
 def build_interlock_graph(nodes_df: pd.DataFrame, edges_df: pd.DataFrame) -> nx.Graph:
     """Build ORG—ORG interlock graph weighted by shared board members."""
     G = nx.Graph()
-    org_nodes = nodes_df[nodes_df["node_type"] == "ORG"]
+    org_nodes = nodes_df[nodes_df["node_type"].str.lower().isin(["org", "organization"])]
     for _, row in org_nodes.iterrows():
         G.add_node(row["node_id"], **row.to_dict())
     
-    board_edges = edges_df[edges_df["edge_type"] == "BOARD_MEMBERSHIP"]
+    board_edges = edges_df[edges_df["edge_type"].str.lower().isin(["board", "board_membership"])]
     person_to_orgs = defaultdict(set)
     for _, row in board_edges.iterrows():
         person_to_orgs[row["from_id"]].add(row["to_id"])
@@ -317,7 +323,7 @@ def compute_base_metrics(nodes_df, grant_graph, board_graph, interlock_graph) ->
     
     for _, row in nodes_df.iterrows():
         node_id = row["node_id"]
-        node_type = row["node_type"]
+        node_type = str(row["node_type"]).lower()  # CoreGraph v1: normalize to lowercase
         
         m = {
             "node_id": node_id,
@@ -328,7 +334,8 @@ def compute_base_metrics(nodes_df, grant_graph, board_graph, interlock_graph) ->
             "region": row.get("region", ""),
         }
         
-        if node_type == "ORG":
+        # CoreGraph v1: Accept both "org" and "organization"
+        if node_type in ["org", "organization"]:
             m["degree"] = grant_graph.degree(node_id) if node_id in grant_graph else 0
             m["grant_in_degree"] = grant_graph.in_degree(node_id) if node_id in grant_graph else 0
             m["grant_out_degree"] = grant_graph.out_degree(node_id) if node_id in grant_graph else 0
@@ -369,7 +376,7 @@ def compute_derived_signals(metrics_df: pd.DataFrame) -> pd.DataFrame:
     df["is_capital_hub"] = 0
     df["is_isolated"] = 0
     
-    org_mask = df["node_type"] == "ORG"
+    org_mask = df["node_type"].str.lower().isin(["org", "organization"])
     org_df = df[org_mask]
     
     if len(org_df) > 0:
@@ -396,7 +403,7 @@ def compute_derived_signals(metrics_df: pd.DataFrame) -> pd.DataFrame:
             # is_hidden_broker: high betweenness BUT low degree (bottom 40% among connectors)
             df.loc[org_mask & (df["betweenness"] >= betweenness_85) & (df["degree"] <= degree_40), "is_hidden_broker"] = 1
     
-    person_mask = df["node_type"] == "PERSON"
+    person_mask = df["node_type"].str.lower().isin(["person"])
     df.loc[person_mask & (df["boards_served"] >= 2), "is_connector"] = 1
     
     return df
@@ -408,7 +415,7 @@ def compute_derived_signals(metrics_df: pd.DataFrame) -> pd.DataFrame:
 
 def compute_flow_stats(edges_df: pd.DataFrame, metrics_df: pd.DataFrame) -> dict:
     """Compute system-level funding flow statistics."""
-    grant_edges = edges_df[edges_df["edge_type"] == "GRANT"].copy()
+    grant_edges = edges_df[edges_df["edge_type"].str.lower().isin(["grant"])].copy()
     
     if grant_edges.empty:
         return {"total_grant_amount": 0, "grant_count": 0, "funder_count": 0, 
@@ -439,7 +446,7 @@ def compute_flow_stats(edges_df: pd.DataFrame, metrics_df: pd.DataFrame) -> dict
 
 def compute_portfolio_overlap(edges_df: pd.DataFrame) -> pd.DataFrame:
     """Compute funder × funder portfolio overlap matrix."""
-    grant_edges = edges_df[edges_df["edge_type"] == "GRANT"].copy()
+    grant_edges = edges_df[edges_df["edge_type"].str.lower().isin(["grant"])].copy()
     if grant_edges.empty:
         return pd.DataFrame()
     
@@ -512,7 +519,7 @@ def compute_network_health(flow_stats, metrics_df, n_components, largest_compone
         positive_factors.append(f"🟢 **Distributed funding** — top 5 control {top5_share:.0f}%")
     
     # Governance connectivity (NEW)
-    org_metrics = metrics_df[metrics_df["node_type"] == "ORG"]
+    org_metrics = metrics_df[metrics_df["node_type"].str.lower().isin(["org", "organization"])]
     foundations = org_metrics[org_metrics["grant_outflow_total"] > 0] if "grant_outflow_total" in org_metrics.columns else pd.DataFrame()
     if len(foundations) > 0:
         pct_with_interlocks = (foundations["shared_board_count"] > 0).mean() * 100
@@ -873,8 +880,8 @@ def generate_insight_cards(nodes_df, edges_df, metrics_df, interlock_graph, flow
     cards = []
     node_labels = dict(zip(nodes_df["node_id"], nodes_df["label"]))
     
-    grant_edges = edges_df[edges_df["edge_type"] == "GRANT"].copy() if not edges_df.empty else pd.DataFrame()
-    board_edges = edges_df[edges_df["edge_type"] == "BOARD_MEMBERSHIP"].copy() if not edges_df.empty else pd.DataFrame()
+    grant_edges = edges_df[edges_df["edge_type"].str.lower().isin(["grant"])].copy() if not edges_df.empty else pd.DataFrame()
+    board_edges = edges_df[edges_df["edge_type"].str.lower().isin(["board", "board_membership"])].copy() if not edges_df.empty else pd.DataFrame()
     
     if not grant_edges.empty and "amount" in grant_edges.columns:
         grant_edges["amount"] = pd.to_numeric(grant_edges["amount"], errors="coerce").fillna(0)
@@ -899,12 +906,12 @@ def generate_insight_cards(nodes_df, edges_df, metrics_df, interlock_graph, flow
     )
     
     # Pre-compute counts for recommendations
-    org_metrics = metrics_df[metrics_df["node_type"] == "ORG"]
+    org_metrics = metrics_df[metrics_df["node_type"].str.lower().isin(["org", "organization"])]
     foundations = org_metrics[org_metrics["grant_outflow_total"] > 0]
     n_isolated_funders = len(foundations[foundations["shared_board_count"] == 0])
     total_funders = len(foundations)
-    n_hidden_brokers = len(metrics_df[(metrics_df["is_hidden_broker"] == 1) & (metrics_df["node_type"] == "ORG")])
-    person_metrics = metrics_df[metrics_df["node_type"] == "PERSON"]
+    n_hidden_brokers = len(metrics_df[(metrics_df["is_hidden_broker"] == 1) & (metrics_df["node_type"].str.lower().isin(["org", "organization"]))])
+    person_metrics = metrics_df[metrics_df["node_type"].str.lower().isin(["person"])]
     n_board_conduits = len(person_metrics[person_metrics["boards_served"] >= 2])
     
     # =========================================================================
@@ -1233,7 +1240,7 @@ def generate_insight_cards(nodes_df, edges_df, metrics_df, interlock_graph, flow
     # =========================================================================
     # Card 7: Hidden Brokers
     # =========================================================================
-    hidden = metrics_df[(metrics_df["is_hidden_broker"] == 1) & (metrics_df["node_type"] == "ORG")]
+    hidden = metrics_df[(metrics_df["is_hidden_broker"] == 1) & (metrics_df["node_type"].str.lower().isin(["org", "organization"]))]
     
     if not hidden.empty:
         broker_narrative = (
@@ -1325,10 +1332,11 @@ def generate_insight_cards(nodes_df, edges_df, metrics_df, interlock_graph, flow
             for i, impact in enumerate(bridge_impacts[:5]):
                 a = impact["node_id"]
                 row = metrics_df[metrics_df["node_id"] == a].iloc[0]
-                node_type = row["node_type"]
-                if node_type == "ORG" and (row.get("grant_outflow_total") or 0) > 0:
+                node_type = str(row["node_type"]).lower()  # CoreGraph v1: normalize
+                # CoreGraph v1: Accept both "org" and "organization"
+                if node_type in ["org", "organization"] and (row.get("grant_outflow_total") or 0) > 0:
                     role_desc = f"Funder (${row['grant_outflow_total']:,.0f})"
-                elif node_type == "ORG":
+                elif node_type in ["org", "organization"]:
                     role_desc = "Grantee connecting funders"
                 else:
                     role_desc = f"Person on {int(row.get('boards_served', 0))} boards"
@@ -1574,8 +1582,8 @@ def derive_network_roles(nodes_df: pd.DataFrame, edges_df: pd.DataFrame) -> pd.D
         return nodes_df
     
     # Derive from edges
-    grant_edges = edges_df[edges_df['edge_type'] == 'GRANT'] if not edges_df.empty else pd.DataFrame()
-    board_edges = edges_df[edges_df['edge_type'] == 'BOARD_MEMBERSHIP'] if not edges_df.empty else pd.DataFrame()
+    grant_edges = edges_df[edges_df["edge_type"].str.lower().isin(["grant"])] if not edges_df.empty else pd.DataFrame()
+    board_edges = edges_df[edges_df["edge_type"].str.lower().isin(["board", "board_membership"])] if not edges_df.empty else pd.DataFrame()
     
     funder_ids = set(grant_edges['from_id']) if not grant_edges.empty else set()
     grantee_ids = set(grant_edges['to_id']) if not grant_edges.empty else set()
@@ -1583,9 +1591,10 @@ def derive_network_roles(nodes_df: pd.DataFrame, edges_df: pd.DataFrame) -> pd.D
     
     def get_role(row):
         node_id = row['node_id']
-        node_type = row.get('node_type', '')
+        node_type = str(row.get('node_type', '')).lower()  # CoreGraph v1: normalize
         
-        if node_type == 'PERSON':
+        # CoreGraph v1: Accept "person" (lowercase)
+        if node_type in ['person']:
             code = 'BOARD_MEMBER' if node_id in board_member_ids else 'INDIVIDUAL'
         else:
             is_funder = node_id in funder_ids
@@ -1722,7 +1731,7 @@ def compute_edge_flows_by_lens(edges_df: pd.DataFrame, nodes_df: pd.DataFrame) -
     if 'in_region_lens' not in nodes_df.columns:
         return {}
     
-    grant_edges = edges_df[edges_df['edge_type'] == 'GRANT'].copy() if not edges_df.empty else pd.DataFrame()
+    grant_edges = edges_df[edges_df["edge_type"].str.lower().isin(["grant"])].copy() if not edges_df.empty else pd.DataFrame()
     
     if grant_edges.empty:
         return {}
@@ -2232,13 +2241,13 @@ def generate_project_summary(nodes_df, edges_df, metrics_df, flow_stats):
         "generated_at": datetime.now().isoformat(),
         "node_counts": {
             "total": len(nodes_df),
-            "organizations": len(nodes_df[nodes_df["node_type"] == "ORG"]),
-            "people": len(nodes_df[nodes_df["node_type"] == "PERSON"]),
+            "organizations": len(nodes_df[nodes_df["node_type"].str.lower().isin(["org", "organization"])]),
+            "people": len(nodes_df[nodes_df["node_type"].str.lower().isin(["person"])]),
         },
         "edge_counts": {
             "total": len(edges_df),
-            "grants": len(edges_df[edges_df["edge_type"] == "GRANT"]),
-            "board_memberships": len(edges_df[edges_df["edge_type"] == "BOARD_MEMBERSHIP"]),
+            "grants": len(edges_df[edges_df["edge_type"].str.lower().isin(["grant"])]),
+            "board_memberships": len(edges_df[edges_df["edge_type"].str.lower().isin(["board", "board_membership"])]),
         },
         "funding": {
             "total_amount": flow_stats["total_grant_amount"],
@@ -2247,7 +2256,7 @@ def generate_project_summary(nodes_df, edges_df, metrics_df, flow_stats):
             "top_5_share": flow_stats["top_5_funders_share"],
         },
         "governance": {
-            "multi_board_people": len(metrics_df[(metrics_df["node_type"] == "PERSON") & (metrics_df["boards_served"] >= 2)]),
+            "multi_board_people": len(metrics_df[(metrics_df["node_type"].str.lower().isin(["person"])) & (metrics_df["boards_served"] >= 2)]),
         },
     }
 
