@@ -13,6 +13,14 @@ Outputs conform to C4C Network Schema v1 (MVP):
 
 VERSION HISTORY:
 ----------------
+UPDATED v0.20.0: CoreGraph v1 schema normalization (Phase 1a)
+- node_type normalized to lowercase: ORG→organization, PERSON→person
+- edge_type normalized to lowercase: GRANT→grant, BOARD_MEMBERSHIP→board
+- Added org_type field for funder/grantee roles
+- Added source_app field for provenance tracking
+- Node IDs namespaced: org-123→orggraph_us:org-123
+- Added directed and weight fields to edges
+
 UPDATED v0.19.0: Supabase cloud storage integration
 - Added cloud save/load functionality
 - User authentication via Supabase
@@ -82,15 +90,17 @@ from c4c_utils.board_extractor import BoardExtractor
 from c4c_utils.irs_return_qa import compute_confidence, render_return_qa_panel
 from c4c_utils.irs_return_dispatcher import parse_irs_return
 from c4c_utils.summary_helpers import build_grant_network_summary, summarize_grants
+from c4c_utils.coregraph_schema import normalize_nodes_df, normalize_edges_df, namespace_id
 
 # =============================================================================
 # Constants
 # =============================================================================
-APP_VERSION = "0.19.0"  # Supabase cloud storage integration
+APP_VERSION = "0.20.0"  # CoreGraph v1 schema normalization (Phase 1a)
 MAX_FILES = 50
 C4C_LOGO_URL = "https://static.wixstatic.com/media/275a3f_25063966d6cd496eb2fe3f6ee5cde0fa~mv2.png"
 SOURCE_SYSTEM = "IRS_990"
 JURISDICTION = "US"
+SOURCE_APP = "orggraph_us"  # CoreGraph v1 source app identifier
 # Demo data paths
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEMO_DATA_DIR = REPO_ROOT / "demo_data"
@@ -1053,11 +1063,12 @@ def render_grant_network_results(grants_df: pd.DataFrame, region_def: dict = Non
     render_grant_metrics_row(net["all"]["summary"])
     
     # Network objects subline
+    # CoreGraph v1: Accept both old (ORG/PERSON) and new (organization/person) formats
     if nodes_df is not None and edges_df is not None and not nodes_df.empty:
-        org_count = len(nodes_df[nodes_df["node_type"] == "ORG"]) if "node_type" in nodes_df.columns else 0
-        person_count = len(nodes_df[nodes_df["node_type"] == "PERSON"]) if "node_type" in nodes_df.columns else 0
-        grant_edges = len(edges_df[edges_df["edge_type"] == "GRANT"]) if not edges_df.empty and "edge_type" in edges_df.columns else 0
-        board_edges = len(edges_df[edges_df["edge_type"] == "BOARD_MEMBERSHIP"]) if not edges_df.empty and "edge_type" in edges_df.columns else 0
+        org_count = len(nodes_df[nodes_df["node_type"].str.lower().isin(["org", "organization"])]) if "node_type" in nodes_df.columns else 0
+        person_count = len(nodes_df[nodes_df["node_type"].str.lower().isin(["person"])]) if "node_type" in nodes_df.columns else 0
+        grant_edges = len(edges_df[edges_df["edge_type"].str.lower().isin(["grant"])]) if not edges_df.empty and "edge_type" in edges_df.columns else 0
+        board_edges = len(edges_df[edges_df["edge_type"].str.lower().isin(["board", "board_membership"])]) if not edges_df.empty and "edge_type" in edges_df.columns else 0
         st.caption(f"*Network objects: {org_count:,} organizations · {person_count:,} people · {grant_edges:,} grant edges · {board_edges:,} board edges*")
     
     # --- Region-Filtered Grants (only if region mode active) ---
@@ -1456,12 +1467,13 @@ def render_network_stats(nodes_df: pd.DataFrame, edges_df: pd.DataFrame):
         return
     
     # Count node types
-    org_count = len(nodes_df[nodes_df["node_type"] == "ORG"]) if not nodes_df.empty and "node_type" in nodes_df.columns else 0
-    person_count = len(nodes_df[nodes_df["node_type"] == "PERSON"]) if not nodes_df.empty and "node_type" in nodes_df.columns else 0
+    # CoreGraph v1: Accept both old (ORG/PERSON) and new (organization/person) formats
+    org_count = len(nodes_df[nodes_df["node_type"].str.lower().isin(["org", "organization"])]) if not nodes_df.empty and "node_type" in nodes_df.columns else 0
+    person_count = len(nodes_df[nodes_df["node_type"].str.lower().isin(["person"])]) if not nodes_df.empty and "node_type" in nodes_df.columns else 0
     
     # Count edge types
-    grant_count = len(edges_df[edges_df["edge_type"] == "GRANT"]) if not edges_df.empty and "edge_type" in edges_df.columns else 0
-    board_count = len(edges_df[edges_df["edge_type"] == "BOARD_MEMBERSHIP"]) if not edges_df.empty and "edge_type" in edges_df.columns else 0
+    grant_count = len(edges_df[edges_df["edge_type"].str.lower().isin(["grant"])]) if not edges_df.empty and "edge_type" in edges_df.columns else 0
+    board_count = len(edges_df[edges_df["edge_type"].str.lower().isin(["board", "board_membership"])]) if not edges_df.empty and "edge_type" in edges_df.columns else 0
     
     st.caption(f"Network objects: {org_count:,} organizations · {person_count:,} people · {grant_count:,} grant edges · {board_count:,} board edges")
 
@@ -1659,8 +1671,9 @@ def derive_network_roles(nodes_df: pd.DataFrame, edges_df: pd.DataFrame) -> dict
         roles = {}
         for _, row in nodes_df.iterrows():
             node_id = row['node_id']
-            node_type = row.get('node_type', '')
-            if node_type == 'PERSON':
+            node_type = str(row.get('node_type', '')).lower()
+            # CoreGraph v1: Accept both old and new formats
+            if node_type in ['person']:
                 code = 'INDIVIDUAL'
             else:
                 code = 'ORGANIZATION'
@@ -1671,8 +1684,9 @@ def derive_network_roles(nodes_df: pd.DataFrame, edges_df: pd.DataFrame) -> dict
             }
         return roles
     
-    grant_edges = edges_df[edges_df['edge_type'] == 'GRANT']
-    board_edges = edges_df[edges_df['edge_type'] == 'BOARD_MEMBERSHIP']
+    # CoreGraph v1: Accept both old (GRANT/BOARD_MEMBERSHIP) and new (grant/board) formats
+    grant_edges = edges_df[edges_df['edge_type'].str.lower().isin(['grant'])]
+    board_edges = edges_df[edges_df['edge_type'].str.lower().isin(['board', 'board_membership'])]
     
     funder_ids = set(grant_edges['from_id']) if not grant_edges.empty else set()
     grantee_ids = set(grant_edges['to_id']) if not grant_edges.empty else set()
@@ -1681,10 +1695,11 @@ def derive_network_roles(nodes_df: pd.DataFrame, edges_df: pd.DataFrame) -> dict
     roles = {}
     for _, row in nodes_df.iterrows():
         node_id = row['node_id']
-        node_type = row.get('node_type', '')
+        node_type = str(row.get('node_type', '')).lower()
         
         # Apply derivation rules in order
-        if node_type == 'PERSON':
+        # CoreGraph v1: Accept both old and new formats
+        if node_type in ['person']:
             # Rule 1: BOARD_MEMBER (overrides for people)
             # Rule 6: INDIVIDUAL (fallback for people)
             code = 'BOARD_MEMBER' if node_id in board_member_ids else 'INDIVIDUAL'
@@ -1735,20 +1750,21 @@ def convert_to_polinode_format(nodes_df: pd.DataFrame, edges_df: pd.DataFrame) -
     
     # Build node_id → canonicalized label mapping, handling duplicates
     id_to_label = {}
-    label_to_row = {}  # Track best row per label (prefer ORG over PERSON for duplicates)
+    label_to_row = {}  # Track best row per label (prefer organization over person for duplicates)
     label_to_id = {}   # Track node_id for each label (for role lookup)
     
     for idx, row in nodes_df.iterrows():
         node_id = row['node_id']
         raw_label = row.get('label', node_id)
         canon_label = canonicalize_name(raw_label)
-        node_type = row.get('node_type', '')
+        node_type = str(row.get('node_type', '')).lower()
         
-        # Handle duplicate labels: prefer ORG over PERSON
+        # Handle duplicate labels: prefer organization over person
+        # CoreGraph v1: Accept both old (ORG/PERSON) and new (organization/person) formats
         if canon_label in label_to_row:
-            existing_type = label_to_row[canon_label].get('node_type', '')
-            # If existing is PERSON and this one is ORG, replace
-            if existing_type == 'PERSON' and node_type == 'ORG':
+            existing_type = str(label_to_row[canon_label].get('node_type', '')).lower()
+            # If existing is person and this one is org, replace
+            if existing_type in ['person'] and node_type in ['org', 'organization']:
                 label_to_row[canon_label] = row
                 label_to_id[canon_label] = node_id
         else:
@@ -1876,9 +1892,11 @@ def filter_data_to_region(nodes_df: pd.DataFrame, edges_df: pd.DataFrame,
         id_to_label = {}
     
     def is_region_relevant_edge(row):
-        if row.get("edge_type") == "BOARD_MEMBERSHIP":
+        # CoreGraph v1: Accept both old and new edge_type formats
+        edge_type = str(row.get("edge_type", "")).lower()
+        if edge_type in ["board", "board_membership"]:
             return True
-        if row.get("edge_type") == "GRANT":
+        if edge_type in ["grant"]:
             # Check if target (grantee) is in region
             target_id = row.get("to_id", "")
             target_label = id_to_label.get(target_id, target_id)
@@ -1917,14 +1935,22 @@ def render_downloads(nodes_df: pd.DataFrame, edges_df: pd.DataFrame,
             )
             
             # Show filtering stats
-            original_grants = len(edges_df[edges_df["edge_type"] == "GRANT"]) if not edges_df.empty and "edge_type" in edges_df.columns else 0
-            filtered_grants = len(export_edges[export_edges["edge_type"] == "GRANT"]) if not export_edges.empty and "edge_type" in export_edges.columns else 0
+            # CoreGraph v1: Accept both old and new formats
+            original_grants = len(edges_df[edges_df["edge_type"].str.lower().isin(["grant"])]) if not edges_df.empty and "edge_type" in edges_df.columns else 0
+            filtered_grants = len(export_edges[export_edges["edge_type"].str.lower().isin(["grant"])]) if not export_edges.empty and "edge_type" in export_edges.columns else 0
             
             st.caption(f"Exporting {filtered_grants:,} of {original_grants:,} grants ({region_def.get('name', 'region')}-relevant only)")
         else:
             export_nodes, export_edges, export_grants = nodes_df, edges_df, grants_df
     else:
         export_nodes, export_edges, export_grants = nodes_df, edges_df, grants_df
+    
+    # ==========================================================================
+    # CoreGraph v1 Normalization (Phase 1a)
+    # ==========================================================================
+    # Normalize node_type, edge_type, namespace IDs, add source_app
+    export_nodes = normalize_nodes_df(export_nodes, SOURCE_APP)
+    export_edges = normalize_edges_df(export_edges, SOURCE_APP)
     
     # Save options (Local + Cloud)
     if project_name and project_name != DEMO_PROJECT_NAME:
@@ -2500,7 +2526,8 @@ def main():
         # Use grants_detail.csv if available, otherwise reconstruct from edges
         grants_df = grants_detail_df if not grants_detail_df.empty else None
         if grants_df is None and not edges_df.empty and "edge_type" in edges_df.columns:
-            grant_edges = edges_df[edges_df["edge_type"] == "GRANT"].copy()
+            # CoreGraph v1: Accept both old and new formats
+            grant_edges = edges_df[edges_df["edge_type"].str.lower().isin(["grant"])].copy()
             if not grant_edges.empty:
                 grants_df = pd.DataFrame({
                     'foundation_name': grant_edges['from_id'],
