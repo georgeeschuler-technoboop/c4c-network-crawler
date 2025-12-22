@@ -12,6 +12,13 @@ Usage:
 
 VERSION HISTORY:
 ----------------
+v3.0.17 (2025-12-22): Decision Lens guardrails + improved framing
+- NEW: "What not to over-interpret" guardrail in every Decision Lens
+- IMPROVED: All section intros now clarify what the analysis does NOT show
+- IMPROVED: DECISION_LENS content rewritten for clarity and action-orientation
+- IMPROVED: Portfolio Twins intro emphasizes "touchpoints, not aligned strategies"
+- Follows feedback: prevents client over-reaction, protects analytical credibility
+
 v3.0.16 (2025-12-22): Portfolio Twins tier-consistent language
 - FIX: Per-pair narratives now match overall tier (weak/moderate/strong)
 - FIX: "Natural partners" only used for high Jaccard (>= 0.15)
@@ -128,7 +135,7 @@ from collections import defaultdict
 # Version
 # =============================================================================
 
-ENGINE_VERSION = "3.0.16"
+ENGINE_VERSION = "3.0.17"
 BUNDLE_FORMAT_VERSION = "1.0"
 
 # C4C logo as base64 (80px, ~4KB) for self-contained HTML reports
@@ -1355,73 +1362,87 @@ ROLE_VOCABULARY = {
 # =============================================================================
 # Decision Lens Content (per C4C Report Authoring Guide v1.0)
 # =============================================================================
-# Each section includes: what_tells_you, why_matters, teams_do_next
-# These blocks are descriptive, not prescriptive (no "should", "must", "recommend")
+# Each section includes:
+#   - what_tells_you: interpretive frame
+#   - why_matters: decision context  
+#   - teams_do_next: action guidance (descriptive, not prescriptive)
+#   - not_over_interpret: misinterpretation guardrail (prevents client over-reaction)
 
 DECISION_LENS = {
     "network_health": {
-        "what_tells_you": "The network is structurally connected, but coordination and reinforcement mechanisms are limited.",
-        "why_matters": "When coordination is weak, new funding or initiatives often underperform unless the connective tissue of the network is strengthened first.",
-        "teams_do_next": "Teams use this signal to decide whether to invest in convening, shared learning, backbone capacity, or coordination pilots before changing grant strategy.",
+        "what_tells_you": "This score reflects structural connectivity and coordination capacity — not effectiveness or impact.",
+        "why_matters": "When coordination infrastructure is weak, new funding or initiatives often underperform. This signal helps prioritize where to invest in connective tissue before changing grant strategy.",
+        "teams_do_next": "High scores suggest existing infrastructure to leverage. Low scores suggest investing in convening, shared learning, or backbone capacity before expecting coordination to emerge.",
+        "not_over_interpret": "Health scores reflect structure, not performance. A low score doesn't mean the network is failing — it means coordination requires intentional effort.",
     },
     "roles_region_lens": {
         "what_tells_you": "This shows how organizations are distributed relative to the defined regional lens, revealing alignment between funding sources and place-based impact.",
-        "why_matters": "This affects how influence, accountability, and place-based coordination are understood — and whether regional strategies align with actual funding behavior.",
-        "teams_do_next": "Network stewards use this insight to clarify which actors should be considered 'in scope' for regional coordination and which require different engagement strategies.",
+        "why_matters": "Regional strategies depend on understanding which actors operate within vs. outside the target geography. Misalignment between funder location and grantee location can affect accountability and coordination.",
+        "teams_do_next": "Use this to clarify which actors are 'in scope' for regional coordination and which require different engagement strategies.",
+        "not_over_interpret": "Out-of-lens funders are not problems — many effective funders operate nationally. This lens shows geographic distribution, not quality.",
     },
     "funding_concentration": {
-        "what_tells_you": "A relatively small number of organizations receive a disproportionate share of funding.",
-        "why_matters": "High concentration increases systemic risk and can limit innovation, resilience, and equitable participation across the network.",
-        "teams_do_next": "Funders and intermediaries use this signal to assess diversification strategies, capacity-building needs, or safeguards against over-dependence.",
+        "what_tells_you": "Grant concentration shows how evenly or unevenly funding is distributed across organizations. It helps assess system resilience and exposure to single-funder risk.",
+        "why_matters": "High concentration increases fragility — if key funders shift priorities, dependent organizations are exposed. Moderate concentration may reflect intentional focus.",
+        "teams_do_next": "High concentration → assess dependency risk and succession planning. Moderate → check if specialization is intentional. Low → portfolios are distributed; resilience may be higher.",
+        "not_over_interpret": "Concentration does not imply inefficiency or favoritism. Some issue areas require focused funding by design.",
     },
     "multi_funder_grantees": {
-        "what_tells_you": "Certain funders share multiple grantees, indicating latent alignment even without formal coordination.",
-        "why_matters": "Shared portfolios represent the lowest-friction entry points for collaboration or alignment.",
-        "teams_do_next": "Funders use this insight to identify peers for exploratory conversations, co-learning efforts, or time-bound coordination experiments.",
+        "what_tells_you": "This identifies where multiple funders already support the same organizations — revealing latent alignment even without formal coordination.",
+        "why_matters": "Shared grantees represent the lowest-friction entry points for funder coordination. These are places where alignment already exists organically.",
+        "teams_do_next": "Dense clusters → opportunities for shared learning or coordination. Sparse overlap → funders operate independently (which may be intentional).",
+        "not_over_interpret": "Low overlap doesn't indicate misalignment. Many funders intentionally differentiate portfolios to maximize collective coverage.",
     },
     "portfolio_twins": {
-        "what_tells_you": "This analysis measures how similar funder portfolios are by counting shared grantees and computing Jaccard similarity (overlap relative to total portfolio size).",
-        "why_matters": "Portfolio similarity can indicate natural alignment, unintentional duplication, or opportunities for coordination. Low similarity means portfolios are largely distinct.",
-        "teams_do_next": "Teams use this pattern to identify which funder pairs might benefit from coordination conversations — or to confirm that portfolios are intentionally differentiated.",
+        "what_tells_you": "Portfolio overlap signals identify shared grantee touchpoints, not necessarily aligned strategies. Most funder pairs show limited overall similarity even when they fund some of the same organizations.",
+        "why_matters": "This helps answer a practical question: Where might coordination be worth exploring — and where is it unlikely to add value?",
+        "teams_do_next": "High similarity → review duplication, co-funding, or shared learning. Moderate overlap → consider light coordination (timing, convenings). Low overlap → no action required; portfolios are complementary.",
+        "not_over_interpret": "Low similarity does not imply misalignment or inefficiency. Shared grantees do not imply redundant strategies. In most regions, distinct portfolios reflect healthy diversity.",
     },
     "hidden_brokers": {
-        "what_tells_you": "Certain organizations quietly connect multiple parts of the network without being highly visible or formally recognized.",
-        "why_matters": "These actors can accelerate coordination — or become single points of failure — depending on how they are supported.",
-        "teams_do_next": "Network stewards use this signal to consider engagement, support, or risk mitigation strategies for key connective organizations.",
+        "what_tells_you": "Brokers are organizations that connect otherwise separate parts of the network. They often enable coordination, information flow, and alignment across domains.",
+        "why_matters": "High-brokerage actors are critical for coordination and knowledge transfer. Few brokers overall creates fragmentation risk if those actors disengage.",
+        "teams_do_next": "Identify whether key brokers are aware of their structural role. Consider engagement, support, or risk mitigation for these connective organizations.",
+        "not_over_interpret": "Brokerage is a structural role, not a value judgment. Brokers are not inherently leaders or decision-makers. Peripheral organizations may be highly impactful in niche roles.",
     },
     "single_point_bridges": {
-        "what_tells_you": "Some connections between network components rely on only one organization or relationship.",
-        "why_matters": "Single-point bridges create fragility; if they fail, entire parts of the network may disconnect.",
-        "teams_do_next": "Teams use this insight to decide where redundancy, diversification, or intentional cross-connection is most needed.",
+        "what_tells_you": "Some connections between network components rely on only one organization or relationship. These create structural fragility.",
+        "why_matters": "Single-point bridges are not necessarily problems, but they represent risk. If the bridging actor disengages, entire parts of the network may disconnect.",
+        "teams_do_next": "Assess whether bridge actors are stable and well-supported. Consider whether redundancy, diversification, or intentional cross-connection is needed.",
+        "not_over_interpret": "Bridges are not failures — they often reflect natural network structure. The question is whether the risk is understood and managed.",
     },
     "shared_board_conduits": {
         "what_tells_you": "Shared board memberships create informal pathways for coordination and influence across the network.",
-        "why_matters": "In mature networks, informal governance ties are often how alignment happens without formal coordination structures.",
-        "teams_do_next": "Network stewards consider whether these connectors are aware of their bridging role and could be engaged more intentionally.",
+        "why_matters": "In mature networks, informal governance ties are often how alignment happens without formal coordination structures. These are relationship-based coordination channels.",
+        "teams_do_next": "Consider whether these connectors are aware of their bridging role and could be engaged more intentionally for network-wide coordination.",
+        "not_over_interpret": "Board overlaps indicate potential for coordination, not actual coordination. Shared governance doesn't guarantee aligned strategies.",
     },
     "shared_board_conduits_empty": {
-        "what_tells_you": "There are few informal governance ties connecting organizations across the network.",
-        "why_matters": "In the absence of organic governance ties, coordination will not emerge naturally.",
-        "teams_do_next": "Network stewards consider formal convenings, intermediaries, or governance experiments to compensate for the lack of informal alignment channels.",
+        "what_tells_you": "There are few or no informal governance ties connecting organizations across the network.",
+        "why_matters": "In the absence of organic governance ties, coordination will not emerge naturally. Alignment efforts will need to be intentional rather than emergent.",
+        "teams_do_next": "Consider formal convenings, intermediaries, or governance experiments to create the connective tissue that doesn't currently exist organically.",
+        "not_over_interpret": "Lack of board overlaps is common and not inherently problematic. Many effective networks coordinate through other mechanisms.",
     },
     "isolated_funders": {
-        "what_tells_you": "Most funders have no shared board members with other network foundations.",
-        "why_matters": "Without informal governance connections, peer learning and organic coordination are structurally unlikely.",
-        "teams_do_next": "Teams consider whether introductions, joint convenings, or shared initiatives could create the connective tissue that doesn't currently exist.",
+        "what_tells_you": "These funders have no shared board members with other network foundations, limiting informal coordination pathways.",
+        "why_matters": "Without informal governance connections, peer learning and organic coordination are structurally unlikely. This doesn't mean coordination is impossible — just that it requires more intentional effort.",
+        "teams_do_next": "Consider whether introductions, joint convenings, or shared initiatives could create connective tissue. Prioritize funders with aligned portfolios.",
+        "not_over_interpret": "Governance isolation is common, especially for national funders or those with different geographic focus. It indicates structural distance, not misalignment.",
     },
 }
 
 # Section intro text (human-readable, accessible)
+# These answer "what does this show AND what doesn't it show"
 SECTION_INTROS = {
-    "network_health": "This section provides an overall assessment of network connectivity and coordination capacity, revealing whether the structural foundations exist for effective collaboration.",
+    "network_health": "This section provides an overall assessment of network connectivity and coordination capacity — revealing whether the structural foundations exist for effective collaboration, not whether the network is succeeding.",
     "roles_region_lens": "This section examines how organizations are distributed relative to the defined regional focus, showing alignment between where funding originates and where impact occurs.",
-    "funding_concentration": "This section examines how concentrated or diversified funding relationships are across the network, revealing whether influence and risk are broadly shared or narrowly held.",
-    "multi_funder_grantees": "This section identifies grantees supported by multiple funders, revealing where informal alignment already exists and coordination is most feasible.",
-    "portfolio_twins": "This section identifies funder pairs with similar grantmaking patterns, revealing potential for coordination or unintentional duplication.",
-    "hidden_brokers": "This section identifies organizations that quietly bridge otherwise disconnected parts of the network, often without formal recognition of their structural importance.",
-    "single_point_bridges": "This section identifies critical structural vulnerabilities where removing a single node would fragment the network.",
-    "shared_board_conduits": "This section examines whether shared board memberships create informal pathways for coordination and influence across organizations.",
-    "isolated_funders": "This section identifies funders with no governance connections to other network foundations, highlighting potential barriers to organic coordination.",
+    "funding_concentration": "This section examines how concentrated or diversified funding relationships are across the network, revealing whether influence and risk are broadly shared or narrowly held. It assesses resilience, not quality.",
+    "multi_funder_grantees": "This section identifies grantees supported by multiple funders, revealing where informal alignment already exists. Shared grantees indicate organic overlap, not necessarily intentional coordination.",
+    "portfolio_twins": "This analysis highlights shared grantee touchpoints between funders — not necessarily aligned strategies. In most regions, funder portfolios are intentionally distinct, and even pairs that fund some of the same organizations often differ substantially in scale, focus, or approach.",
+    "hidden_brokers": "This section identifies organizations that connect otherwise disconnected parts of the network. These 'brokers' play structural roles in enabling coordination — but brokerage is a position, not a performance measure.",
+    "single_point_bridges": "This section identifies structural vulnerabilities where removing a single node would fragment the network. Bridges are not failures — they're features that may require monitoring.",
+    "shared_board_conduits": "This section examines whether shared board memberships create informal pathways for coordination. Board overlaps indicate potential channels, not guaranteed alignment.",
+    "isolated_funders": "This section identifies funders with no governance connections to other network foundations. Isolation is structural, not a judgment — many effective funders operate independently.",
 }
 
 # Default region lens for GLFN (can be overridden by project_config.json)
@@ -1915,6 +1936,10 @@ def generate_markdown_report(insight_cards: dict, project_summary: dict, project
         lines.append("")
         lines.append(f"**What teams often do next**")
         lines.append(lens.get("teams_do_next", ""))
+        if lens.get("not_over_interpret"):
+            lines.append("")
+            lines.append(f"**What not to over-interpret**")
+            lines.append(lens.get("not_over_interpret", ""))
         lines.append(":::")
         lines.append("")
     
@@ -1975,6 +2000,10 @@ def generate_markdown_report(insight_cards: dict, project_summary: dict, project
             lines.append("")
             lines.append(f"**What teams often do next**")
             lines.append(lens.get("teams_do_next", ""))
+            if lens.get("not_over_interpret"):
+                lines.append("")
+                lines.append(f"**What not to over-interpret**")
+                lines.append(lens.get("not_over_interpret", ""))
             lines.append(":::")
             lines.append("")
         
@@ -2025,6 +2054,10 @@ def generate_markdown_report(insight_cards: dict, project_summary: dict, project
             lines.append("")
             lines.append(f"**What teams often do next**")
             lines.append(lens.get("teams_do_next", ""))
+            if lens.get("not_over_interpret"):
+                lines.append("")
+                lines.append(f"**What not to over-interpret**")
+                lines.append(lens.get("not_over_interpret", ""))
             lines.append(":::")
             lines.append("")
         
