@@ -18,6 +18,11 @@ Returns exit code 0 if OK, 1 if issues found.
 
 VERSION HISTORY:
 ----------------
+v1.4 (2025-12-22): Synthesis metadata validation
+    - NEW: check_synthesis_metadata() function for export bundle validation
+    - NEW: --check-synthesis CLI flag
+    - Validates manifest.json has synthesis block when report exists
+    - Validates referenced guide files exist in export directory
 v1.3 (2025-12-22): Soft recommendation language detection
     - NEW: SOFT_RECOMMENDATION_LANGUAGE patterns
     - NEW: Catches "this suggests", "this points to", "opportunity to", etc.
@@ -34,6 +39,7 @@ v1.0 (2025-12-22): Initial version with raw markdown and prescriptive language c
 from __future__ import annotations
 
 import argparse
+import json
 import pathlib
 import re
 import sys
@@ -245,6 +251,77 @@ def lint_html(
     return issues
 
 
+def check_synthesis_metadata(export_dir: str) -> List[LintIssue]:
+    """
+    Validate synthesis metadata and files exist in export bundle.
+    
+    Args:
+        export_dir: Path to the export bundle directory containing manifest.json
+    
+    Returns:
+        List of LintIssue objects for any problems found
+    """
+    issues: List[LintIssue] = []
+    export_path = pathlib.Path(export_dir)
+    manifest_path = export_path / "manifest.json"
+    
+    # No manifest = nothing to check
+    if not manifest_path.exists():
+        return issues
+    
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as e:
+        issues.append(LintIssue(
+            "INVALID_MANIFEST_JSON",
+            f"manifest.json is not valid JSON: {e}",
+            str(manifest_path)
+        ))
+        return issues
+    
+    # Check if report exists (only require synthesis if report is present)
+    has_report = (export_path / "index.html").exists() or \
+                 (export_path / "report.md").exists()
+    
+    if not has_report:
+        return issues  # No report, synthesis not required
+    
+    # Check synthesis block exists
+    if "synthesis" not in manifest:
+        issues.append(LintIssue(
+            "MISSING_SYNTHESIS_METADATA",
+            "manifest.json missing 'synthesis' block",
+            "Export bundles with reports should include synthesis metadata for downstream tools"
+        ))
+        return issues
+    
+    synthesis = manifest["synthesis"]
+    
+    # Check required keys
+    required_keys = ["purpose", "visual_synthesis_guide", "synthesis_mode_prompt", "synthesis_checklist"]
+    for key in required_keys:
+        if key not in synthesis:
+            issues.append(LintIssue(
+                "MISSING_SYNTHESIS_KEY",
+                f"synthesis block missing required key: '{key}'",
+                f"Expected in manifest.json synthesis block"
+            ))
+    
+    # Check referenced files exist
+    file_keys = ["visual_synthesis_guide", "synthesis_mode_prompt", "synthesis_checklist"]
+    for key in file_keys:
+        if key in synthesis:
+            file_path = export_path / synthesis[key]
+            if not file_path.exists():
+                issues.append(LintIssue(
+                    "MISSING_SYNTHESIS_FILE",
+                    f"Referenced synthesis file not found: {synthesis[key]}",
+                    f"Expected at: {file_path}"
+                ))
+    
+    return issues
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(
         description="Lint a generated InsightGraph HTML report for quality regressions."
@@ -263,6 +340,8 @@ def main() -> int:
 
     ap.add_argument("--no-language-check", action="store_true",
                     help="Disable prescriptive/inflated language checks")
+    ap.add_argument("--check-synthesis", action="store_true",
+                    help="Check that synthesis metadata exists in the export bundle (requires directory path)")
     ap.add_argument("--max-issues", type=int, default=50,
                     help="Max issues to print")
 
@@ -283,6 +362,13 @@ def main() -> int:
         require_dl_per_section=args.require_dl_per_section,
         require_signal_level_per_section=args.require_signal_level_per_section,
     )
+    
+    # Check synthesis metadata if requested
+    if args.check_synthesis:
+        # Use parent directory of HTML file as export directory
+        export_dir = path.parent
+        synthesis_issues = check_synthesis_metadata(str(export_dir))
+        issues.extend(synthesis_issues)
 
     if not issues:
         print("✅ Lint OK: no issues found.")
