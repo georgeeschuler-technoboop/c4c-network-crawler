@@ -8,11 +8,13 @@ Usage (CLI):
     python -m c4c_utils.lint_report path/to/report.html
     python -m c4c_utils.lint_report path/to/report.html --require-signal-level
     python -m c4c_utils.lint_report path/to/report.html --require-dl-per-section
-    python -m c4c_utils.lint_report path/to/report.html --require-dl-per-section --require-signal-level-per-section
+    python -m c4c_utils.lint_report path/to/report.html --check-synthesis
+    python -m c4c_utils.lint_report path/to/export/index.html --check-synthesis --require-signal-level
 
 Usage (as module):
-    from c4c_utils.lint_report import lint_html, LintIssue
+    from c4c_utils.lint_report import lint_html, check_synthesis_metadata, LintIssue
     issues = lint_html(html_content, enforce_signal_level=True)
+    synthesis_issues = check_synthesis_metadata("/path/to/export/")
 
 Returns exit code 0 if OK, 1 if issues found.
 
