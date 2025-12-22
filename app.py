@@ -31,9 +31,10 @@ import plotly.graph_objects as go
 # APP VERSION
 # ============================================================================
 
-APP_VERSION = "0.3.13"
+APP_VERSION = "0.4.0"
 
 VERSION_HISTORY = [
+    "SCHEMA v0.4.0: CoreGraph v1 schema alignment for InsightGraph compatibility; unified bundle format with manifest.json",
     "ADDED v0.3.13: Polinode Excel export (single .xlsx with Nodes + Edges tabs); requires openpyxl",
     "HARDENED v0.3.12: Name canonicalization (Unicode NFKC, whitespace, quotes, hyphens); post-export validation for Polinode",
     "FIXED v0.3.11: Polinode edges now use display Names (not IDs); duplicate node names deduplicated (prefer seed)",
@@ -41,6 +42,72 @@ VERSION_HISTORY = [
     "UPDATED v0.3.9: Separate C4C and Polinode schema outputs (nodes.csv + nodes_polinode.csv, edges.csv + edges_polinode.csv)",
     "FIXED v0.3.8: City/Region/Country now populated from API response and parsed from location strings",
 ]
+
+
+# ============================================================================
+# COREGRAPH SCHEMA CONSTANTS (v1)
+# ============================================================================
+
+COREGRAPH_VERSION = "c4c_coregraph_v1"
+BUNDLE_VERSION = "1.0"
+SOURCE_APP = "actorgraph"
+
+# Valid node types (lowercase)
+VALID_NODE_TYPES = frozenset({
+    'person',        # Individual human
+    'organization',  # Foundation / nonprofit
+    'company',       # For-profit company
+    'school',        # Educational institution
+})
+
+# Valid edge types (lowercase)
+VALID_EDGE_TYPES = frozenset({
+    'grant',         # Funding relationship
+    'board',         # Board membership
+    'employment',    # Works at
+    'education',     # Attended
+    'connection',    # Social/professional connection (LinkedIn)
+    'affiliation',   # Generic membership
+})
+
+# ActorGraph edge type mapping
+EDGE_TYPE_MAPPING = {
+    'people_also_viewed': 'connection',
+    'similar_companies': 'connection',
+}
+
+
+def namespace_id(node_id: str) -> str:
+    """Namespace a node ID to prevent collisions across apps."""
+    if not node_id:
+        return node_id
+    node_id_str = str(node_id)
+    if ':' in node_id_str:
+        return node_id_str
+    return f"{SOURCE_APP}:{node_id_str}"
+
+
+def normalize_edge_type(edge_type: str) -> str:
+    """Normalize edge type to CoreGraph vocabulary."""
+    if not edge_type:
+        return 'connection'
+    et = str(edge_type).strip().lower()
+    return EDGE_TYPE_MAPPING.get(et, et)
+
+
+def derive_node_type(node: dict) -> str:
+    """Derive CoreGraph node_type from ActorGraph node data."""
+    # Check explicit is_company flag first
+    if node.get('is_company'):
+        return 'company'
+    # Check profile URL for /company/
+    profile_url = str(node.get('profile_url', '')).lower()
+    if '/company/' in profile_url:
+        return 'company'
+    if '/school/' in profile_url:
+        return 'school'
+    # Default to person
+    return 'person'
 
 
 # ============================================================================
@@ -169,451 +236,37 @@ def describe_node_role(name: str, organization: str, levels: Dict[str, str]) -> 
     if levels.get("betweenness") == "extreme":
         fragments.append("is a critical bridge between otherwise disconnected groups")
     elif levels.get("betweenness") == "high":
-        fragments.append("often brokers interactions between different clusters")
-
-    if levels.get("closeness") in ("high", "extreme"):
-        fragments.append("can quickly reach most other actors in the system")
+        fragments.append("often bridges different clusters")
 
     if levels.get("eigenvector") in ("high", "extreme"):
-        fragments.append("is connected to other highly influential actors")
+        fragments.append("connects to other influential people")
+
+    if levels.get("closeness") in ("high", "extreme"):
+        fragments.append("can reach most people quickly")
 
     if not fragments:
-        return f"{name}{org_part} plays a more peripheral structural role in this network."
+        return f"{name}{org_part} has a typical network position."
 
-    joined = "; ".join(fragments)
-    return f"{name}{org_part} {joined}."
-
-
-def centralization_index(values: Sequence[float]) -> float:
-    """Measure how dominant the top node is (0-1, 1=fully centralized)."""
-    arr = np.array([v for v in values if v is not None], dtype=float)
-    if arr.size <= 1 or arr.sum() == 0:
-        return 0.0
-    top_share = arr.max() / arr.sum()
-    n = arr.size
-    min_share = 1.0 / n
-    denom = 1.0 - min_share
-    if denom <= 0:
-        return 0.0
-    return float(max(0.0, min(1.0, (top_share - min_share) / denom)))
-
-
-def compute_network_health(
-    stats: NetworkStats,
-    degree_values: Sequence[float],
-    betweenness_values: Sequence[float],
-) -> Tuple[int, str]:
-    """Compute 0-100 health score and label."""
-    if stats.n_nodes == 0:
-        return 0, "No data"
-
-    # Connectivity score (0-25)
-    target_min, target_max = 2.0, 8.0
-    deg = stats.avg_degree
-    if deg <= target_min:
-        connectivity = 0.0
-    elif deg >= target_max:
-        connectivity = 1.0
-    else:
-        connectivity = (deg - target_min) / (target_max - target_min)
-    connectivity_score = connectivity * 25.0
-
-    # Cohesion score (0-25)
-    largest_share = stats.largest_component_size / stats.n_nodes
-    cohesion_score = largest_share * 25.0
-
-    # Fragmentation penalty (0-15)
-    if stats.n_components <= 1:
-        fragmentation_penalty = 0.0
-    else:
-        frag = min(stats.n_components - 1, 9) / 9.0
-        fragmentation_penalty = frag * 15.0
-
-    # Centralization penalty (0-25)
-    deg_cent = centralization_index(degree_values)
-    btw_cent = centralization_index(betweenness_values)
-    centralization = 0.5 * (deg_cent + btw_cent)
-    centralization_penalty = centralization * 25.0
-
-    base = 30.0
-    raw_score = base + connectivity_score + cohesion_score - fragmentation_penalty - centralization_penalty
-    score = int(max(0, min(100, round(raw_score))))
-
-    if score >= 70:
-        label = "Healthy cohesion"
-    elif score >= 40:
-        label = "Mixed signals"
-    else:
-        label = "Fragile / at risk"
-
-    return score, label
-
-
-def render_health_summary(score: int, label: str):
-    """Render the network health score in Streamlit."""
-    if label == "Healthy cohesion":
-        color = "🟢"
-    elif label == "Mixed signals":
-        color = "🟡"
-    else:
-        color = "🔴"
-    st.markdown(f"### {color} Network Health: **{score} / 100** — *{label}*")
-    st.caption("This score reflects how well people are connected, how unified the system is, and how influence is distributed.")
-
-
-def render_health_details(
-    stats: NetworkStats,
-    degree_values: Sequence[float],
-    betweenness_values: Sequence[float],
-):
-    """Render detailed breakdown of health score in plain language."""
-    with st.expander("🔍 Health Score Breakdown"):
-        # Calculate values
-        largest_share = stats.largest_component_size / max(stats.n_nodes, 1) * 100
-        deg_cent = centralization_index(degree_values)
-        btw_cent = centralization_index(betweenness_values)
-        power_concentrated = deg_cent > 0.5 or btw_cent > 0.5
-        
-        # Collect positive factors
-        positives = []
-        if largest_share >= 80:
-            positives.append(f"🟢 **The network is highly unified** — {largest_share:.0f}% of people can reach each other through the network, which means ideas and information can spread broadly.")
-        if not power_concentrated:
-            positives.append("🟢 **Influence is distributed** — no single actor dominates the network, reducing gatekeeping and single points of failure.")
-        if stats.avg_degree >= 4:
-            positives.append(f"🟢 **Good direct connectivity** — people have an average of {stats.avg_degree:.1f} direct connections, enabling organic collaboration.")
-        
-        # Collect risk factors
-        risks = []
-        if stats.avg_degree < 4:
-            risks.append(f"🔴 **Low direct connectivity** (avg {stats.avg_degree:.1f} links per person) — people have few direct ties, which means collaboration requires active coordination.")
-        if stats.n_components > 1:
-            risks.append(f"🟠 **{stats.n_components} isolated groups exist** — these clusters cannot reach each other, even indirectly. This may indicate blind spots, missing sectors, or disconnected communities.")
-        if largest_share < 80:
-            risks.append(f"🟠 **Fragmented network** — only {largest_share:.0f}% of people are part of the main connected group, limiting how far information can travel.")
-        if power_concentrated:
-            risks.append("🔴 **Power is concentrated** — influence sits with a few key actors, creating potential bottlenecks and vulnerabilities.")
-        
-        # Display
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.markdown("**🟢 Positive Factors**")
-            if positives:
-                for p in positives:
-                    st.markdown(p)
-            else:
-                st.markdown("*No strong positive factors identified*")
-        
-        with col2:
-            st.markdown("**🔴 Risk Factors**")
-            if risks:
-                for r in risks:
-                    st.markdown(r)
-            else:
-                st.markdown("*No significant risks identified*")
-        
-        # Glossary
-        with st.expander("📖 What do these terms mean?"):
-            st.markdown("""
-**Direct connections (degree):**  
-How many people someone is directly connected to.
-
-**Connected group (component):**  
-A group of people who can reach each other through the network, even if indirectly.  
-If the network has multiple components, those groups never interact.
-
-**Network unity (cohesion):**  
-The share of all actors who are part of the same overall connected system.
-
-**Power concentration:**  
-Whether influence (measured through network metrics) sits with a few actors or is spread out.
-            """)
+    return f"{name}{org_part} " + ", and ".join(fragments) + "."
 
 
 # ============================================================================
-# SECTOR ANALYSIS (Diversity, Imbalance, Narrative)
+# BROKERAGE ROLE ANALYSIS
 # ============================================================================
 
-@dataclass
-class SectorAnalysis:
-    """Container for sector distribution analysis results."""
-    df: pd.DataFrame
-    dominant_sectors: List[str]
-    underrepresented_sectors: List[str]
-    diversity_score: float
-    diversity_label: str
-    summary_text: str
-
-
-def analyze_sectors(sector_counts: Dict[str, int], total_nodes: int) -> SectorAnalysis:
-    """
-    Analyze sector distribution for imbalance and diversity.
-    """
-    data = []
-    total_classified = sum(sector_counts.values()) or 1
-
-    for sector, count in sector_counts.items():
-        pct_classified = (count / total_classified) * 100
-        pct_network = (count / max(total_nodes, 1)) * 100
-        data.append({
-            "sector": sector,
-            "count": count,
-            "pct_classified": pct_classified,
-            "pct_network": pct_network,
-        })
-
-    df = pd.DataFrame(data).sort_values("pct_classified", ascending=False)
-    dominant_sectors = df[df["pct_classified"] >= 40.0]["sector"].tolist()
-    underrepresented_sectors = df[df["pct_classified"] <= 10.0]["sector"].tolist()
-
-    p = df["pct_classified"].values / 100.0
-    p = p[p > 0]
-    if len(p) > 0:
-        H = -np.sum(p * np.log(p))
-        H_max = np.log(len(p))
-        diversity = float(H / H_max) if H_max > 0 else 0.0
-    else:
-        diversity = 0.0
-
-    if diversity >= 0.75:
-        diversity_label = "Broad cross-sector mix"
-    elif diversity >= 0.45:
-        diversity_label = "Moderate mix with some skew"
-    else:
-        diversity_label = "Highly concentrated"
-
-    if len(df) > 0:
-        top_row = df.iloc[0]
-        top_sector = top_row["sector"]
-        top_pct = top_row["pct_classified"]
-
-        summary_parts = [
-            f"{len(df)} sectors identified among classified actors.",
-            f"The largest share comes from **{top_sector}** ({top_pct:.1f}% of classified actors).",
-        ]
-
-        if dominant_sectors:
-            ds = ", ".join(dominant_sectors)
-            summary_parts.append(f"These sector(s) dominate the network: **{ds}**.")
-
-        if underrepresented_sectors and len(underrepresented_sectors) != len(df):
-            us = ", ".join(underrepresented_sectors)
-            summary_parts.append(f"These sectors are underrepresented: **{us}** (each ≤10% of classified actors).")
-
-        summary_parts.append(f"Overall sector diversity: **{diversity_label}**.")
-        summary_text = " ".join(summary_parts)
-    else:
-        summary_text = "No sector data available."
-
-    return SectorAnalysis(
-        df=df,
-        dominant_sectors=dominant_sectors,
-        underrepresented_sectors=underrepresented_sectors,
-        diversity_score=diversity,
-        diversity_label=diversity_label,
-        summary_text=summary_text,
-    )
-
-
-def render_sector_analysis(sectors: Dict[str, int], total_nodes: int, seen_profiles: Dict = None):
-    """Render the enhanced sector distribution with Plotly bar chart and narrative."""
-    
-    if not sectors:
-        st.info("No sector classification available")
-        return
-    
-    analysis = analyze_sectors(sectors, total_nodes)
-    df = analysis.df
-    
-    st.metric("Sectors Identified", len(sectors))
-    
-    def get_bar_color(pct):
-        if pct >= 40:
-            return "#F97316"
-        elif pct <= 10:
-            return "#9CA3AF"
-        else:
-            return "#10B981"
-    
-    df["color"] = df["pct_classified"].apply(get_bar_color)
-    df_sorted = df.sort_values("pct_classified", ascending=True)
-    
-    fig = go.Figure()
-    fig.add_trace(go.Bar(
-        y=df_sorted["sector"],
-        x=df_sorted["pct_classified"],
-        orientation='h',
-        marker_color=df_sorted["color"],
-        text=[f"{p:.1f}%" for p in df_sorted["pct_classified"]],
-        textposition='auto',
-        textfont=dict(color='white', size=12),
-        hovertemplate="<b>%{y}</b><br>%{x:.1f}% of network<br>%{customdata} people<extra></extra>",
-        customdata=df_sorted["count"]
-    ))
-    
-    fig.update_layout(
-        height=max(200, len(df) * 40),
-        margin=dict(l=10, r=10, t=10, b=10),
-        xaxis_title="% of Classified Actors",
-        yaxis_title="",
-        showlegend=False,
-        plot_bgcolor='rgba(0,0,0,0)',
-        paper_bgcolor='rgba(0,0,0,0)',
-        xaxis=dict(
-            showgrid=True,
-            gridcolor='rgba(128,128,128,0.2)',
-            range=[0, max(df["pct_classified"]) * 1.15]
-        ),
-        yaxis=dict(showgrid=False)
-    )
-    
-    st.markdown("**Share of classified actors by sector:**")
-    st.plotly_chart(fig, use_container_width=True)
-    
-    st.markdown("""
-    <div style="display: flex; gap: 20px; font-size: 12px; margin-bottom: 10px;">
-        <span><span style="color: #F97316;">●</span> Dominant (≥40%)</span>
-        <span><span style="color: #10B981;">●</span> Healthy (10-40%)</span>
-        <span><span style="color: #9CA3AF;">●</span> Underrepresented (≤10%)</span>
-    </div>
-    """, unsafe_allow_html=True)
-    
-    st.markdown("---")
-    st.markdown(analysis.summary_text)
-    
-    if analysis.diversity_score >= 0.75:
-        st.success(f"🟢 **Sector Diversity: {analysis.diversity_label}**")
-    elif analysis.diversity_score >= 0.45:
-        st.warning(f"🟡 **Sector Diversity: {analysis.diversity_label}**")
-    else:
-        st.error(f"🔴 **Sector Diversity: {analysis.diversity_label}**")
-    
-    if analysis.dominant_sectors:
-        st.warning(f"⚠️ **Sector Dominance** — Network shaped by **{', '.join(analysis.dominant_sectors)}**.")
-    
-    if analysis.underrepresented_sectors and len(analysis.underrepresented_sectors) != len(df):
-        st.info(f"💡 **Underrepresented:** {', '.join(analysis.underrepresented_sectors)}")
-    
-    if seen_profiles:
-        st.markdown("---")
-        st.markdown("**👥 Explore People by Sector:**")
-        
-        profiles_by_sector = {}
-        for node_id, profile in seen_profiles.items():
-            sector = profile.get('sector', 'Unknown')
-            if sector not in profiles_by_sector:
-                profiles_by_sector[sector] = []
-            profiles_by_sector[sector].append(profile)
-        
-        for _, row in df.iterrows():
-            sector = row["sector"]
-            count = int(row["count"])
-            pct = row["pct_classified"]
-            
-            indicator = "🟠" if pct >= 40 else "⚪" if pct <= 10 else "🟢"
-            profiles = profiles_by_sector.get(sector, [])
-            
-            with st.expander(f"{indicator} **{sector}** — {count} people ({pct:.1f}%)"):
-                if profiles:
-                    for p in profiles[:10]:
-                        name = p.get('name', 'Unknown')
-                        org = p.get('organization', '')
-                        org_text = f" • {org}" if org else ""
-                        st.markdown(f"**{name}**{org_text}")
-                    if len(profiles) > 10:
-                        st.caption(f"...and {len(profiles) - 10} more")
-
-
-# ============================================================================
-# BROKERAGE ROLES (Gould & Fernandez Classification)
-# ============================================================================
-
-def detect_communities(G: nx.Graph) -> Dict[str, int]:
-    """Run Louvain community detection."""
-    try:
-        import community as community_louvain
-        partition = community_louvain.best_partition(G)
-        return partition
-    except ImportError:
-        from networkx.algorithms.community import greedy_modularity_communities
-        communities = list(greedy_modularity_communities(G))
-        partition = {}
-        for i, comm in enumerate(communities):
-            for node in comm:
-                partition[node] = i
-        return partition
-
-
-def compute_brokerage_roles(G: nx.Graph, communities: Dict[str, int]) -> Dict[str, str]:
-    """Implements simplified Gould & Fernandez brokerage classification."""
-    roles = {}
-
-    for node in G.nodes():
-        if node not in communities:
-            roles[node] = "peripheral"
-            continue
-            
-        group = communities[node]
-        neighbors = list(G.neighbors(node))
-        
-        if not neighbors:
-            roles[node] = "peripheral"
-            continue
-
-        neighbor_groups = {communities.get(n, -1) for n in neighbors}
-        neighbor_groups.discard(-1)
-
-        same_group_ties = [n for n in neighbors if communities.get(n) == group]
-        other_group_ties = [n for n in neighbors if communities.get(n) != group and n in communities]
-
-        if len(neighbor_groups) <= 1 and group in neighbor_groups:
-            roles[node] = "coordinator"
-            continue
-
-        if len(neighbor_groups) >= 2 and group not in neighbor_groups:
-            roles[node] = "liaison"
-            continue
-
-        if len(other_group_ties) >= len(neighbors) * 0.5:
-            roles[node] = "representative"
-            continue
-
-        if len(other_group_ties) > 0 and len(other_group_ties) <= len(neighbors) * 0.35:
-            roles[node] = "gatekeeper"
-            continue
-
-        if len(neighbor_groups) > 2:
-            roles[node] = "consultant"
-            continue
-
-        roles[node] = "peripheral"
-
-    return roles
-
-
-BROKER_BADGES: Dict[str, Dict[str, str]] = {
-    "coordinator": {"emoji": "🧩", "label": "Internal coordinator", "color": "#3B82F6"},
-    "gatekeeper": {"emoji": "🚪", "label": "Gatekeeper", "color": "#F97316"},
-    "representative": {"emoji": "🔗", "label": "Representative", "color": "#10B981"},
-    "liaison": {"emoji": "🌉", "label": "Cross-group liaison", "color": "#D97706"},
-    "consultant": {"emoji": "🧠", "label": "Multi-group advisor", "color": "#6366F1"},
-    "peripheral": {"emoji": "⚪", "label": "Peripheral", "color": "#9CA3AF"},
-}
-
-BROKER_TOOLTIPS: Dict[str, str] = {
-    "coordinator": "Connects people within their own group, keeping it internally cohesive.",
-    "gatekeeper": "Controls access into their group — a key node for sector handoffs.",
-    "representative": "Brings their group's voice into other groups — outbound connector.",
-    "liaison": "The rare 'true bridge' — connects groups they don't belong to.",
-    "consultant": "Sits across multiple groups with non-hierarchical ties.",
-    "peripheral": "Low influence, low connectivity — sits at the edge.",
+BROKERAGE_BADGE_CONFIG: Dict[str, Dict[str, str]] = {
+    "liaison":       {"emoji": "🌉", "label": "Liaison",       "color": "#D97706"},
+    "gatekeeper":    {"emoji": "🚪", "label": "Gatekeeper",    "color": "#F97316"},
+    "representative":{"emoji": "🔗", "label": "Representative","color": "#10B981"},
+    "coordinator":   {"emoji": "🧩", "label": "Coordinator",   "color": "#3B82F6"},
+    "consultant":    {"emoji": "🧠", "label": "Consultant",    "color": "#6366F1"},
+    "peripheral":    {"emoji": "⚪", "label": "Peripheral",    "color": "#9CA3AF"},
 }
 
 
-def render_broker_badge(role: str, small: bool = True) -> str:
+def render_broker_badge(role: str, small: bool = False) -> str:
     """Return HTML snippet for a brokerage role badge."""
-    cfg = BROKER_BADGES.get(role, BROKER_BADGES["peripheral"])
+    cfg = BROKERAGE_BADGE_CONFIG.get(role, BROKERAGE_BADGE_CONFIG["peripheral"])
     pad = "2px 6px" if small else "4px 8px"
     font_size = "11px" if small else "13px"
     return (
@@ -624,7 +277,7 @@ def render_broker_badge(role: str, small: bool = True) -> str:
         f"padding:{pad};"
         f"font-size:{font_size};"
         f"color:#111827;"
-        f"margin-left:4px;"
+        f"margin-right:4px;"
         f"white-space:nowrap;"
         f"'>"
         f"{cfg['emoji']} {cfg['label']}"
@@ -632,771 +285,657 @@ def render_broker_badge(role: str, small: bool = True) -> str:
     )
 
 
-def _bucket_from_percentile(p: float) -> str:
-    if p is None:
-        return "unknown"
-    if p >= 0.95:
-        return "very high"
-    if p >= 0.75:
-        return "high"
-    if p >= 0.40:
-        return "moderate"
-    return "low"
-
-
-def describe_node_with_recommendation(
-    name: str,
-    organization: Optional[str],
-    role: Optional[str],
-    degree_pct: Optional[float] = None,
-    betweenness_pct: Optional[float] = None,
-    eigenvector_pct: Optional[float] = None,
-    closeness_pct: Optional[float] = None,
-    sector: Optional[str] = None,
-    is_dominant_sector: bool = False,
-    is_underrepresented_sector: bool = False,
-    include_recommendation: bool = True,
-) -> Tuple[str, Optional[str]]:
-    """Returns (blurb, recommendation) for a single node."""
-    org_str = f" at {organization}" if organization else ""
-    sector_str = f" in the {sector} space" if sector else ""
-
-    deg_bucket = _bucket_from_percentile(degree_pct)
-    btw_bucket = _bucket_from_percentile(betweenness_pct)
-    eig_bucket = _bucket_from_percentile(eigenvector_pct)
-    clo_bucket = _bucket_from_percentile(closeness_pct)
-
-    role_key = (role or "").lower()
-
-    if role_key == "liaison":
-        role_sentence = f"{name}{org_str}{sector_str} acts as a cross-group liaison."
-    elif role_key == "gatekeeper":
-        role_sentence = f"{name}{org_str}{sector_str} functions as a gatekeeper."
-    elif role_key == "representative":
-        role_sentence = f"{name}{org_str}{sector_str} represents their group to others."
-    elif role_key == "coordinator":
-        role_sentence = f"{name}{org_str}{sector_str} coordinates within their group."
-    elif role_key == "consultant":
-        role_sentence = f"{name}{org_str}{sector_str} spans several groups as an advisor."
-    elif role_key == "peripheral":
-        role_sentence = f"{name}{org_str}{sector_str} sits at the edge of the network."
-    else:
-        role_sentence = f"{name}{org_str}{sector_str} holds a meaningful position."
-
-    context_bits = []
-    if deg_bucket in ("very high", "high"):
-        context_bits.append("connected to many people")
-    if btw_bucket in ("very high", "high"):
-        context_bits.append("links otherwise disconnected groups")
-    if eig_bucket in ("very high", "high"):
-        context_bits.append("connected to influential actors")
-
-    blurb = role_sentence
-    if context_bits:
-        blurb += " They " + "; ".join(context_bits) + "."
-
-    if not include_recommendation:
-        return blurb, None
-
-    rec_bits = []
-    if role_key == "liaison" and btw_bucket in ("very high", "high"):
-        rec_bits.append("Protect from overload; involve early in cross-group work.")
-    if role_key == "gatekeeper" and btw_bucket in ("very high", "high"):
-        rec_bits.append("Ensure backup pathways exist.")
-    if role_key == "coordinator" and deg_bucket in ("very high", "high"):
-        rec_bits.append("Leverage as internal organizer.")
-    if role_key in ("representative", "liaison") and is_underrepresented_sector:
-        rec_bits.append("Key voice for underrepresented sector.")
-    if (deg_bucket == "very high" or btw_bucket == "very high"):
-        rec_bits.append("Monitor workload; consider sharing responsibilities.")
-
-    if not rec_bits:
-        rec_bits.append("Keep informed and connected to relevant conversations.")
-
-    recommendation = " ".join(rec_bits)
-    return blurb, recommendation
-
-
-def describe_node_narrative(
-    name: str,
-    organization: Optional[str],
-    role: Optional[str],
-    degree_pct: Optional[float] = None,
-    betweenness_pct: Optional[float] = None,
-    eigenvector_pct: Optional[float] = None,
-    closeness_pct: Optional[float] = None,
-    sector: Optional[str] = None,
-) -> str:
-    """Return just the blurb (for backward compatibility)."""
-    blurb, _ = describe_node_with_recommendation(
-        name=name, organization=organization, role=role,
-        degree_pct=degree_pct, betweenness_pct=betweenness_pct,
-        eigenvector_pct=eigenvector_pct, closeness_pct=closeness_pct,
-        sector=sector, include_recommendation=False,
-    )
-    return blurb
-
-
-def compute_percentiles(values: Dict[str, float]) -> Dict[str, float]:
-    """Convert raw metric values to percentiles (0-1).
-    
-    Uses numpy argsort for O(n log n) performance and correct tie handling.
-    """
-    if not values:
+def compute_percentiles(values_dict: Dict[str, float]) -> Dict[str, int]:
+    """Compute percentile rank for each key."""
+    if not values_dict:
         return {}
-    items = list(values.items())
-    vals = np.array([v for _, v in items], dtype=float)
-    order = np.argsort(vals)
-    ranks = np.empty_like(order, dtype=float)
-    ranks[order] = np.arange(len(vals), dtype=float)
-    denom = max(len(vals) - 1, 1)
-    return {items[i][0]: float(ranks[i] / denom) for i in range(len(items))}
+    from scipy import stats as scipy_stats
+    vals = list(values_dict.values())
+    result = {}
+    for k, v in values_dict.items():
+        pct = scipy_stats.percentileofscore(vals, v, kind='rank')
+        result[k] = int(round(pct))
+    return result
 
 
-def describe_broker_role(name: str, org: str, role: str, betweenness_level: str) -> str:
-    """Generate a narrative description of a broker's role."""
-    level_to_pct = {"low": 0.2, "medium": 0.5, "high": 0.85, "extreme": 0.97}
-    btw_pct = level_to_pct.get(betweenness_level, 0.5)
-    return describe_node_narrative(name=name, organization=org, role=role, betweenness_pct=btw_pct)
+def compute_brokerage_roles(G: nx.Graph, node_metrics: Dict) -> Dict[str, str]:
+    """Classify nodes into brokerage roles based on community structure."""
+    if G.number_of_nodes() < 3:
+        return {}
+    
+    try:
+        import community as community_louvain
+        partition = community_louvain.best_partition(G)
+    except:
+        return {}
+    
+    roles = {}
+    for node in G.nodes():
+        node_community = partition.get(node)
+        if node_community is None:
+            roles[node] = "peripheral"
+            continue
+        
+        neighbors = list(G.neighbors(node))
+        if not neighbors:
+            roles[node] = "peripheral"
+            continue
+        
+        neighbor_communities = [partition.get(n) for n in neighbors if partition.get(n) is not None]
+        if not neighbor_communities:
+            roles[node] = "peripheral"
+            continue
+        
+        same_community = sum(1 for c in neighbor_communities if c == node_community)
+        diff_community = len(neighbor_communities) - same_community
+        
+        total = len(neighbor_communities)
+        same_ratio = same_community / total if total > 0 else 0
+        diff_ratio = diff_community / total if total > 0 else 0
+        
+        metrics = node_metrics.get(node, {})
+        betweenness = metrics.get('betweenness_centrality', 0)
+        
+        if betweenness > 0.1 and diff_ratio > 0.5:
+            roles[node] = "liaison"
+        elif betweenness > 0.05 and diff_ratio > 0.3:
+            roles[node] = "gatekeeper"
+        elif same_ratio > 0.7 and diff_ratio > 0.1:
+            roles[node] = "representative"
+        elif same_ratio > 0.8:
+            roles[node] = "coordinator"
+        elif diff_ratio > 0.5:
+            roles[node] = "consultant"
+        else:
+            roles[node] = "peripheral"
+    
+    return roles
+
+
+# ============================================================================
+# NETWORK HEALTH SCORING
+# ============================================================================
+
+def compute_network_health(stats: NetworkStats, degree_values: List[float], 
+                          betweenness_values: List[float]) -> Tuple[float, str]:
+    """Compute an overall network health score (0-100)."""
+    scores = []
+    
+    # Connectivity score (based on density, scaled for network size)
+    if stats.n_nodes > 0:
+        expected_density = min(0.3, 10 / stats.n_nodes)
+        density_score = min(100, (stats.density / expected_density) * 100)
+        scores.append(density_score * 0.25)
+    
+    # Component fragmentation score
+    if stats.n_nodes > 0:
+        largest_ratio = stats.largest_component_size / stats.n_nodes
+        component_score = largest_ratio * 100
+        scores.append(component_score * 0.25)
+    
+    # Hub distribution score (Gini coefficient of degree)
+    if degree_values and len(degree_values) > 1:
+        sorted_degrees = sorted(degree_values)
+        n = len(sorted_degrees)
+        cumsum = np.cumsum(sorted_degrees)
+        gini = (2 * sum((i + 1) * d for i, d in enumerate(sorted_degrees))) / (n * sum(sorted_degrees)) - (n + 1) / n
+        gini = max(0, min(1, gini))
+        hub_score = (1 - gini) * 100
+        scores.append(hub_score * 0.25)
+    
+    # Broker concentration score
+    if betweenness_values and len(betweenness_values) > 1:
+        max_btw = max(betweenness_values)
+        avg_btw = np.mean(betweenness_values)
+        if max_btw > 0:
+            concentration = avg_btw / max_btw
+            broker_score = concentration * 100
+        else:
+            broker_score = 100
+        scores.append(broker_score * 0.25)
+    
+    total_score = sum(scores) if scores else 50
+    
+    if total_score >= 80:
+        label = "Excellent"
+    elif total_score >= 60:
+        label = "Good"
+    elif total_score >= 40:
+        label = "Fair"
+    else:
+        label = "Needs Attention"
+    
+    return round(total_score, 1), label
+
+
+def render_health_summary(score: float, label: str):
+    """Render network health score summary."""
+    if score >= 80:
+        color = "#10B981"
+        emoji = "🟢"
+    elif score >= 60:
+        color = "#3B82F6"
+        emoji = "🔵"
+    elif score >= 40:
+        color = "#F59E0B"
+        emoji = "🟡"
+    else:
+        color = "#EF4444"
+        emoji = "🔴"
+    
+    st.markdown(f"""
+    <div style="background: linear-gradient(135deg, {color}15, {color}05); 
+                border: 2px solid {color}; border-radius: 12px; padding: 20px; margin: 10px 0;">
+        <div style="display: flex; align-items: center; gap: 16px;">
+            <div style="font-size: 48px;">{emoji}</div>
+            <div>
+                <div style="font-size: 14px; color: #6B7280; font-weight: 500;">Network Health Score</div>
+                <div style="font-size: 36px; font-weight: 700; color: {color};">{score}</div>
+                <div style="font-size: 16px; color: #374151;">{label}</div>
+            </div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+
+def render_health_details(stats: NetworkStats, degree_values: List[float], betweenness_values: List[float]):
+    """Render detailed health breakdown."""
+    with st.expander("📊 Health Score Details"):
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.markdown("**Connectivity**")
+            if stats.n_nodes > 0:
+                expected = min(0.3, 10 / stats.n_nodes)
+                pct = min(100, (stats.density / expected) * 100)
+                st.progress(pct / 100, text=f"Density: {stats.density:.4f}")
+            
+            st.markdown("**Component Cohesion**")
+            if stats.n_nodes > 0:
+                ratio = stats.largest_component_size / stats.n_nodes
+                st.progress(ratio, text=f"{ratio*100:.1f}% in largest component")
+        
+        with col2:
+            st.markdown("**Hub Distribution**")
+            if degree_values and len(degree_values) > 1:
+                sorted_d = sorted(degree_values)
+                n = len(sorted_d)
+                gini = (2 * sum((i+1)*d for i,d in enumerate(sorted_d))) / (n * sum(sorted_d)) - (n+1)/n
+                gini = max(0, min(1, gini))
+                st.progress(1 - gini, text=f"Gini: {gini:.2f} (lower is better)")
+            
+            st.markdown("**Broker Spread**")
+            if betweenness_values and max(betweenness_values) > 0:
+                concentration = np.mean(betweenness_values) / max(betweenness_values)
+                st.progress(concentration, text=f"Spread: {concentration:.2f}")
+
+
+# ============================================================================
+# SECTOR ANALYSIS
+# ============================================================================
+
+def analyze_sectors(sectors: Dict[str, int], total_nodes: int) -> Dict:
+    """Analyze sector distribution and identify concentration."""
+    if not sectors or total_nodes == 0:
+        return {}
+    
+    sorted_sectors = sorted(sectors.items(), key=lambda x: x[1], reverse=True)
+    top_sector, top_count = sorted_sectors[0]
+    concentration = top_count / total_nodes
+    
+    return {
+        'top_sector': top_sector,
+        'top_sector_count': top_count,
+        'concentration': concentration,
+        'num_sectors': len(sectors),
+        'is_concentrated': concentration > 0.5,
+        'is_diverse': len(sectors) >= 5 and concentration < 0.3,
+    }
+
+
+def render_sector_analysis(sectors: Dict[str, int], total_nodes: int, seen_profiles: Dict):
+    """Render sector distribution chart."""
+    sorted_sectors = sorted(sectors.items(), key=lambda x: x[1], reverse=True)[:10]
+    
+    labels = [s[0] for s in sorted_sectors]
+    values = [s[1] for s in sorted_sectors]
+    
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        x=values, y=labels, orientation='h',
+        marker_color='#3B82F6',
+        text=values, textposition='auto',
+    ))
+    fig.update_layout(
+        title="Top Sectors",
+        xaxis_title="Number of People",
+        height=max(250, len(labels) * 30),
+        margin=dict(l=20, r=20, t=40, b=20),
+        yaxis=dict(autorange="reversed"),
+    )
+    st.plotly_chart(fig, use_container_width=True)
 
 
 # ============================================================================
 # RECOMMENDATIONS ENGINE
 # ============================================================================
 
-def generate_recommendations(
-    stats: NetworkStats,
-    sector_analysis: SectorAnalysis,
-    degree_values: Sequence[float],
-    betweenness_values: Sequence[float],
-    health_score: int,
-    health_label: str,
-    brokerage_roles: Dict[str, str] = None,
-    critical_brokers: List[str] = None,
-) -> str:
-    """Generate rule-based recommendations based on network structure."""
-    rec_sections: List[str] = []
-    if brokerage_roles is None:
-        brokerage_roles = {}
-    if critical_brokers is None:
-        critical_brokers = []
-
-    if health_score >= 70:
-        intro = "The network is structurally healthy. Focus on deepening strategic relationships."
-    elif health_score >= 40:
-        intro = "The network shows mixed signals. Targeted bridge-building could unlock value."
-    else:
-        intro = "The network appears fragile. Basic connectivity needs attention."
-
-    rec_sections.append(f"### 🧭 How to Read This\n\n{intro}\n")
-
-    connectivity_recs = []
-    if stats.avg_degree < 3:
-        connectivity_recs.append("**Increase direct connections:** Host small mixed-group sessions.")
-    if stats.n_components > 1:
-        connectivity_recs.append(f"**Bridge isolated groups:** {stats.n_components} disconnected clusters exist.")
-
-    if connectivity_recs:
-        rec_sections.append("### 🔗 Strengthen Basic Connections\n\n" +
-                            "\n\n".join([f"- {r}" for r in connectivity_recs]) + "\n")
-
-    sector_recs = []
-    if sector_analysis and sector_analysis.dominant_sectors:
-        dom = ", ".join(sector_analysis.dominant_sectors)
-        sector_recs.append(f"**Rebalance who is at the table:** Network shaped by **{dom}**.")
-    if sector_analysis and sector_analysis.underrepresented_sectors:
-        under = ", ".join(sector_analysis.underrepresented_sectors)
-        sector_recs.append(f"**Invite missing voices:** {under} are underrepresented.")
-
-    if sector_recs:
-        rec_sections.append("### 🎯 Balance Sectors\n\n" +
-                            "\n\n".join([f"- {r}" for r in sector_recs]) + "\n")
-
-    power_recs = []
-    deg_cent = centralization_index(degree_values)
-    btw_cent = centralization_index(betweenness_values)
-    avg_cent = 0.5 * (deg_cent + btw_cent)
-
-    if critical_brokers:
-        power_recs.append("**Reduce dependence on critical brokers:** Identify backup connectors.")
-    if avg_cent > 0.5:
-        power_recs.append("**Distribute influence:** Rotate facilitation roles.")
-
-    if power_recs:
-        rec_sections.append("### 🧩 Work with Brokers\n\n" +
-                            "\n\n".join([f"- {r}" for r in power_recs]) + "\n")
-
-    if len(rec_sections) == 1:
-        rec_sections.append("### ✨ No Structural Red Flags\n\nFocus on clarifying shared purpose.")
-
-    return "\n".join(rec_sections)
-
-
-def render_recommendations(
-    stats: NetworkStats,
-    sector_analysis: SectorAnalysis,
-    degree_values: Sequence[float],
-    betweenness_values: Sequence[float],
-    health_score: int,
-    health_label: str,
-    brokerage_roles: Dict[str, str] = None,
-    critical_brokers: List[str] = None,
-):
-    """Render recommendations section in Streamlit."""
-    st.subheader("🚀 Next-Step Recommendations")
-    recommendations_md = generate_recommendations(
-        stats=stats, sector_analysis=sector_analysis,
-        degree_values=degree_values, betweenness_values=betweenness_values,
-        health_score=health_score, health_label=health_label,
-        brokerage_roles=brokerage_roles, critical_brokers=critical_brokers,
-    )
-    st.markdown(recommendations_md)
+def render_recommendations(stats: NetworkStats, sector_analysis: Dict, 
+                          degree_values: List[float], betweenness_values: List[float],
+                          health_score: float, health_label: str,
+                          brokerage_roles: Dict[str, str], critical_brokers: List[str]):
+    """Render strategic recommendations based on network analysis."""
+    st.subheader("💡 Strategic Recommendations")
+    
+    recommendations = []
+    
+    # Health-based recommendations
+    if health_score < 40:
+        recommendations.append({
+            'priority': 'high',
+            'title': 'Network Fragmentation Risk',
+            'description': 'The network shows signs of fragmentation. Consider introducing connectors between isolated clusters.',
+            'action': 'Identify and engage potential bridge-builders.',
+        })
+    
+    # Broker concentration
+    if betweenness_values:
+        max_btw = max(betweenness_values)
+        avg_btw = np.mean(betweenness_values)
+        if max_btw > 0 and avg_btw / max_btw < 0.2:
+            recommendations.append({
+                'priority': 'medium',
+                'title': 'Single Point of Failure Risk',
+                'description': 'A small number of brokers control most information flow.',
+                'action': 'Develop alternative pathways and backup connectors.',
+            })
+    
+    # Sector concentration
+    if sector_analysis and sector_analysis.get('is_concentrated'):
+        recommendations.append({
+            'priority': 'low',
+            'title': 'Sector Concentration',
+            'description': f"Over 50% of contacts are in {sector_analysis['top_sector']}.",
+            'action': 'Consider expanding into adjacent sectors for resilience.',
+        })
+    
+    # Component fragmentation
+    if stats.n_components > 1 and stats.n_nodes > 10:
+        recommendations.append({
+            'priority': 'medium',
+            'title': 'Disconnected Groups',
+            'description': f"Network has {stats.n_components} disconnected components.",
+            'action': 'Find common interests to bridge separate groups.',
+        })
+    
+    if not recommendations:
+        st.success("✅ Network appears healthy! No critical issues detected.")
+        return
+    
+    priority_colors = {'high': '#EF4444', 'medium': '#F59E0B', 'low': '#3B82F6'}
+    priority_emojis = {'high': '🔴', 'medium': '🟡', 'low': '🔵'}
+    
+    for rec in recommendations:
+        color = priority_colors.get(rec['priority'], '#6B7280')
+        emoji = priority_emojis.get(rec['priority'], '⚪')
+        
+        st.markdown(f"""
+        <div style="border-left: 4px solid {color}; padding: 12px 16px; margin: 8px 0; 
+                    background: {color}10; border-radius: 0 8px 8px 0;">
+            <div style="font-weight: 600; color: #111827;">{emoji} {rec['title']}</div>
+            <div style="color: #4B5563; margin: 4px 0;">{rec['description']}</div>
+            <div style="color: {color}; font-weight: 500;">→ {rec['action']}</div>
+        </div>
+        """, unsafe_allow_html=True)
 
 
 # ============================================================================
-# CONFIGURATION
+# API CONFIGURATION
 # ============================================================================
 
-API_DELAY = 3.0
-PER_MIN_LIMIT = 20
-DEFAULT_MOCK_MODE = True
+PER_MIN_LIMIT = 15
 
-
-# ============================================================================
-# RATE LIMITER CLASS
-# ============================================================================
 
 class RateLimiter:
-    """Rate limiter that enforces a per-minute request limit."""
-    def __init__(self, per_min_limit: int, buffer: float = 0.8):
+    """Token bucket rate limiter for API calls."""
+    
+    def __init__(self, per_min_limit: int = PER_MIN_LIMIT):
         self.per_min_limit = per_min_limit
-        self.allowed_per_min = max(1, int(per_min_limit * buffer))
-        self.window_start = time.time()
-        self.calls_in_window = 0
-
+        self.call_times: deque = deque()
+        self.window_seconds = 60
+    
     def wait_for_slot(self):
-        now = time.time()
-        elapsed = now - self.window_start
-        if elapsed >= 60:
-            self.window_start = now
-            self.calls_in_window = 0
-            return
-        if self.calls_in_window >= self.allowed_per_min:
-            sleep_for = 60 - elapsed
-            time.sleep(sleep_for)
-            self.window_start = time.time()
-            self.calls_in_window = 0
-
+        """Wait until a rate limit slot is available."""
+        while True:
+            now = time.time()
+            while self.call_times and (now - self.call_times[0]) > self.window_seconds:
+                self.call_times.popleft()
+            
+            if len(self.call_times) < self.per_min_limit:
+                return
+            
+            oldest = self.call_times[0]
+            sleep_time = self.window_seconds - (now - oldest) + 0.1
+            if sleep_time > 0:
+                time.sleep(sleep_time)
+    
     def record_call(self):
-        self.calls_in_window += 1
+        """Record that a call was made."""
+        self.call_times.append(time.time())
     
     def get_status(self) -> str:
-        return f"{self.calls_in_window}/{self.allowed_per_min} calls this minute"
+        """Get current rate limit status."""
+        now = time.time()
+        while self.call_times and (now - self.call_times[0]) > self.window_seconds:
+            self.call_times.popleft()
+        return f"{len(self.call_times)}/{self.per_min_limit} calls/min"
+
+
+def call_enrichlayer_api(api_token: str, profile_url: str, crawl_type: str = "people", mock_mode: bool = False) -> Tuple[Optional[Dict], Optional[str]]:
+    """Call EnrichLayer API to enrich a profile."""
+    if mock_mode:
+        return generate_mock_response(profile_url, crawl_type), None
+    
+    if crawl_type == "company":
+        endpoint = "https://api.enrichlayer.com/v1/linkedin/company"
+    else:
+        endpoint = "https://api.enrichlayer.com/v1/linkedin/people"
+    
+    headers = {"Authorization": f"Bearer {api_token}", "Content-Type": "application/json"}
+    payload = {"linkedin_url": profile_url}
+    
+    try:
+        response = requests.post(endpoint, headers=headers, json=payload, timeout=30)
+        
+        if response.status_code == 429:
+            return None, "Rate limit exceeded"
+        elif response.status_code == 401:
+            return None, "Invalid API token"
+        elif response.status_code == 402:
+            return None, "Out of credits"
+        elif response.status_code == 404:
+            return None, "Profile not found"
+        elif response.status_code != 200:
+            return None, f"API error: {response.status_code}"
+        
+        data = response.json()
+        if crawl_type == "company":
+            data['is_company'] = True
+        return data, None
+    except requests.exceptions.Timeout:
+        return None, "Request timeout"
+    except Exception as e:
+        return None, f"Request failed: {str(e)}"
+
+
+def generate_mock_response(profile_url: str, crawl_type: str = "people") -> Dict:
+    """Generate mock API response for testing."""
+    import random
+    
+    profile_id = canonical_id_from_url(profile_url)
+    
+    if crawl_type == "company":
+        industries = ["Technology", "Healthcare", "Finance", "Education", "Manufacturing", "Retail"]
+        return {
+            "public_identifier": profile_id,
+            "name": f"Company {profile_id[:8].title()}",
+            "headline": random.choice(industries),
+            "location_str": random.choice(["San Francisco, CA", "New York, NY", "Chicago, IL", "Austin, TX"]),
+            "city": random.choice(["San Francisco", "New York", "Chicago", "Austin"]),
+            "state": random.choice(["CA", "NY", "IL", "TX"]),
+            "country": "US",
+            "is_company": True,
+            "website": f"https://{profile_id}.com",
+            "industry": random.choice(industries),
+            "company_size": [random.randint(10, 100), random.randint(100, 1000)],
+            "founded_year": random.randint(1990, 2020),
+            "people_also_viewed": [
+                {"link": f"https://linkedin.com/company/mock-{i}", "name": f"Similar Co {i}"}
+                for i in range(random.randint(2, 5))
+            ],
+        }
+    else:
+        titles = ["CEO", "CTO", "VP Engineering", "Director", "Manager", "Analyst"]
+        companies = ["TechCorp", "HealthInc", "FinanceGroup", "EduStart", "ManufactureCo"]
+        return {
+            "public_identifier": profile_id,
+            "full_name": f"Person {profile_id[:8].title()}",
+            "headline": f"{random.choice(titles)} at {random.choice(companies)}",
+            "location_str": random.choice(["San Francisco, CA", "New York, NY", "Chicago, IL"]),
+            "city": random.choice(["San Francisco", "New York", "Chicago"]),
+            "state": random.choice(["CA", "NY", "IL"]),
+            "country": "US",
+            "occupation": random.choice(titles),
+            "experiences": [{"company": random.choice(companies), "title": random.choice(titles)}],
+            "people_also_viewed": [
+                {"link": f"https://linkedin.com/in/mock-person-{i}", "name": f"Mock Person {i}"}
+                for i in range(random.randint(3, 8))
+            ],
+        }
 
 
 # ============================================================================
-# UTILITY FUNCTIONS
+# URL PARSING
 # ============================================================================
 
-def extract_url_stub(profile_url: str) -> str:
-    """Extract a temporary ID from LinkedIn URL."""
-    clean_url = profile_url.rstrip('/').split('?')[0]
+def canonical_id_from_url(url: str) -> str:
+    """Extract canonical ID from LinkedIn URL."""
+    if not url:
+        return ""
     
-    # Strip common LinkedIn URL suffixes
-    for suffix in ['/about', '/jobs', '/people', '/posts', '/insights', '/life']:
-        if clean_url.endswith(suffix):
-            clean_url = clean_url[:-len(suffix)]
-            break
+    url = str(url).strip()
+    url = re.sub(r'\?.*$', '', url)
+    url = re.sub(r'#.*$', '', url)
+    url = url.rstrip('/')
     
-    # Handle /in/ URLs (people)
-    match = re.search(r'/in/([^/]+)', clean_url)
-    if match:
-        return match.group(1)
+    # Handle /about/, /jobs/, /people/ suffixes
+    url = re.sub(r'/(about|jobs|people|posts|insights)/?$', '', url)
     
-    # Handle /company/ URLs
-    match = re.search(r'/company/([^/]+)', clean_url)
-    if match:
-        return match.group(1)
+    # Extract company ID
+    company_match = re.search(r'linkedin\.com/company/([^/?#]+)', url)
+    if company_match:
+        return company_match.group(1).lower()
     
-    # Fallback: last segment
-    return clean_url.split('/')[-1]
+    # Extract person ID
+    person_match = re.search(r'linkedin\.com/in/([^/?#]+)', url)
+    if person_match:
+        return person_match.group(1).lower()
+    
+    # Extract school ID
+    school_match = re.search(r'linkedin\.com/school/([^/?#]+)', url)
+    if school_match:
+        return school_match.group(1).lower()
+    
+    # Fallback: use last path segment
+    parts = url.rstrip('/').split('/')
+    return parts[-1].lower() if parts else url.lower()
 
 
-def extract_organization(occupation: str = '', experiences: List = None) -> str:
-    """Extract organization name from occupation string or experiences."""
-    if occupation and ' at ' in occupation:
-        org = occupation.split(' at ', 1)[1].strip()
-        org = org.replace('|', '').strip()
-        return org
-    if experiences and len(experiences) > 0:
-        recent = experiences[0]
-        if 'company' in recent and recent['company']:
-            return recent['company'].strip()
-    return ''
+def update_canonical_ids(seen_profiles: Dict, edges: List, old_id: str, new_id: str):
+    """Update profile and edge IDs when canonical ID changes."""
+    if old_id == new_id:
+        return
+    
+    if old_id in seen_profiles:
+        profile = seen_profiles.pop(old_id)
+        profile['id'] = new_id
+        seen_profiles[new_id] = profile
+    
+    for edge in edges:
+        if edge.get('source_id') == old_id:
+            edge['source_id'] = new_id
+        if edge.get('target_id') == old_id:
+            edge['target_id'] = new_id
 
 
-def extract_org_from_summary(summary: str) -> str:
-    """Extract organization name from a LinkedIn summary/headline string."""
-    if not summary:
-        return ''
-    match = re.search(r'\bat\s+([A-Z][A-Za-z0-9\s&\-\'\.,()]+?)(?:\s*[|•,]|$)', summary)
-    if match:
-        org = match.group(1).strip()
-        org = re.sub(r'\s+(and|for|in|of|the)\s*$', '', org, flags=re.IGNORECASE)
-        org = re.sub(r'[,.]$', '', org).strip()
-        if 2 < len(org) < 80:
-            return org
-    match = re.search(r'@\s*([A-Z][A-Za-z0-9\s&\-\']+?)(?:\s*[|•,]|$)', summary)
-    if match:
-        org = match.group(1).strip()
-        if 2 < len(org) < 80:
-            return org
-    return ''
-
-
-def parse_location_string(location: str) -> dict:
-    """Parse a location string like 'Chicago, Illinois' into city/state/country components."""
+def parse_location_string(location: str) -> Dict[str, str]:
+    """Parse a location string into city, state, country components."""
     result = {'city': '', 'state': '', 'country': ''}
     if not location:
         return result
     
-    # Common US state abbreviations
-    us_states = {
-        'AL', 'AK', 'AZ', 'AR', 'CA', 'CO', 'CT', 'DE', 'FL', 'GA', 'HI', 'ID', 'IL', 'IN', 'IA',
-        'KS', 'KY', 'LA', 'ME', 'MD', 'MA', 'MI', 'MN', 'MS', 'MO', 'MT', 'NE', 'NV', 'NH', 'NJ',
-        'NM', 'NY', 'NC', 'ND', 'OH', 'OK', 'OR', 'PA', 'RI', 'SC', 'SD', 'TN', 'TX', 'UT', 'VT',
-        'VA', 'WA', 'WV', 'WI', 'WY', 'DC'
-    }
-    us_state_names = {
-        'Alabama', 'Alaska', 'Arizona', 'Arkansas', 'California', 'Colorado', 'Connecticut',
-        'Delaware', 'Florida', 'Georgia', 'Hawaii', 'Idaho', 'Illinois', 'Indiana', 'Iowa',
-        'Kansas', 'Kentucky', 'Louisiana', 'Maine', 'Maryland', 'Massachusetts', 'Michigan',
-        'Minnesota', 'Mississippi', 'Missouri', 'Montana', 'Nebraska', 'Nevada', 'New Hampshire',
-        'New Jersey', 'New Mexico', 'New York', 'North Carolina', 'North Dakota', 'Ohio',
-        'Oklahoma', 'Oregon', 'Pennsylvania', 'Rhode Island', 'South Carolina', 'South Dakota',
-        'Tennessee', 'Texas', 'Utah', 'Vermont', 'Virginia', 'Washington', 'West Virginia',
-        'Wisconsin', 'Wyoming', 'District of Columbia'
-    }
-    canadian_provinces = {'Ontario', 'Quebec', 'British Columbia', 'Alberta', 'Manitoba', 'Saskatchewan',
-                          'Nova Scotia', 'New Brunswick', 'Newfoundland', 'PEI', 'ON', 'QC', 'BC', 'AB'}
-    
     parts = [p.strip() for p in location.split(',')]
     
-    if len(parts) >= 1:
-        result['city'] = parts[0]
-    
-    if len(parts) >= 2:
-        second = parts[1].strip()
-        # Check if it's a US state
-        if second.upper() in us_states or second in us_state_names:
-            result['state'] = second
-            result['country'] = 'US'
-        # Check if it's a Canadian province
-        elif second in canadian_provinces:
-            result['state'] = second
-            result['country'] = 'CA'
-        # Could be a country code
-        elif len(second) == 2 and second.upper() == second:
-            result['country'] = second
-        else:
-            result['state'] = second
-    
     if len(parts) >= 3:
-        third = parts[2].strip()
-        if len(third) <= 3:  # Likely country code
-            result['country'] = third.upper()
-        elif not result['country']:
-            result['country'] = third
+        result['city'] = parts[0]
+        result['state'] = parts[1]
+        result['country'] = parts[2]
+    elif len(parts) == 2:
+        result['city'] = parts[0]
+        if len(parts[1]) == 2:
+            result['state'] = parts[1]
+        else:
+            result['country'] = parts[1]
+    elif len(parts) == 1:
+        if len(parts[0]) == 2:
+            result['country'] = parts[0]
+        else:
+            result['city'] = parts[0]
     
     return result
 
 
-def extract_title_from_summary(summary: str) -> str:
-    """Extract job title from a LinkedIn summary/headline string."""
-    if not summary:
-        return ''
-    match = re.search(r'^([^|•\n]+?)\s+at\s+', summary)
-    if match:
-        title = match.group(1).strip()
-        if len(title) < 80:
-            return title
-    match = re.search(r'^([^|•\n@]+?)\s*@\s*', summary)
-    if match:
-        title = match.group(1).strip()
-        if len(title) < 80:
-            return title
-    parts = re.split(r'\s*[|•]\s*', summary)
-    if parts:
-        first = parts[0].strip()
-        first = re.sub(r'\s+at\s+.+$', '', first, flags=re.IGNORECASE)
-        if len(first) < 80:
-            return first
+# ============================================================================
+# ORGANIZATION EXTRACTION
+# ============================================================================
+
+def extract_organization(occupation: str, experiences: List) -> str:
+    """Extract current organization from profile data."""
+    if experiences:
+        for exp in experiences:
+            if isinstance(exp, dict):
+                company = exp.get('company') or exp.get('company_name', '')
+                if company:
+                    return company
+    
+    if occupation:
+        if ' at ' in occupation:
+            return occupation.split(' at ')[-1].strip()
+        if ' @ ' in occupation:
+            return occupation.split(' @ ')[-1].strip()
+    
     return ''
 
 
-def infer_sector(organization: str, headline: str = '') -> str:
-    """Infer sector/industry from organization name and headline."""
+def extract_org_from_summary(headline: str) -> str:
+    """Extract organization from headline/summary."""
+    if not headline:
+        return ''
+    
+    if ' at ' in headline:
+        return headline.split(' at ')[-1].strip()
+    if ' @ ' in headline:
+        return headline.split(' @ ')[-1].strip()
+    
+    return ''
+
+
+def infer_sector(organization: str, headline: str) -> str:
+    """Infer sector from organization name and headline."""
     combined = f"{organization} {headline}".lower()
     
-    if any(word in combined for word in ['foundation', 'philanthropy', 'donor', 'giving']):
-        return 'Philanthropy'
-    elif any(word in combined for word in ['ngo', 'nonprofit', 'charity', 'humanitarian']):
-        return 'Nonprofit'
-    elif any(word in combined for word in ['government', 'ministry', 'federal', 'state', 'public sector']):
-        return 'Government'
-    elif any(word in combined for word in ['university', 'college', 'academic', 'research', 'professor']):
-        return 'Academia'
-    elif any(word in combined for word in ['peace', 'conflict', 'democracy', 'justice', 'rights']):
-        return 'Peacebuilding/Democracy'
-    elif any(word in combined for word in ['social impact', 'social change', 'community development']):
-        return 'Social Impact'
-    elif any(word in combined for word in ['consulting', 'consultant', 'advisory']):
-        return 'Consulting'
-    elif any(word in combined for word in ['finance', 'investment', 'capital', 'fund', 'bank']):
-        return 'Finance'
-    elif any(word in combined for word in ['tech', 'software', 'digital', 'platform']):
-        return 'Technology'
-    elif any(word in combined for word in ['corp', 'inc', 'llc', 'ltd', 'company']):
-        return 'Corporate'
-    else:
-        return 'Other'
+    sector_keywords = {
+        'Technology': ['tech', 'software', 'ai', 'data', 'cloud', 'saas', 'startup'],
+        'Finance': ['bank', 'financial', 'investment', 'capital', 'fund', 'fintech'],
+        'Healthcare': ['health', 'medical', 'pharma', 'biotech', 'hospital', 'clinic'],
+        'Education': ['university', 'college', 'school', 'education', 'learning'],
+        'Nonprofit': ['foundation', 'nonprofit', 'charity', 'ngo', 'social impact'],
+        'Government': ['government', 'federal', 'state', 'city', 'public sector'],
+        'Consulting': ['consulting', 'advisory', 'strategy', 'mckinsey', 'bcg', 'bain'],
+        'Media': ['media', 'news', 'publishing', 'entertainment', 'broadcast'],
+    }
+    
+    for sector, keywords in sector_keywords.items():
+        if any(kw in combined for kw in keywords):
+            return sector
+    
+    return 'Other'
 
 
-def canonical_id_from_url(profile_url: str) -> str:
-    """Generate temporary canonical ID from URL before API enrichment."""
-    return extract_url_stub(profile_url)
+# ============================================================================
+# NETWORK ANALYSIS
+# ============================================================================
 
-
-def update_canonical_ids(seen_profiles: Dict, edges: List, old_id: str, new_id: str) -> None:
-    """Update all references to old_id with new_id after API enrichment."""
-    if old_id in seen_profiles:
-        node = seen_profiles[old_id]
-        node['id'] = new_id
-        seen_profiles[new_id] = node
-        if old_id != new_id:
-            del seen_profiles[old_id]
+def compute_network_metrics(seen_profiles: Dict, edges: List) -> Dict:
+    """Compute network metrics using NetworkX."""
+    if not edges or len(seen_profiles) < 2:
+        return {}
+    
+    G = nx.Graph()
+    
+    for node_id in seen_profiles:
+        G.add_node(node_id)
+    
     for edge in edges:
-        if edge['source_id'] == old_id:
-            edge['source_id'] = new_id
-        if edge['target_id'] == old_id:
-            edge['target_id'] = new_id
-
-
-def validate_graph(seen_profiles: Dict, edges: List[Dict]) -> Tuple[List[str], List[Dict]]:
-    """Validate that all edge endpoints exist in nodes."""
-    node_ids = set(seen_profiles.keys())
-    orphan_ids = set()
-    valid_edges = []
-    for edge in edges:
-        if edge['source_id'] in node_ids and edge['target_id'] in node_ids:
-            valid_edges.append(edge)
-        else:
-            if edge['source_id'] not in node_ids:
-                orphan_ids.add(edge['source_id'])
-            if edge['target_id'] not in node_ids:
-                orphan_ids.add(edge['target_id'])
-    return sorted(orphan_ids), valid_edges
-
-
-def test_network_connectivity() -> Tuple[bool, str]:
-    """Test if enrichlayer.com is reachable."""
+        source = edge.get('source_id')
+        target = edge.get('target_id')
+        if source and target and source in seen_profiles and target in seen_profiles:
+            G.add_edge(source, target)
+    
+    if G.number_of_edges() == 0:
+        return {}
+    
+    # Network-level stats
+    network_stats = {
+        'nodes': G.number_of_nodes(),
+        'edges': G.number_of_edges(),
+        'density': nx.density(G),
+        'avg_degree': sum(dict(G.degree()).values()) / G.number_of_nodes() if G.number_of_nodes() > 0 else 0,
+        'avg_clustering': nx.average_clustering(G),
+        'num_components': nx.number_connected_components(G),
+    }
+    
+    # Largest component
+    if nx.number_connected_components(G) > 0:
+        largest_cc = max(nx.connected_components(G), key=len)
+        network_stats['largest_component_size'] = len(largest_cc)
+    
+    # Node-level metrics
+    degree_centrality = nx.degree_centrality(G)
+    betweenness_centrality = nx.betweenness_centrality(G)
+    
     try:
-        ip = socket.gethostbyname("enrichlayer.com")
-        response = requests.get("https://enrichlayer.com/api/v2/profile", timeout=5)
-        return True, f"✅ Network OK (resolved to {ip})"
-    except socket.gaierror:
-        return False, "❌ DNS Resolution Failed"
-    except requests.exceptions.ConnectionError:
-        return False, "❌ Connection Failed"
-    except Exception as e:
-        return False, f"❌ Unexpected error: {str(e)}"
-
-
-# ============================================================================
-# ENRICHLAYER API CLIENT
-# ============================================================================
-
-def call_enrichlayer_api(api_token: str, profile_url: str, crawl_type: str = "people", mock_mode: bool = False, max_retries: int = 3) -> Tuple[Optional[Dict], Optional[str]]:
-    """Call EnrichLayer API with explicit endpoint selection.
+        eigenvector_centrality = nx.eigenvector_centrality(G, max_iter=1000)
+    except:
+        eigenvector_centrality = {n: 0 for n in G.nodes()}
     
-    Args:
-        crawl_type: "people" uses /api/v2/profile, "company" uses /api/v2/company
-    """
-    if mock_mode:
-        time.sleep(0.1)
-        return get_mock_response(profile_url, crawl_type), None
+    try:
+        closeness_centrality = nx.closeness_centrality(G)
+    except:
+        closeness_centrality = {n: 0 for n in G.nodes()}
     
-    # Use explicit crawl_type parameter (not auto-detection from URL)
-    is_company = (crawl_type == "company")
+    node_metrics = {}
+    for node_id in G.nodes():
+        node_metrics[node_id] = {
+            'degree': G.degree(node_id),
+            'degree_centrality': degree_centrality.get(node_id, 0),
+            'betweenness_centrality': betweenness_centrality.get(node_id, 0),
+            'eigenvector_centrality': eigenvector_centrality.get(node_id, 0),
+            'closeness_centrality': closeness_centrality.get(node_id, 0),
+        }
     
-    if is_company:
-        endpoint = "https://enrichlayer.com/api/v2/company"
-        params = {"url": profile_url, "use_cache": "if-present"}
-    else:
-        endpoint = "https://enrichlayer.com/api/v2/profile"
-        params = {"url": profile_url, "use_cache": "if-present", "live_fetch": "if-needed"}
-    
-    headers = {"Authorization": f"Bearer {api_token}"}
-    
-    for attempt in range(max_retries):
-        try:
-            response = requests.get(endpoint, headers=headers, params=params, timeout=30)
-            
-            if response.status_code == 200:
-                data = response.json()
-                # Normalize company response to match expected format
-                if is_company:
-                    data = normalize_company_response(data)
-                return data, None
-            elif response.status_code == 401:
-                return None, "Invalid API token"
-            elif response.status_code == 403:
-                return None, "Out of credits"
-            elif response.status_code == 429:
-                if attempt < max_retries - 1:
-                    wait_time = (2 ** attempt) * 3
-                    time.sleep(wait_time)
-                    continue
-                return None, f"Rate limit exceeded"
-            elif response.status_code == 503:
-                if attempt < max_retries - 1:
-                    time.sleep(3)
-                    continue
-                return None, "Enrichment failed"
-            else:
-                # Try to get error details from response
-                try:
-                    error_detail = response.json().get('message', '') or response.json().get('error', '')
-                    return None, f"API error {response.status_code}: {error_detail}" if error_detail else f"API error {response.status_code}"
-                except:
-                    return None, f"API error {response.status_code}"
-        except requests.exceptions.Timeout:
-            if attempt < max_retries - 1:
-                time.sleep(2)
-                continue
-            return None, "Request timed out"
-        except requests.exceptions.RequestException as e:
-            if attempt < max_retries - 1:
-                time.sleep(2)
-                continue
-            return None, f"Network error: {str(e)}"
-    
-    return None, "Failed after maximum retries"
-
-
-def normalize_company_response(company_data: Dict) -> Dict:
-    """Normalize company API response to match person profile format for crawler compatibility.
-    
-    Handles various field name conventions (snake_case, camelCase) that EnrichLayer may return.
-    """
-    # Company responses don't have people_also_viewed, but may have similar_companies
-    # We adapt the response so the crawler can process it uniformly
-    
-    normalized = {
-        "public_identifier": company_data.get("universal_name_id") or company_data.get("universalNameId") or "",
-        "full_name": company_data.get("name", ""),
-        "headline": company_data.get("tagline", "") or company_data.get("industry", ""),
-        "occupation": company_data.get("industry", ""),
-        "location_str": "",
-        "summary": company_data.get("description", ""),
-        "is_company": True,
-        # Preserve original company fields
-        "company_size": company_data.get("company_size") or company_data.get("companySize"),
-        "company_type": company_data.get("company_type") or company_data.get("companyType"),
-        "founded_year": company_data.get("founded_year") or company_data.get("foundedYear"),
-        "website": company_data.get("website"),
-        "industry": company_data.get("industry"),
-        "specialities": company_data.get("specialities") or company_data.get("specialties") or [],
+    # Top nodes by each metric
+    top_nodes = {
+        'degree': sorted(degree_centrality.items(), key=lambda x: x[1], reverse=True)[:10],
+        'betweenness': sorted(betweenness_centrality.items(), key=lambda x: x[1], reverse=True)[:10],
+        'eigenvector': sorted(eigenvector_centrality.items(), key=lambda x: x[1], reverse=True)[:10],
+        'closeness': sorted(closeness_centrality.items(), key=lambda x: x[1], reverse=True)[:10],
     }
     
-    # Build location from HQ if available, or from top-level fields
-    hq = company_data.get("hq") or company_data.get("headquarters") or {}
-    
-    # Try HQ first, then fall back to top-level fields
-    city = hq.get("city", "") or company_data.get("city", "")
-    state = hq.get("state", "") or company_data.get("state", "")
-    country = hq.get("country", "") or company_data.get("country", "")
-    
-    if city or state or country:
-        loc_parts = [city, state, country]
-        normalized["location_str"] = ", ".join(p for p in loc_parts if p)
-        normalized["city"] = city
-        normalized["state"] = state
-        normalized["country"] = country
-    
-    # Company profiles don't have people_also_viewed - they have similar_companies
-    # For network building, we use similar_companies or affiliated_companies
-    # Handle both snake_case and camelCase field names
-    similar = (
-        company_data.get("similar_companies") or 
-        company_data.get("similarCompanies") or 
-        []
-    )
-    affiliated = (
-        company_data.get("affiliated_companies") or 
-        company_data.get("affiliatedCompanies") or
-        company_data.get("affiliates") or
-        []
-    )
-    
-    # Convert similar/affiliated companies to people_also_viewed format for crawler compatibility
-    people_also_viewed = []
-    for comp in (similar + affiliated)[:20]:  # Limit to 20
-        if isinstance(comp, dict):
-            # Try multiple field names for the link
-            link = (
-                comp.get("link") or 
-                comp.get("url") or 
-                comp.get("linkedin_url") or 
-                comp.get("linkedinUrl") or
-                comp.get("profile_url") or
-                ""
-            )
-            if link:
-                people_also_viewed.append({
-                    "link": link,
-                    "name": comp.get("name", ""),
-                    "summary": comp.get("industry") or comp.get("description") or "",
-                    "location": comp.get("location") or comp.get("hq", {}).get("city", "") or ""
-                })
-    
-    normalized["people_also_viewed"] = people_also_viewed
-    
-    return normalized
-
-
-def get_mock_response(profile_url: str, crawl_type: str = "people") -> Dict:
-    """Generate comprehensive mock API response for stress testing.
-    
-    Args:
-        crawl_type: "people" or "company" - explicitly determines response format
-    """
-    import hashlib
-    
-    url_hash = int(hashlib.md5(profile_url.encode()).hexdigest(), 16)
-    
-    # Use explicit crawl_type parameter
-    if crawl_type == "company":
-        return get_mock_company_response(profile_url, url_hash)
-    else:
-        return get_mock_person_response(profile_url, url_hash)
-
-
-def get_mock_company_response(profile_url: str, url_hash: int) -> Dict:
-    """Generate mock company API response."""
-    company_names = ["Green Earth Foundation", "Sustainable Futures Inc", "EcoTech Solutions", 
-                     "Climate Action Network", "Blue Ocean Initiative", "Forest Alliance",
-                     "Clean Energy Partners", "Wildlife Conservation Trust", "Urban Renewal Coalition",
-                     "Great Lakes Foundation", "Midwest Environmental Group", "Community Development Corp"]
-    industries = ["Environmental Services", "Non-profit Organization Management", "Civic & Social Organization",
-                  "Research", "Government Administration", "Philanthropy", "Education"]
-    cities = ["Chicago", "Detroit", "Cleveland", "Milwaukee", "Minneapolis", "Grand Rapids", "Indianapolis"]
-    states = ["Illinois", "Michigan", "Ohio", "Wisconsin", "Minnesota", "Indiana"]
-    
-    temp_id = canonical_id_from_url(profile_url)
-    company_name = company_names[url_hash % len(company_names)]
-    industry = industries[(url_hash // 100) % len(industries)]
-    city = cities[(url_hash // 1000) % len(cities)]
-    state = states[(url_hash // 10000) % len(states)]
-    
-    # Generate similar companies (for network building)
-    num_similar = 8 + (url_hash % 8)
-    similar_companies = []
-    for i in range(num_similar):
-        comp_hash = (url_hash + i * 7919) % (2**32)
-        comp_name = company_names[comp_hash % len(company_names)]
-        comp_industry = industries[(comp_hash // 100) % len(industries)]
-        comp_id = comp_name.lower().replace(" ", "-").replace(".", "")[:30]
-        
-        similar_companies.append({
-            "link": f"https://www.linkedin.com/company/{comp_id}",
-            "name": comp_name,
-            "industry": comp_industry,
-            "location": f"{cities[comp_hash % len(cities)]}, {states[(comp_hash // 100) % len(states)]}"
-        })
-    
-    # Return normalized format (already processed like normalize_company_response would do)
-    return {
-        "public_identifier": temp_id,
-        "full_name": company_name,
-        "headline": industry,
-        "occupation": industry,
-        "location_str": f"{city}, {state}",
-        "summary": f"{company_name} is a leading organization in {industry.lower()}.",
-        "is_company": True,
-        "company_size": [50, 200],
-        "company_type": "NONPROFIT" if "Non-profit" in industry else "PRIVATELY_HELD",
-        "founded_year": 1990 + (url_hash % 30),
-        "website": f"https://www.{temp_id}.org",
-        "industry": industry,
-        "specialities": ["Community Development", "Environmental Advocacy", "Research"],
-        "city": city,
-        "state": state,
-        "country": "US",
-        "people_also_viewed": similar_companies
-    }
-
-
-def get_mock_person_response(profile_url: str, url_hash: int) -> Dict:
-    """Generate mock person API response."""
-    first_names = ["James", "Mary", "John", "Patricia", "Robert", "Jennifer", "Michael", "Linda",
-                   "William", "Elizabeth", "David", "Barbara", "Richard", "Susan", "Joseph", "Jessica"]
-    last_names = ["Smith", "Johnson", "Williams", "Brown", "Jones", "Garcia", "Miller", "Davis",
-                  "Rodriguez", "Martinez", "Hernandez", "Lopez", "Gonzalez", "Wilson", "Anderson", "Thomas"]
-    titles = ["CEO", "Founder", "Director", "VP", "Manager", "Consultant", "Partner",
-              "Executive Director", "Chief Strategy Officer", "Program Director"]
-    organizations = ["World Resources Institute", "The Nature Conservancy", "WWF", "IUCN",
-                     "Conservation International", "Environmental Defense Fund", "Sierra Club",
-                     "Ford Foundation", "Rockefeller Foundation", "MacArthur Foundation",
-                     "Stanford University", "Harvard University", "MIT", "McKinsey & Company"]
-    locations = ["San Francisco, CA", "New York, NY", "Washington, DC", "Boston, MA",
-                 "Los Angeles, CA", "Seattle, WA", "Chicago, IL", "Denver, CO"]
-    
-    temp_id = canonical_id_from_url(profile_url)
-    first_name = first_names[url_hash % len(first_names)]
-    last_name = last_names[(url_hash // 100) % len(last_names)]
-    title = titles[(url_hash // 1000) % len(titles)]
-    org = organizations[(url_hash // 10000) % len(organizations)]
-    location = locations[(url_hash // 100000) % len(locations)]
-    
-    full_name = f"{first_name} {last_name}"
-    headline = f"{title} at {org}"
-    
-    num_connections = 25 + (url_hash % 16)
-    people_also_viewed = []
-    for i in range(num_connections):
-        conn_hash = (url_hash + i * 7919) % (2**32)
-        conn_first = first_names[conn_hash % len(first_names)]
-        conn_last = last_names[(conn_hash // 100) % len(last_names)]
-        conn_title = titles[(conn_hash // 1000) % len(titles)]
-        conn_org = organizations[(conn_hash // 10000) % len(organizations)]
-        conn_location = locations[(conn_hash // 100000) % len(locations)]
-        conn_name = f"{conn_first} {conn_last}"
-        conn_id = f"{conn_first.lower()}-{conn_last.lower()}-{conn_hash % 1000}"
-        
-        people_also_viewed.append({
-            "link": f"https://www.linkedin.com/in/{conn_id}",
-            "name": conn_name,
-            "summary": f"{conn_title} at {conn_org}",
-            "location": conn_location
-        })
+    # Brokerage roles
+    brokerage_roles = compute_brokerage_roles(G, node_metrics)
     
     return {
-        "public_identifier": temp_id,
-        "full_name": full_name,
-        "first_name": first_name,
-        "last_name": last_name,
-        "headline": headline,
-        "occupation": headline,
-        "location_str": location,
-        "summary": f"Experienced {title.lower()} with broad expertise.",
-        "experiences": [{"company": org, "title": title, "starts_at": {"year": 2020, "month": 1}, "ends_at": None}],
-        "people_also_viewed": people_also_viewed
+        'network_stats': network_stats,
+        'node_metrics': node_metrics,
+        'top_nodes': top_nodes,
+        'brokerage_roles': brokerage_roles,
+        'graph': G,
     }
 
 
 # ============================================================================
-# BFS CRAWLER
+# CRAWLER
 # ============================================================================
 
 def run_crawler(
@@ -1410,13 +949,9 @@ def run_crawler(
     advanced_mode: bool = False,
     progress_bar = None,
     per_min_limit: int = PER_MIN_LIMIT,
-    crawl_type: str = "people"  # Explicit: "people" or "company"
+    crawl_type: str = "people"
 ) -> Tuple[Dict, List, List, Dict]:
-    """Run BFS crawler on seed profiles.
-    
-    Args:
-        crawl_type: Explicitly set to "people" or "company" to determine API endpoint.
-    """
+    """Run BFS crawler on seed profiles."""
     rate_limiter = None if mock_mode else RateLimiter(per_min_limit=per_min_limit)
     
     queue = deque()
@@ -1507,7 +1042,7 @@ def run_crawler(
         current_node['headline'] = response.get('headline', '')
         current_node['location'] = response.get('location_str') or response.get('location', '')
         
-        # Store company-specific fields if present (for Polinode export)
+        # Store company-specific fields if present
         if response.get('is_company'):
             current_node['is_company'] = True
             current_node['website'] = response.get('website', '')
@@ -1556,7 +1091,6 @@ def run_crawler(
             
             neighbor_id = neighbor.get('public_identifier', canonical_id_from_url(neighbor_url))
             
-            # Use appropriate edge type based on crawl type
             edge_type = 'similar_companies' if crawl_type == 'company' else 'people_also_viewed'
             edges.append({'source_id': current_id, 'target_id': neighbor_id, 'edge_type': edge_type})
             stats['edges_added'] += 1
@@ -1573,14 +1107,12 @@ def run_crawler(
                 'degree': current_node['degree'] + 1, 'source_type': 'discovered'
             }
             
-            # Parse location string into city/state/country
             if neighbor_location:
                 loc_parts = parse_location_string(neighbor_location)
                 neighbor_node['city'] = loc_parts['city']
                 neighbor_node['state'] = loc_parts['state']
                 neighbor_node['country'] = loc_parts['country']
             
-            # For company crawls, mark discovered nodes as companies and store industry
             if crawl_type == 'company':
                 neighbor_node['is_company'] = True
                 neighbor_node['industry'] = neighbor.get('summary') or neighbor.get('industry', '')
@@ -1598,242 +1130,23 @@ def run_crawler(
                 queue.append(neighbor_id)
     
     if not stats['stopped_reason']:
-        stats['stopped_reason'] = 'completed'
+        stats['stopped_reason'] = 'queue_exhausted'
     
     return seen_profiles, edges, raw_profiles, stats
 
 
 # ============================================================================
-# NETWORK METRICS CALCULATION
-# ============================================================================
-
-def calculate_network_metrics(seen_profiles: Dict, edges: List) -> Dict:
-    """Calculate network centrality metrics using NetworkX."""
-    G = nx.Graph()
-    
-    for node_id, node_data in seen_profiles.items():
-        G.add_node(node_id, **node_data)
-    for edge in edges:
-        G.add_edge(edge['source_id'], edge['target_id'])
-    
-    node_metrics = {node_id: {} for node_id in seen_profiles.keys()}
-    network_stats = {}
-    top_nodes = {}
-    
-    if len(G.nodes()) < 2 or len(G.edges()) < 1:
-        return {'node_metrics': node_metrics, 'network_stats': {'nodes': len(G.nodes()), 'edges': len(G.edges())},
-                'top_nodes': {}, 'brokerage_roles': {}, 'communities': {}}
-    
-    try:
-        degree_centrality = nx.degree_centrality(G)
-        for node_id, value in degree_centrality.items():
-            if node_id in node_metrics:
-                node_metrics[node_id]['degree_centrality'] = round(value, 4)
-        for node_id in G.nodes():
-            if node_id in node_metrics:
-                node_metrics[node_id]['degree'] = G.degree(node_id)
-        sorted_degree = sorted(degree_centrality.items(), key=lambda x: x[1], reverse=True)[:10]
-        top_nodes['degree'] = sorted_degree
-        network_stats['avg_degree'] = round(sum(dict(G.degree()).values()) / len(G.nodes()), 2)
-        network_stats['max_degree'] = max(dict(G.degree()).values())
-    except:
-        pass
-    
-    try:
-        betweenness = nx.betweenness_centrality(G)
-        for node_id, value in betweenness.items():
-            if node_id in node_metrics:
-                node_metrics[node_id]['betweenness_centrality'] = round(value, 4)
-        sorted_betweenness = sorted(betweenness.items(), key=lambda x: x[1], reverse=True)[:10]
-        top_nodes['betweenness'] = sorted_betweenness
-        network_stats['avg_betweenness'] = round(sum(betweenness.values()) / len(betweenness), 4)
-    except:
-        pass
-    
-    try:
-        eigenvector = nx.eigenvector_centrality(G, max_iter=500)
-        for node_id, value in eigenvector.items():
-            if node_id in node_metrics:
-                node_metrics[node_id]['eigenvector_centrality'] = round(value, 4)
-        sorted_eigenvector = sorted(eigenvector.items(), key=lambda x: x[1], reverse=True)[:10]
-        top_nodes['eigenvector'] = sorted_eigenvector
-    except:
-        pass
-    
-    try:
-        if nx.is_connected(G):
-            closeness = nx.closeness_centrality(G)
-        else:
-            largest_cc = max(nx.connected_components(G), key=len)
-            subgraph = G.subgraph(largest_cc)
-            closeness = nx.closeness_centrality(subgraph)
-        for node_id, value in closeness.items():
-            if node_id in node_metrics:
-                node_metrics[node_id]['closeness_centrality'] = round(value, 4)
-        sorted_closeness = sorted(closeness.items(), key=lambda x: x[1], reverse=True)[:10]
-        top_nodes['closeness'] = sorted_closeness
-    except:
-        pass
-    
-    communities = {}
-    brokerage_roles = {}
-    try:
-        if len(G.nodes()) >= 3 and len(G.edges()) >= 2:
-            communities = detect_communities(G)
-            brokerage_roles = compute_brokerage_roles(G, communities)
-            for node_id in node_metrics:
-                if node_id in communities:
-                    node_metrics[node_id]['community'] = communities[node_id]
-                if node_id in brokerage_roles:
-                    node_metrics[node_id]['brokerage_role'] = brokerage_roles[node_id]
-            if communities:
-                network_stats['num_communities'] = len(set(communities.values()))
-    except:
-        pass
-    
-    network_stats['nodes'] = len(G.nodes())
-    network_stats['edges'] = len(G.edges())
-    
-    try:
-        network_stats['density'] = round(nx.density(G), 4)
-    except:
-        pass
-    
-    try:
-        if nx.is_connected(G):
-            network_stats['diameter'] = nx.diameter(G)
-        else:
-            largest_cc = max(nx.connected_components(G), key=len)
-            network_stats['largest_component_size'] = len(largest_cc)
-            network_stats['num_components'] = nx.number_connected_components(G)
-    except:
-        pass
-    
-    try:
-        network_stats['avg_clustering'] = round(nx.average_clustering(G), 4)
-    except:
-        pass
-    
-    return {
-        'node_metrics': node_metrics, 'network_stats': network_stats,
-        'top_nodes': top_nodes, 'brokerage_roles': brokerage_roles, 'communities': communities
-    }
-
-
-# ============================================================================
-# CSV/JSON GENERATION
+# CSV GENERATION - COREGRAPH SCHEMA (v1)
 # ============================================================================
 
 def generate_nodes_csv(seen_profiles: Dict, max_degree: int, max_edges: int, max_nodes: int, network_metrics: Dict = None) -> str:
-    """Generate nodes.csv in C4C internal schema."""
+    """Generate nodes.csv in CoreGraph v1 schema."""
     nodes_data = []
     node_metrics = network_metrics.get('node_metrics', {}) if network_metrics else {}
     
     for node in seen_profiles.values():
-        node_dict = {
-            'id': node['id'],
-            'name': node.get('name', ''),
-            'profile_url': node.get('profile_url', ''),
-            'headline': node.get('headline', ''),
-            'location': node.get('location', ''),
-            'city': node.get('city', ''),
-            'state': node.get('state', ''),
-            'country': node.get('country', ''),
-            'degree': node.get('degree', 0),
-            'source_type': node.get('source_type', ''),
-            'is_company': node.get('is_company', False),
-            'website': node.get('website', ''),
-            'industry': node.get('industry', ''),
-            'founded_year': node.get('founded_year', ''),
-        }
-        
-        # Format company size
-        company_size = node.get('company_size')
-        if company_size and isinstance(company_size, (list, tuple)) and len(company_size) >= 2:
-            node_dict['company_size'] = f"{company_size[0]}-{company_size[1]}" if company_size[1] else f"{company_size[0]}+"
-        else:
-            node_dict['company_size'] = str(company_size) if company_size else ''
-        
-        if 'organization' in node:
-            node_dict['organization'] = node.get('organization', '')
-        if 'sector' in node:
-            node_dict['sector'] = node.get('sector', '')
-        
-        # Add network metrics if available
-        if node['id'] in node_metrics:
-            metrics = node_metrics[node['id']]
-            node_dict['connections'] = metrics.get('degree', 0)
-            node_dict['degree_centrality'] = metrics.get('degree_centrality', 0)
-            node_dict['betweenness_centrality'] = metrics.get('betweenness_centrality', 0)
-            node_dict['eigenvector_centrality'] = metrics.get('eigenvector_centrality', 0)
-            node_dict['closeness_centrality'] = metrics.get('closeness_centrality', 0)
-        
-        nodes_data.append(node_dict)
-    
-    df = pd.DataFrame(nodes_data)
-    csv_body = df.to_csv(index=False)
-    meta = f"# C4C ActorGraph nodes | generated_at={datetime.now(timezone.utc).isoformat()}; max_degree={max_degree}; max_edges={max_edges}; max_nodes={max_nodes}\n"
-    return meta + csv_body
-
-
-def canonicalize_name(name: str) -> str:
-    """Canonicalize a display name for Polinode consistency.
-    
-    - Unicode normalize (NFKC)
-    - Strip whitespace
-    - Collapse multiple spaces
-    - Normalize quotes and hyphens
-    """
-    import unicodedata
-    if not name:
-        return name
-    # Unicode normalize
-    name = unicodedata.normalize('NFKC', str(name))
-    # Normalize curly quotes to straight
-    name = name.replace('"', '"').replace('"', '"').replace(''', "'").replace(''', "'")
-    # Normalize various hyphens/dashes to standard hyphen
-    name = name.replace('–', '-').replace('—', '-').replace('−', '-')
-    # Strip and collapse whitespace
-    name = ' '.join(name.split())
-    return name
-
-
-def generate_nodes_polinode_csv(seen_profiles: Dict, max_degree: int, max_edges: int, max_nodes: int, network_metrics: Dict = None) -> Tuple[str, Dict[str, str]]:
-    """Generate nodes_polinode.csv in Polinode-ready schema.
-    
-    Returns:
-        Tuple of (csv_content, id_to_name_map) for edge generation
-    """
-    nodes_data = []
-    node_metrics = network_metrics.get('node_metrics', {}) if network_metrics else {}
-    
-    # Build mapping and handle duplicate names
-    id_to_name = {}  # Maps internal ID to canonicalized display name
-    name_to_node = {}  # Track which node owns each name (prefer seeds)
-    
-    for node in seen_profiles.values():
-        node_id = node['id']
-        display_name = canonicalize_name(node.get('name', node_id))
-        
-        # Handle duplicate names: prefer seed over discovered
-        if display_name in name_to_node:
-            existing = name_to_node[display_name]
-            # If existing is discovered and this one is seed, replace
-            if existing.get('source_type') == 'discovered' and node.get('source_type') == 'seed':
-                name_to_node[display_name] = node
-                id_to_name[node_id] = display_name
-                # Also map the old ID to this name so edges still work
-                id_to_name[existing['id']] = display_name
-            else:
-                # Map this ID to the existing name (merge)
-                id_to_name[node_id] = display_name
-        else:
-            name_to_node[display_name] = node
-            id_to_name[node_id] = display_name
-    
-    # Generate CSV from deduplicated nodes
-    for display_name, node in name_to_node.items():
-        node_type = "Company" if "/company/" in str(node.get('profile_url','')).lower() else "Person"
+        # Derive node_type from profile data
+        node_type = derive_node_type(node)
         
         # Format company size
         company_size = node.get('company_size')
@@ -1843,11 +1156,134 @@ def generate_nodes_polinode_csv(seen_profiles: Dict, max_degree: int, max_edges:
             size_str = str(company_size) if company_size else ''
         
         node_dict = {
-            # Polinode uses Name as the key
+            # === CoreGraph Required ===
+            'node_id': namespace_id(node['id']),
+            'node_type': node_type,
+            'label': node.get('name', ''),
+            'source_app': SOURCE_APP,
+            
+            # === Location ===
+            'city': node.get('city', ''),
+            'region': node.get('state', ''),  # state → region
+            'jurisdiction': node.get('country', ''),
+            
+            # === ActorGraph-specific ===
+            'profile_url': node.get('profile_url', ''),
+            'headline': node.get('headline', ''),
+            'location': node.get('location', ''),
+            'crawl_degree': node.get('degree', 0),
+            'source_type': node.get('source_type', ''),
+            'website': node.get('website', ''),
+            'industry': node.get('industry', ''),
+            'company_size': size_str,
+            'founded_year': node.get('founded_year', ''),
+        }
+        
+        # Add organization/sector if present (people crawls)
+        if 'organization' in node:
+            node_dict['organization'] = node.get('organization', '')
+        if 'sector' in node:
+            node_dict['sector'] = node.get('sector', '')
+        
+        # Add network metrics if available
+        if node['id'] in node_metrics:
+            metrics = node_metrics[node['id']]
+            node_dict['connections'] = metrics.get('degree', 0)
+            node_dict['degree_centrality'] = round(metrics.get('degree_centrality', 0), 6)
+            node_dict['betweenness_centrality'] = round(metrics.get('betweenness_centrality', 0), 6)
+            node_dict['eigenvector_centrality'] = round(metrics.get('eigenvector_centrality', 0), 6)
+            node_dict['closeness_centrality'] = round(metrics.get('closeness_centrality', 0), 6)
+        
+        nodes_data.append(node_dict)
+    
+    df = pd.DataFrame(nodes_data)
+    
+    # Ensure CoreGraph columns come first
+    coregraph_cols = ['node_id', 'node_type', 'label', 'source_app', 'city', 'region', 'jurisdiction']
+    other_cols = [c for c in df.columns if c not in coregraph_cols]
+    df = df[coregraph_cols + other_cols]
+    
+    return df.to_csv(index=False)
+
+
+def generate_edges_csv(edges: List, max_degree: int, max_edges: int, max_nodes: int) -> str:
+    """Generate edges.csv in CoreGraph v1 schema."""
+    edges_data = []
+    
+    for i, edge in enumerate(edges):
+        edge_type_raw = edge.get('edge_type', 'connection')
+        edge_type = normalize_edge_type(edge_type_raw)
+        
+        edges_data.append({
+            # === CoreGraph Required ===
+            'edge_id': f"e-{i+1}",
+            'from_id': namespace_id(edge['source_id']),
+            'to_id': namespace_id(edge['target_id']),
+            'edge_type': edge_type,
+            'directed': False,  # LinkedIn connections are undirected
+            'weight': 1,
+            'source_app': SOURCE_APP,
+            
+            # === ActorGraph-specific ===
+            'original_edge_type': edge_type_raw,
+        })
+    
+    df = pd.DataFrame(edges_data)
+    return df.to_csv(index=False)
+
+
+# ============================================================================
+# POLINODE EXPORT (unchanged from v0.3.x)
+# ============================================================================
+
+def canonicalize_name(name: str) -> str:
+    """Canonicalize a display name for Polinode consistency."""
+    import unicodedata
+    if not name:
+        return name
+    name = unicodedata.normalize('NFKC', str(name))
+    name = name.replace('"', '"').replace('"', '"').replace(''', "'").replace(''', "'")
+    name = name.replace('–', '-').replace('—', '-').replace('−', '-')
+    name = ' '.join(name.split())
+    return name
+
+
+def generate_nodes_polinode_csv(seen_profiles: Dict, max_degree: int, max_edges: int, max_nodes: int, network_metrics: Dict = None) -> Tuple[str, Dict[str, str]]:
+    """Generate nodes_polinode.csv in Polinode-ready schema."""
+    nodes_data = []
+    node_metrics = network_metrics.get('node_metrics', {}) if network_metrics else {}
+    
+    id_to_name = {}
+    name_to_node = {}
+    
+    for node in seen_profiles.values():
+        node_id = node['id']
+        display_name = canonicalize_name(node.get('name', node_id))
+        
+        if display_name in name_to_node:
+            existing = name_to_node[display_name]
+            if existing.get('source_type') == 'discovered' and node.get('source_type') == 'seed':
+                name_to_node[display_name] = node
+                id_to_name[node_id] = display_name
+                id_to_name[existing['id']] = display_name
+            else:
+                id_to_name[node_id] = display_name
+        else:
+            name_to_node[display_name] = node
+            id_to_name[node_id] = display_name
+    
+    for display_name, node in name_to_node.items():
+        node_type = "Company" if "/company/" in str(node.get('profile_url','')).lower() else "Person"
+        
+        company_size = node.get('company_size')
+        if company_size and isinstance(company_size, (list, tuple)) and len(company_size) >= 2:
+            size_str = f"{company_size[0]}-{company_size[1]}" if company_size[1] else f"{company_size[0]}+"
+        else:
+            size_str = str(company_size) if company_size else ''
+        
+        node_dict = {
             'Name': display_name,
             'Type': node_type,
-            
-            # Additional attributes
             'LinkedIn URL': node.get('profile_url', ''),
             'Headline': node.get('headline', ''),
             'Seed vs Discovered': node.get('source_type', ''),
@@ -1856,20 +1292,17 @@ def generate_nodes_polinode_csv(seen_profiles: Dict, max_degree: int, max_edges:
             'Country': node.get('country', ''),
         }
         
-        # Add company-specific fields
         if node.get('is_company') or node_type == "Company":
             node_dict['Website'] = node.get('website', '')
             node_dict['Industry'] = node.get('industry', '')
             node_dict['Company Size'] = size_str
             node_dict['Founded Year'] = node.get('founded_year', '') or ''
         
-        # Add organization/sector if present (people crawls)
         if 'organization' in node:
             node_dict['Organization'] = node.get('organization', '')
         if 'sector' in node:
             node_dict['Sector'] = node.get('sector', '')
         
-        # Add network metrics if available
         if node['id'] in node_metrics:
             metrics = node_metrics[node['id']]
             node_dict['Connections'] = metrics.get('degree', 0)
@@ -1882,36 +1315,18 @@ def generate_nodes_polinode_csv(seen_profiles: Dict, max_degree: int, max_edges:
     
     df = pd.DataFrame(nodes_data)
     csv_body = df.to_csv(index=False)
-    meta = f"# Polinode import | generated_at={datetime.now(timezone.utc).isoformat()}\n"
-    return meta + csv_body, id_to_name
-
-
-def generate_edges_csv(edges: List, max_degree: int, max_edges: int, max_nodes: int) -> str:
-    """Generate edges.csv in C4C internal schema."""
-    df = pd.DataFrame(edges)
-    csv_body = df.to_csv(index=False)
-    meta = f"# C4C ActorGraph edges | generated_at={datetime.now(timezone.utc).isoformat()}; max_degree={max_degree}; max_edges={max_edges}; max_nodes={max_nodes}\n"
-    return meta + csv_body
+    return csv_body, id_to_name
 
 
 def generate_edges_polinode_csv(edges: List, id_to_name: Dict[str, str]) -> str:
-    """Generate edges_polinode.csv in Polinode-ready schema.
-    
-    Args:
-        edges: List of edge dicts with source_id, target_id, edge_type
-        id_to_name: Mapping from internal IDs to display names
-    """
-    # Polinode expects: Source, Target match Name column in nodes
+    """Generate edges_polinode.csv in Polinode-ready schema."""
     edges_data = []
-    skipped = 0
     
     for edge in edges:
         source_name = id_to_name.get(edge['source_id'])
         target_name = id_to_name.get(edge['target_id'])
         
-        # Skip edges where we can't resolve the name
         if not source_name or not target_name:
-            skipped += 1
             continue
         
         edges_data.append({
@@ -1921,36 +1336,21 @@ def generate_edges_polinode_csv(edges: List, id_to_name: Dict[str, str]) -> str:
         })
     
     df = pd.DataFrame(edges_data)
-    # Remove duplicate edges (can happen when nodes are merged by name)
-    df = df.drop_duplicates()
-    csv_body = df.to_csv(index=False)
-    meta = f"# Polinode import | generated_at={datetime.now(timezone.utc).isoformat()}\n"
-    return meta + csv_body
+    return df.to_csv(index=False)
 
 
 def validate_polinode_export(nodes_csv: str, edges_csv: str) -> Tuple[bool, List[str]]:
-    """Validate Polinode export for consistency before saving.
-    
-    Returns:
-        Tuple of (is_valid, list_of_errors)
-    """
+    """Validate Polinode export for consistency."""
     errors = []
     
-    # Parse CSVs (skip comment header)
-    from io import StringIO
-    nodes_lines = [l for l in nodes_csv.split('\n') if l and not l.startswith('#')]
-    edges_lines = [l for l in edges_csv.split('\n') if l and not l.startswith('#')]
+    nodes_df = pd.read_csv(StringIO(nodes_csv))
+    edges_df = pd.read_csv(StringIO(edges_csv))
     
-    nodes_df = pd.read_csv(StringIO('\n'.join(nodes_lines)))
-    edges_df = pd.read_csv(StringIO('\n'.join(edges_lines)))
-    
-    # Check 1: Node names must be unique
     if 'Name' in nodes_df.columns:
         duplicates = nodes_df[nodes_df.duplicated(subset='Name', keep=False)]['Name'].unique()
         if len(duplicates) > 0:
             errors.append(f"Duplicate node names ({len(duplicates)}): {', '.join(str(d) for d in duplicates[:5])}")
     
-    # Check 2: All edge sources must exist in nodes
     if 'Name' in nodes_df.columns and 'Source' in edges_df.columns:
         node_names = set(nodes_df['Name'].dropna())
         edge_sources = set(edges_df['Source'].dropna())
@@ -1968,23 +1368,10 @@ def validate_polinode_export(nodes_csv: str, edges_csv: str) -> Tuple[bool, List
 
 
 def generate_polinode_excel(nodes_polinode_csv: str, edges_polinode_csv: str) -> bytes:
-    """Generate a single Excel file with Nodes and Edges sheets for Polinode import.
+    """Generate Excel file with Nodes and Edges sheets for Polinode."""
+    nodes_df = pd.read_csv(StringIO(nodes_polinode_csv))
+    edges_df = pd.read_csv(StringIO(edges_polinode_csv))
     
-    Args:
-        nodes_polinode_csv: CSV string for nodes (with # comment header)
-        edges_polinode_csv: CSV string for edges (with # comment header)
-    
-    Returns:
-        Excel file as bytes
-    """
-    # Parse CSVs (skip comment header)
-    nodes_lines = [l for l in nodes_polinode_csv.split('\n') if l and not l.startswith('#')]
-    edges_lines = [l for l in edges_polinode_csv.split('\n') if l and not l.startswith('#')]
-    
-    nodes_df = pd.read_csv(StringIO('\n'.join(nodes_lines)))
-    edges_df = pd.read_csv(StringIO('\n'.join(edges_lines)))
-    
-    # Create Excel file in memory
     excel_buffer = BytesIO()
     with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
         nodes_df.to_excel(writer, sheet_name='Nodes', index=False)
@@ -1992,6 +1379,25 @@ def generate_polinode_excel(nodes_polinode_csv: str, edges_polinode_csv: str) ->
     
     excel_buffer.seek(0)
     return excel_buffer.getvalue()
+
+
+# ============================================================================
+# MANIFEST & BUNDLE GENERATION (CoreGraph v1)
+# ============================================================================
+
+def generate_manifest(seen_profiles: Dict, edges: List, crawl_type: str) -> str:
+    """Generate manifest.json for CoreGraph bundle."""
+    manifest = {
+        "schema_version": COREGRAPH_VERSION,
+        "bundle_version": BUNDLE_VERSION,
+        "source_app": SOURCE_APP,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "node_count": len(seen_profiles),
+        "edge_count": len(edges),
+        "crawl_type": crawl_type,
+        "app_version": APP_VERSION,
+    }
+    return json.dumps(manifest, indent=2)
 
 
 def generate_raw_json(raw_profiles: List) -> str:
@@ -2048,38 +1454,40 @@ def generate_crawl_log(stats: Dict, seen_profiles: Dict, edges: List, max_degree
         'error_breakdown': stats.get('error_breakdown', {}),
         'network_statistics': {
             'total_nodes': len(seen_profiles), 'total_edges': len(edges),
-            'seed_nodes': seed_count, 'nodes_with_organization': nodes_with_org,
+            'seed_nodes': seed_count, 'discovered_nodes': len(seen_profiles) - seed_count,
+            'nodes_with_organization': nodes_with_org,
         },
-        'stop_reason': stats.get('stopped_reason', 'unknown'),
+        'termination': {'reason': stats.get('stopped_reason', 'unknown')},
     }
     return json.dumps(log_data, indent=2)
 
 
-def create_download_zip(nodes_csv: str, edges_csv: str, nodes_polinode_csv: str, edges_polinode_csv: str,
-                        raw_json: str, analysis_json: str = None,
-                        insights_report: str = None, crawl_log: str = None, 
-                        polinode_excel: bytes = None) -> bytes:
-    """Create a ZIP file containing all output files in both C4C and Polinode schemas."""
+def create_coregraph_bundle(nodes_csv: str, edges_csv: str, manifest_json: str,
+                            nodes_polinode_csv: str, edges_polinode_csv: str,
+                            polinode_excel: bytes,
+                            raw_json: str, analysis_json: str = None,
+                            crawl_log: str = None) -> bytes:
+    """Create CoreGraph-compatible ZIP bundle."""
     zip_buffer = BytesIO()
     with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
-        # C4C schema files
-        zip_file.writestr('c4c_schema/nodes.csv', nodes_csv)
-        zip_file.writestr('c4c_schema/edges.csv', edges_csv)
+        # CoreGraph bundle structure (root level)
+        zip_file.writestr('manifest.json', manifest_json)
+        zip_file.writestr('nodes.csv', nodes_csv)
+        zip_file.writestr('edges.csv', edges_csv)
         
-        # Polinode schema files
-        zip_file.writestr('polinode_schema/nodes_polinode.csv', nodes_polinode_csv)
-        zip_file.writestr('polinode_schema/edges_polinode.csv', edges_polinode_csv)
+        # Polinode subfolder
+        zip_file.writestr('polinode/nodes.csv', nodes_polinode_csv)
+        zip_file.writestr('polinode/edges.csv', edges_polinode_csv)
         if polinode_excel:
-            zip_file.writestr('polinode_schema/actorgraph_polinode.xlsx', polinode_excel)
+            zip_file.writestr('polinode/actorgraph_polinode.xlsx', polinode_excel)
         
         # Raw data and logs
         zip_file.writestr('raw_profiles.json', raw_json)
         if analysis_json:
             zip_file.writestr('network_analysis.json', analysis_json)
-        if insights_report:
-            zip_file.writestr('network_insights_report.md', insights_report)
         if crawl_log:
             zip_file.writestr('crawl_log.json', crawl_log)
+    
     zip_buffer.seek(0)
     return zip_buffer.getvalue()
 
@@ -2118,311 +1526,150 @@ def create_brokerage_role_chart(brokerage_roles: Dict[str, str]) -> 'go.Figure':
 # STREAMLIT UI
 # ============================================================================
 
-
 def main():
-    st.set_page_config(
-        page_title="ActorGraph",
-        page_icon="https://static.wixstatic.com/media/275a3f_5747a8179bda42ab9b268accbdaf4ac2~mv2.png",
-        layout="wide"
+    st.set_page_config(page_title="ActorGraph", page_icon="🕸️", layout="wide")
+    
+    st.title("🕸️ ActorGraph")
+    st.markdown(f"*People-centered Network Graphs* — v{APP_VERSION}")
+    
+    # Sidebar
+    with st.sidebar:
+        st.header("⚙️ Configuration")
+        
+        api_token = st.text_input("EnrichLayer API Token", type="password", 
+                                  help="Get your token at enrichlayer.com")
+        
+        mock_mode = st.checkbox("🧪 Mock Mode (no API calls)", value=True,
+                               help="Use fake data for testing")
+        
+        st.markdown("---")
+        
+        crawl_type = st.radio("Crawl Type", ["People", "Companies"], 
+                             help="Choose what to crawl")
+        crawl_type_value = "company" if crawl_type == "Companies" else "people"
+        
+        advanced_mode = st.checkbox("🔬 Advanced Analytics", value=True,
+                                   help="Compute network metrics and insights")
+        
+        st.markdown("---")
+        st.subheader("Crawl Limits")
+        
+        max_degree = st.slider("Max Degree", 1, 3, 1,
+                              help="How many hops from seeds")
+        max_nodes = st.slider("Max Nodes", 10, 500, 100,
+                             help="Maximum profiles to collect")
+        max_edges = st.slider("Max Edges", 10, 2000, 500,
+                             help="Maximum connections")
+        
+        st.markdown("---")
+        st.markdown(f"**Schema:** CoreGraph v1")
+        st.markdown(f"**Bundle:** {BUNDLE_VERSION}")
+    
+    # Main content
+    st.header("🌱 Seed Profiles")
+    
+    seed_input = st.text_area(
+        "Enter LinkedIn URLs (one per line)",
+        placeholder="https://linkedin.com/in/johndoe\nhttps://linkedin.com/company/acme-corp",
+        height=150
     )
     
-    if 'crawl_results' not in st.session_state:
-        st.session_state.crawl_results = None
-    
-    # Header with C4C logo
-    col1, col2 = st.columns([1, 9])
-    with col1:
-        st.image("https://static.wixstatic.com/media/275a3f_5747a8179bda42ab9b268accbdaf4ac2~mv2.png", width=80)
-    with col2:
-        st.title("ActorGraph")
-        st.markdown("People-centered network graphs from public profile data.")
-        st.caption(f"v{APP_VERSION}")
-    
-    with st.expander("Version history"):
-        for item in VERSION_HISTORY:
-            st.markdown(f"- {item}")
-
-    st.markdown("---")
-
-    # =========================================================================
-    # CRAWL TYPE SELECTION (explicit, drives API endpoint)
-    # =========================================================================
-    st.subheader("🎯 Crawl Type")
-    
-    crawl_type = st.radio(
-        "What are you crawling?",
-        options=["people", "company"],
-        format_func=lambda x: "👤 People (LinkedIn /in/ profiles)" if x == "people" else "🏢 Companies (LinkedIn /company/ pages)",
-        horizontal=True,
-        key="_crawl_type"
-    )
-    
-    if crawl_type == "people":
-        st.success("**People Crawl** → Uses EnrichLayer `/api/v2/profile` endpoint. Seed file should contain LinkedIn `/in/` URLs.")
-    else:
-        st.info("**Company Crawl** → Uses EnrichLayer `/api/v2/company` endpoint. Seed file should contain LinkedIn `/company/` URLs.")
-
-    st.markdown("---")
-
-    # MODE SELECTION (Seed Crawler vs Intelligence Engine)
-    st.subheader("🎛️ Analysis Mode")
-
-    mode_col1, mode_col2, mode_col3 = st.columns([2, 1, 2])
-    with mode_col2:
-        advanced_mode = st.toggle("mode_toggle", value=False, label_visibility="collapsed", key="_advanced_mode")
-    with mode_col1:
-        st.markdown("**📊 Seed Crawler**" if not advanced_mode else "📊 Seed Crawler")
-    with mode_col3:
-        st.markdown("**🔬 Intelligence Engine**" if advanced_mode else "🔬 Intelligence Engine")
-
-    if advanced_mode:
-        st.caption("Full strategic analysis with centrality metrics, communities, and brokerage roles.")
-    else:
-        st.caption("Quick network mapping. Crawl, export, import to Polinode.")
-
-    st.markdown("---")
-
-    # INPUT SECTION
-    st.header("📥 Input")
-
-    input_col1, input_col2 = st.columns([2, 1])
-
-    with input_col1:
-        st.subheader("1. Upload Seed Profiles")
-        expected_url_type = "/in/" if crawl_type == "people" else "/company/"
-        st.caption(f"Expected URL format: `linkedin.com{expected_url_type}...`")
-        uploaded_file = st.file_uploader("Upload a CSV file", type=["csv"])
-
+    # Parse seeds
     seeds = []
-    seed_validation_ok = True
-
-    if uploaded_file is not None:
-        try:
-            seed_df = pd.read_csv(uploaded_file)
-
-            # Find columns - STRICTLY prefer columns appropriate for the selected crawl type
-            cols = {c.strip().lower(): c for c in seed_df.columns}
-            
-            # URL column candidates - SEPARATE lists, no overlap for clarity
-            if crawl_type == "company":
-                # Company mode: prioritize company-specific columns, then generic
-                url_candidates_primary = ["linkedin_company_url", "company_url", "org_url", "organization_url"]
-                url_candidates_fallback = ["linkedin_profile_url", "profile_url", "linkedin_url", "url"]
-                name_candidates = ["org_name", "company_name", "organization", "name"]
-                
-                # Try primary first
-                url_col = next((cols[c] for c in url_candidates_primary if c in cols), None)
-                if not url_col:
-                    # Fall back to generic columns
-                    url_col = next((cols[c] for c in url_candidates_fallback if c in cols), None)
-                    if url_col:
-                        st.info(f"ℹ️ Using generic column `{url_col}` for company URLs. Consider renaming to `company_url` for clarity.")
-                
-                if not url_col:
-                    raise ValueError(f"Missing URL column. Expected one of: {', '.join(url_candidates_primary + url_candidates_fallback)}")
-            
-            else:  # people
-                url_candidates = ["linkedin_profile_url", "profile_url", "linkedin_url", "url"]
-                name_candidates = ["name", "full_name", "person_name"]
-                
-                url_col = next((cols[c] for c in url_candidates if c in cols), None)
-                if not url_col:
-                    raise ValueError(f"Missing URL column. Expected one of: {', '.join(url_candidates)}")
-            
-            name_col = next((cols[c] for c in name_candidates if c in cols), None)
-            if not name_col:
-                raise ValueError(f"Missing name column. Expected one of: {', '.join(name_candidates)}")
-
-            # Clean URLs - only look at the selected URL column
-            seed_df[url_col] = seed_df[url_col].astype(str).str.strip()
-            seed_df = seed_df[seed_df[url_col].notna() & (seed_df[url_col] != "") & (seed_df[url_col].str.lower() != "nan")]
-            
-            if seed_df.empty:
-                raise ValueError("No usable LinkedIn URLs found (all URL cells are blank).")
-
-            # =========================================================================
-            # VALIDATION: Exclusive, positive pattern matching based on crawl_type
-            # Only inspect the selected URL column, not the entire CSV
-            # =========================================================================
-            urls = seed_df[url_col]
-            
-            if crawl_type == "company":
-                # COMPANY MODE: URLs must contain /company/
-                valid_pattern = urls.str.contains(r"/company/", case=False, regex=True)
-                invalid_count = (~valid_pattern).sum()
-                if invalid_count > 0:
-                    st.error(f"⚠️ **Invalid company URLs!** {invalid_count} URLs in `{url_col}` don't contain `/company/`. Company crawls require LinkedIn company URLs (e.g., `linkedin.com/company/...`).")
-                    seed_validation_ok = False
-            
-            else:  # people
-                # PEOPLE MODE: URLs must contain /in/
-                valid_pattern = urls.str.contains(r"/in/", case=False, regex=True)
-                invalid_count = (~valid_pattern).sum()
-                if invalid_count > 0:
-                    st.error(f"⚠️ **Invalid people URLs!** {invalid_count} URLs in `{url_col}` don't contain `/in/`. People crawls require LinkedIn profile URLs (e.g., `linkedin.com/in/...`).")
-                    seed_validation_ok = False
-
-            # Enforce max 10 seed rows (truncate with warning)
-            if len(seed_df) > 10:
-                st.warning(f"Seed file has {len(seed_df)} rows. Only the first 10 will be used for this run.")
-                seed_df = seed_df.head(10)
-
-            # Standardize to internal seed dicts used by crawl logic
-            for _, row in seed_df.iterrows():
-                name_val = str(row.get(name_col, "")).strip()
-                # Treat "nan" string as blank
-                if name_val.lower() == "nan" or not name_val:
-                    name_val = "Unknown"
-                url_val = str(row.get(url_col, "")).strip()
-                seeds.append({
-                    "name": name_val,
-                    "profile_url": url_val,
-                    # keep optional location fields if present (helps Polinode outputs)
-                    "geography": row.get("geography") if "geography" in seed_df.columns else None,
-                    "city": row.get("city") if "city" in seed_df.columns else None,
-                    "state": row.get("state") if "state" in seed_df.columns else None,
-                    "country": row.get("country") if "country" in seed_df.columns else None,
-                })
-
-            if seed_validation_ok:
-                crawl_type_label = "👤 People" if crawl_type == "people" else "🏢 Companies"
-                st.success(f"✅ Loaded {len(seeds)} seed profiles — {crawl_type_label}")
-                st.dataframe(seed_df, use_container_width=True)
-
-        except Exception as e:
-            st.error(f"Error reading seed file: {e}")
-
-    with input_col2:
-        st.subheader("2. EnrichLayer API Token")
+    if seed_input:
+        for line in seed_input.strip().split('\n'):
+            url = line.strip()
+            if url and ('linkedin.com/in/' in url or 'linkedin.com/company/' in url):
+                name = canonical_id_from_url(url).replace('-', ' ').title()
+                seeds.append({'name': name, 'profile_url': url})
+    
+    if seeds:
+        st.success(f"✅ {len(seeds)} valid seed(s) detected")
+    
+    # Run crawler
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        run_button = st.button("🚀 Start Crawl", type="primary", use_container_width=True,
+                               disabled=not seeds and not mock_mode)
+    with col2:
+        if st.button("🧪 Demo Data", use_container_width=True):
+            seeds = [
+                {'name': 'Demo Person 1', 'profile_url': 'https://linkedin.com/in/demo-person-1'},
+                {'name': 'Demo Person 2', 'profile_url': 'https://linkedin.com/in/demo-person-2'},
+            ]
+            st.session_state.demo_seeds = seeds
+            st.rerun()
+    
+    if 'demo_seeds' in st.session_state:
+        seeds = st.session_state.demo_seeds
+        del st.session_state.demo_seeds
+        run_button = True
+    
+    if run_button and (seeds or mock_mode):
+        if not seeds:
+            seeds = [
+                {'name': 'Mock Seed 1', 'profile_url': 'https://linkedin.com/in/mock-seed-1'},
+                {'name': 'Mock Seed 2', 'profile_url': 'https://linkedin.com/in/mock-seed-2'},
+            ]
         
-        default_token = ""
-        try:
-            default_token = st.secrets.get("ENRICHLAYER_TOKEN", "")
-        except:
-            pass
-        
-        api_token = st.text_input("Enter your API token", type="password", value=default_token)
-        
-        if st.button("🔍 Test API Connection"):
-            with st.spinner("Testing connection..."):
-                success, message = test_network_connectivity()
-                if success:
-                    st.success(message)
-                else:
-                    st.error(message)
-        
-        mock_mode = st.toggle("Run in mock mode (no real API calls)", value=DEFAULT_MOCK_MODE)
-        
-        if mock_mode:
-            st.info("🧪 **MOCK MODE** - No real API calls, no credits used!")
-
-    # CONFIGURATION
-    st.header("⚙️ Crawl Configuration")
-
-    config_col1, config_col2 = st.columns(2)
-
-    with config_col1:
-        max_degree = st.radio("Maximum Degree (hops)", options=[1, 2], index=0)
-        if max_degree == 2:
-            st.error("**⚠️ Degree 2 Warning** — 10-50x more API calls. Start with Degree 1!")
-        else:
-            st.success("**✅ Degree 1 Selected** — Direct connections only. Fast and reliable.")
-
-    with config_col2:
-        st.markdown("**Crawl Limits:**")
-        st.metric("Max Edges", 10000)
-        st.metric("Max Nodes", 7500)
-
-    st.caption(f"⏱️ API pacing: up to **{PER_MIN_LIMIT} requests/minute**")
-
-    # RUN BUTTON
-    can_run = len(seeds) > 0 and (api_token or mock_mode) and seed_validation_ok
-
-    if not can_run:
-        if len(seeds) == 0:
-            st.warning("⚠️ Please upload a valid seed CSV to continue.")
-        elif not seed_validation_ok:
-            pass  # Error already shown above
-        elif not api_token and not mock_mode:
-            st.warning("⚠️ Please enter your EnrichLayer API token to continue.")
-
-    run_button = st.button("🚀 Run Crawl", disabled=not can_run, type="primary", use_container_width=True)
-
-    # CRAWL EXECUTION
-    if run_button:
-        st.header("🔄 Crawl Progress")
-        crawl_type_label = "People" if crawl_type == "people" else "Companies"
-        st.info(f"**Crawl Type: {crawl_type_label}** — Using `/api/v2/{'profile' if crawl_type == 'people' else 'company'}` endpoint")
-        
-        progress_bar = st.progress(0.0, text="Starting crawl...")
-        status_container = st.status("Running crawl...", expanded=True)
+        status_container = st.empty()
+        progress_bar = st.progress(0, text="Initializing...")
         
         seen_profiles, edges, raw_profiles, stats = run_crawler(
-            seeds=seeds, api_token=api_token, max_degree=max_degree, max_edges=10000, max_nodes=7500,
-            status_container=status_container, mock_mode=mock_mode, advanced_mode=advanced_mode,
-            progress_bar=progress_bar, per_min_limit=PER_MIN_LIMIT,
-            crawl_type=crawl_type  # Explicit crawl type passed through
+            seeds=seeds,
+            api_token=api_token,
+            max_degree=max_degree,
+            max_edges=max_edges,
+            max_nodes=max_nodes,
+            status_container=status_container,
+            mock_mode=mock_mode,
+            advanced_mode=advanced_mode,
+            progress_bar=progress_bar,
+            crawl_type=crawl_type_value,
         )
         
-        progress_bar.progress(1.0, text="✅ Complete!")
-        status_container.update(label="✅ Crawl Complete!", state="complete")
+        progress_bar.progress(1.0, text="Complete!")
+        status_container.success(f"✅ Crawl complete! {len(seen_profiles)} nodes, {len(edges)} edges")
         
-        orphan_ids, valid_edges = validate_graph(seen_profiles, edges)
-        if orphan_ids:
-            st.warning(f"⚠️ Detected {len(orphan_ids)} orphan node IDs. Excluded from download.")
-            edges = valid_edges
-        
-        network_metrics = None
-        if advanced_mode and len(edges) > 0:
-            with st.spinner("📊 Calculating network metrics..."):
-                network_metrics = calculate_network_metrics(seen_profiles, edges)
-        
+        # Store results
         st.session_state.crawl_results = {
-            'seen_profiles': seen_profiles, 'edges': edges, 'raw_profiles': raw_profiles,
-            'stats': stats, 'max_degree': max_degree, 'advanced_mode': advanced_mode,
-            'mock_mode': mock_mode, 'network_metrics': network_metrics
+            'seen_profiles': seen_profiles,
+            'edges': edges,
+            'raw_profiles': raw_profiles,
+            'stats': stats,
+            'max_degree': max_degree,
+            'max_edges': max_edges,
+            'max_nodes': max_nodes,
+            'advanced_mode': advanced_mode,
+            'mock_mode': mock_mode,
+            'crawl_type': crawl_type_value,
         }
-
-    # DISPLAY RESULTS
-    if st.session_state.crawl_results is not None:
+    
+    # Display results
+    if 'crawl_results' in st.session_state and st.session_state.crawl_results:
         results = st.session_state.crawl_results
         seen_profiles = results['seen_profiles']
         edges = results['edges']
         raw_profiles = results['raw_profiles']
         stats = results['stats']
         was_max_degree = results['max_degree']
-        was_advanced_mode = results.get('advanced_mode', False)
-        was_mock_mode = results.get('mock_mode', False)
-        network_metrics = results.get('network_metrics', None)
+        was_advanced_mode = results['advanced_mode']
+        was_mock_mode = results['mock_mode']
+        was_crawl_type = results['crawl_type']
         
-        st.header("📊 Results Summary")
+        st.markdown("---")
+        st.header("📊 Results")
         
-        res_col1, res_col2, res_col3, res_col4 = st.columns(4)
-        res_col1.metric("Total Nodes", len(seen_profiles))
-        res_col2.metric("Total Edges", len(edges))
-        res_col3.metric("Max Degree", stats['max_degree_reached'])
-        res_col4.metric("API Calls", stats['api_calls'])
+        # Compute network metrics if advanced mode
+        network_metrics = {}
+        if was_advanced_mode and edges:
+            network_metrics = compute_network_metrics(seen_profiles, edges)
         
-        res_col5, res_col6, res_col7, res_col8 = st.columns(4)
-        res_col5.metric("Successful", stats['successful_calls'])
-        res_col6.metric("Failed", stats['failed_calls'])
-        res_col7.metric("No Neighbors", stats['profiles_with_no_neighbors'])
-        
-        if stats['stopped_reason'] == 'completed':
-            res_col8.success("✅ Completed")
-        elif stats['stopped_reason'] in ('edge_limit', 'node_limit'):
-            res_col8.warning(f"⚠️ {stats['stopped_reason'].replace('_', ' ').title()}")
-        else:
-            res_col8.error(f"❌ {stats['stopped_reason']}")
-        
-        # ADVANCED ANALYTICS
-        if was_advanced_mode and network_metrics and network_metrics.get('top_nodes'):
-            st.markdown("---")
-            st.header("🔬 Network Intelligence")
-            
-            top_nodes = network_metrics['top_nodes']
+        # Display analytics
+        if network_metrics:
             network_stats = network_metrics.get('network_stats', {})
             node_metrics = network_metrics.get('node_metrics', {})
+            top_nodes = network_metrics.get('top_nodes', {})
             brokerage_roles = network_metrics.get('brokerage_roles', {})
             
             degree_values = [m.get('degree_centrality', 0) for m in node_metrics.values()]
@@ -2430,9 +1677,6 @@ def main():
             
             deg_bp = compute_breakpoints(degree_values) if degree_values else None
             btw_bp = compute_breakpoints(betweenness_values) if betweenness_values else None
-            
-            degree_pcts = compute_percentiles({nid: m.get('degree_centrality', 0) for nid, m in node_metrics.items()})
-            betweenness_pcts = compute_percentiles({nid: m.get('betweenness_centrality', 0) for nid, m in node_metrics.items()})
             
             health_stats = NetworkStats(
                 n_nodes=network_stats.get('nodes', 0), n_edges=network_stats.get('edges', 0),
@@ -2451,7 +1695,7 @@ def main():
             stats_cols[0].metric("Nodes", network_stats.get('nodes', 0))
             stats_cols[1].metric("Edges", network_stats.get('edges', 0))
             stats_cols[2].metric("Density", f"{network_stats.get('density', 0):.4f}")
-            stats_cols[3].metric("Avg Degree", network_stats.get('avg_degree', 0))
+            stats_cols[3].metric("Avg Degree", f"{network_stats.get('avg_degree', 0):.1f}")
             stats_cols[4].metric("Avg Clustering", f"{network_stats.get('avg_clustering', 0):.4f}")
             
             st.markdown("---")
@@ -2513,12 +1757,13 @@ def main():
         # DOWNLOAD SECTION
         st.header("💾 Download Results")
         
-        # Generate C4C schema files
-        nodes_csv = generate_nodes_csv(seen_profiles, max_degree=was_max_degree, max_edges=10000, max_nodes=7500, network_metrics=network_metrics)
-        edges_csv = generate_edges_csv(edges, max_degree=was_max_degree, max_edges=10000, max_nodes=7500)
+        # Generate CoreGraph schema files
+        nodes_csv = generate_nodes_csv(seen_profiles, max_degree=was_max_degree, max_edges=max_edges, max_nodes=max_nodes, network_metrics=network_metrics)
+        edges_csv = generate_edges_csv(edges, max_degree=was_max_degree, max_edges=max_edges, max_nodes=max_nodes)
+        manifest_json = generate_manifest(seen_profiles, edges, was_crawl_type)
         
-        # Generate Polinode schema files (nodes returns id_to_name mapping for edges)
-        nodes_polinode_csv, id_to_name = generate_nodes_polinode_csv(seen_profiles, max_degree=was_max_degree, max_edges=10000, max_nodes=7500, network_metrics=network_metrics)
+        # Generate Polinode schema files
+        nodes_polinode_csv, id_to_name = generate_nodes_polinode_csv(seen_profiles, max_degree=was_max_degree, max_edges=max_edges, max_nodes=max_nodes, network_metrics=network_metrics)
         edges_polinode_csv = generate_edges_polinode_csv(edges, id_to_name)
         
         # Validate Polinode export
@@ -2536,7 +1781,7 @@ def main():
         
         crawl_log = generate_crawl_log(
             stats=stats, seen_profiles=seen_profiles, edges=edges,
-            max_degree=was_max_degree, max_edges=10000, max_nodes=7500,
+            max_degree=was_max_degree, max_edges=max_edges, max_nodes=max_nodes,
             api_delay=1.0, mode='Intelligence Engine' if was_advanced_mode else 'Seed Crawler',
             mock_mode=was_mock_mode
         )
@@ -2544,52 +1789,65 @@ def main():
         # Generate Excel file for Polinode
         polinode_excel = generate_polinode_excel(nodes_polinode_csv, edges_polinode_csv)
         
-        zip_data = create_download_zip(nodes_csv, edges_csv, nodes_polinode_csv, edges_polinode_csv, raw_json, analysis_json, None, crawl_log, polinode_excel)
+        # Create CoreGraph bundle
+        zip_data = create_coregraph_bundle(
+            nodes_csv, edges_csv, manifest_json,
+            nodes_polinode_csv, edges_polinode_csv, polinode_excel,
+            raw_json, analysis_json, crawl_log
+        )
         
-        dl_col1, dl_col2 = st.columns([3, 1])
-        with dl_col1:
-            st.download_button("⬇️ Download All as ZIP", data=zip_data, file_name="actorgraph_network.zip",
-                              mime="application/zip", type="primary", use_container_width=True)
-        with dl_col2:
+        # Primary download
+        st.download_button(
+            "⬇️ Download CoreGraph Bundle (.zip)", 
+            data=zip_data, 
+            file_name="actorgraph_bundle.zip",
+            mime="application/zip", 
+            type="primary", 
+            use_container_width=True,
+            help="CoreGraph v1 compatible bundle for InsightGraph"
+        )
+        
+        col1, col2 = st.columns(2)
+        with col1:
             if st.button("🗑️ Clear Results", use_container_width=True):
                 st.session_state.crawl_results = None
                 st.rerun()
         
-        # C4C Schema Downloads
-        st.markdown("### 📄 C4C Schema Files")
-        c4c_col1, c4c_col2, c4c_col3, c4c_col4 = st.columns(4)
-        with c4c_col1:
-            st.download_button("📥 nodes.csv", data=nodes_csv, file_name="nodes.csv", mime="text/csv", use_container_width=True)
-        with c4c_col2:
-            st.download_button("📥 edges.csv", data=edges_csv, file_name="edges.csv", mime="text/csv", use_container_width=True)
-        with c4c_col3:
-            st.download_button("📥 raw_profiles.json", data=raw_json, file_name="raw_profiles.json", mime="application/json", use_container_width=True)
-        with c4c_col4:
-            st.download_button("📥 crawl_log.json", data=crawl_log, file_name="crawl_log.json", mime="application/json", use_container_width=True)
+        # CoreGraph Schema Downloads
+        with st.expander("📄 CoreGraph Schema Files"):
+            st.markdown(f"**Schema:** `{COREGRAPH_VERSION}` | **Bundle:** `{BUNDLE_VERSION}`")
+            c4c_col1, c4c_col2, c4c_col3 = st.columns(3)
+            with c4c_col1:
+                st.download_button("📥 nodes.csv", data=nodes_csv, file_name="nodes.csv", mime="text/csv", use_container_width=True)
+            with c4c_col2:
+                st.download_button("📥 edges.csv", data=edges_csv, file_name="edges.csv", mime="text/csv", use_container_width=True)
+            with c4c_col3:
+                st.download_button("📥 manifest.json", data=manifest_json, file_name="manifest.json", mime="application/json", use_container_width=True)
         
         # Polinode Schema Downloads
-        st.markdown("### 🔗 Polinode Import Files")
-        
-        st.download_button(
-            "📊 Download Polinode Excel (Nodes + Edges tabs)", 
-            data=polinode_excel, 
-            file_name="actorgraph_polinode.xlsx", 
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True
-        )
-        
-        poli_col1, poli_col2 = st.columns(2)
-        with poli_col1:
-            st.download_button("📥 nodes_polinode.csv", data=nodes_polinode_csv, file_name="nodes_polinode.csv", mime="text/csv", use_container_width=True)
-        with poli_col2:
-            st.download_button("📥 edges_polinode.csv", data=edges_polinode_csv, file_name="edges_polinode.csv", mime="text/csv", use_container_width=True)
+        with st.expander("🔗 Polinode Import Files"):
+            st.download_button(
+                "📊 Download Polinode Excel (Nodes + Edges tabs)", 
+                data=polinode_excel, 
+                file_name="actorgraph_polinode.xlsx", 
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True
+            )
+            
+            poli_col1, poli_col2 = st.columns(2)
+            with poli_col1:
+                st.download_button("📥 nodes_polinode.csv", data=nodes_polinode_csv, file_name="nodes_polinode.csv", mime="text/csv", use_container_width=True)
+            with poli_col2:
+                st.download_button("📥 edges_polinode.csv", data=edges_polinode_csv, file_name="edges_polinode.csv", mime="text/csv", use_container_width=True)
         
         with st.expander("👀 Preview Nodes"):
-            st.dataframe(pd.DataFrame([node for node in seen_profiles.values()]))
+            preview_df = pd.read_csv(StringIO(nodes_csv))
+            st.dataframe(preview_df)
         
         with st.expander("👀 Preview Edges"):
-            if len(edges) > 0:
-                st.dataframe(pd.DataFrame(edges))
+            if edges:
+                preview_df = pd.read_csv(StringIO(edges_csv))
+                st.dataframe(preview_df)
             else:
                 st.info("No edges to display")
 
