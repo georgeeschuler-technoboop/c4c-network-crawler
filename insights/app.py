@@ -1894,18 +1894,23 @@ def main():
                     inputs.get("grants_df"),
                     selected_id
                 )
+                # Preserve cloud: prefix for session state
+                session_project_id = f"cloud:{selected_id}"
             else:
                 computed = compute_insights(selected_project, selected_id)
+                session_project_id = selected_id
             
             if computed:
                 data = {**inputs, **computed}
                 st.session_state.project_data = data
-                st.session_state.current_project_id = selected_id
+                st.session_state.current_project_id = session_project_id
                 st.rerun()
     
     # Check if we have data from session state
     current_id = st.session_state.get("current_project_id") or ""
-    if st.session_state.get("project_data") and current_id == selected_id:
+    # Strip cloud: prefix for comparison
+    current_id_clean = current_id.replace("cloud:", "") if current_id.startswith("cloud:") else current_id
+    if st.session_state.get("project_data") and current_id_clean == selected_id:
         data = st.session_state.project_data
         # Make sure grants_df is included from inputs
         if data.get("grants_df") is None and inputs.get("grants_df") is not None:
