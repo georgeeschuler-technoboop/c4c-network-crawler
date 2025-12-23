@@ -1682,7 +1682,7 @@ def main():
     )
     
     st.title("🕸️ ActorGraph")
-    st.markdown(f"*People-centered Network Graphs* — v{APP_VERSION}")
+    st.markdown(f"*People and Company-centered Network Graphs* — v{APP_VERSION}")
     
     # Sidebar
     with st.sidebar:
