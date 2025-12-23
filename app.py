@@ -45,9 +45,10 @@ import plotly.graph_objects as go
 # APP VERSION
 # ============================================================================
 
-APP_VERSION = "0.5.4"
+APP_VERSION = "0.5.5"
 
 VERSION_HISTORY = [
+    "FIXED v0.5.5: Handle empty edges in validate_polinode_export and generate_polinode_excel",
     "FIXED v0.5.4: Enhanced path handling for c4c_utils; added logo via st.image; better error messages",
     "FIXED v0.5.3: Moved cloud login to top of sidebar for consistency with other apps",
     "FIXED v0.5.2: Added sys.path fix for c4c_utils import on Streamlit Cloud",
@@ -1393,7 +1394,11 @@ def generate_edges_csv(edges: List, max_degree: int, max_edges: int, max_nodes: 
             'original_edge_type': edge_type_raw,
         })
     
-    df = pd.DataFrame(edges_data)
+    # Ensure columns exist even if no edges
+    if not edges_data:
+        df = pd.DataFrame(columns=['edge_id', 'from_id', 'to_id', 'edge_type', 'directed', 'weight', 'source_app', 'original_edge_type'])
+    else:
+        df = pd.DataFrame(edges_data)
     return df.to_csv(index=False)
 
 
@@ -1500,7 +1505,11 @@ def generate_edges_polinode_csv(edges: List, id_to_name: Dict[str, str]) -> str:
             'Type': edge.get('edge_type', 'connection'),
         })
     
-    df = pd.DataFrame(edges_data)
+    # Ensure columns exist even if no edges
+    if not edges_data:
+        df = pd.DataFrame(columns=['Source', 'Target', 'Type'])
+    else:
+        df = pd.DataFrame(edges_data)
     return df.to_csv(index=False)
 
 
@@ -1509,14 +1518,22 @@ def validate_polinode_export(nodes_csv: str, edges_csv: str) -> Tuple[bool, List
     errors = []
     
     nodes_df = pd.read_csv(StringIO(nodes_csv))
-    edges_df = pd.read_csv(StringIO(edges_csv))
+    
+    # Handle empty edges CSV
+    if not edges_csv or edges_csv.strip() == '':
+        edges_df = pd.DataFrame()
+    else:
+        try:
+            edges_df = pd.read_csv(StringIO(edges_csv))
+        except pd.errors.EmptyDataError:
+            edges_df = pd.DataFrame()
     
     if 'Name' in nodes_df.columns:
         duplicates = nodes_df[nodes_df.duplicated(subset='Name', keep=False)]['Name'].unique()
         if len(duplicates) > 0:
             errors.append(f"Duplicate node names ({len(duplicates)}): {', '.join(str(d) for d in duplicates[:5])}")
     
-    if 'Name' in nodes_df.columns and 'Source' in edges_df.columns:
+    if 'Name' in nodes_df.columns and not edges_df.empty and 'Source' in edges_df.columns:
         node_names = set(nodes_df['Name'].dropna())
         edge_sources = set(edges_df['Source'].dropna())
         edge_targets = set(edges_df['Target'].dropna())
@@ -1535,7 +1552,15 @@ def validate_polinode_export(nodes_csv: str, edges_csv: str) -> Tuple[bool, List
 def generate_polinode_excel(nodes_polinode_csv: str, edges_polinode_csv: str) -> bytes:
     """Generate Excel file with Nodes and Edges sheets for Polinode."""
     nodes_df = pd.read_csv(StringIO(nodes_polinode_csv))
-    edges_df = pd.read_csv(StringIO(edges_polinode_csv))
+    
+    # Handle empty edges CSV
+    if not edges_polinode_csv or edges_polinode_csv.strip() == '':
+        edges_df = pd.DataFrame(columns=['Source', 'Target', 'Edge Type'])
+    else:
+        try:
+            edges_df = pd.read_csv(StringIO(edges_polinode_csv))
+        except pd.errors.EmptyDataError:
+            edges_df = pd.DataFrame(columns=['Source', 'Target', 'Edge Type'])
     
     excel_buffer = BytesIO()
     with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
