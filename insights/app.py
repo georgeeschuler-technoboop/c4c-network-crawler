@@ -6,6 +6,12 @@ Reads exported data from OrgGraph US/CA projects.
 
 VERSION HISTORY:
 ----------------
+UPDATED v0.12.0: Phase 2 - Load from Cloud
+- NEW: "Load from Cloud" tab in Project section
+- Lists all cloud projects from OrgGraph US, CA, and ActorGraph
+- Downloads and extracts ZIP bundles from Supabase Storage
+- Project Store client integration
+
 UPDATED v0.11.2: Fixed HTML download timing
 - FIX: Generate HTML once and reuse for both ZIP and download button
 - Prevents race condition where HTML button fails but ZIP works
@@ -100,7 +106,7 @@ from c4c_utils.c4c_supabase import C4CSupabase
 # Config
 # =============================================================================
 
-APP_VERSION = "0.11.2"  # Fixed HTML download timing issue
+APP_VERSION = "0.12.0"  # Phase 2: Load from Cloud
 C4C_LOGO_URL = "https://static.wixstatic.com/media/275a3f_9c48d5079fcf4b688606c81d8f34d5a5~mv2.jpg"
 INSIGHTGRAPH_ICON_URL = "https://static.wixstatic.com/media/275a3f_7736e28c9f5e40c1b2407e09dc5cb6e7~mv2.png"
 
@@ -570,9 +576,14 @@ def init_session_state():
         st.session_state.current_project_id = None
     if "project_data" not in st.session_state:
         st.session_state.project_data = None
+    if "cloud_project_data" not in st.session_state:
+        st.session_state.cloud_project_data = None
     
-    # Initialize Supabase connection
+    # Initialize Supabase connection (legacy)
     init_supabase()
+    
+    # Initialize Project Store (Phase 2)
+    init_project_store()
 
 
 # =============================================================================
@@ -591,22 +602,154 @@ def init_supabase():
     return st.session_state.get("supabase_db")
 
 
+def init_project_store():
+    """Initialize Project Store client for bundle storage (Phase 2)."""
+    if "project_store" not in st.session_state:
+        try:
+            url = st.secrets["supabase"]["url"]
+            key = st.secrets["supabase"]["key"]
+            
+            # Import Project Store client
+            from c4c_utils.c4c_project_store import ProjectStoreClient
+            
+            client = ProjectStoreClient(url, key)
+            st.session_state.project_store = client
+        except ImportError:
+            st.session_state.project_store = None
+        except Exception as e:
+            st.session_state.project_store = None
+    
+    return st.session_state.get("project_store")
+
+
+def get_project_store_authenticated():
+    """Get authenticated Project Store client, or None."""
+    client = st.session_state.get("project_store")
+    if client and client.is_authenticated():
+        return client
+    return None
+
+
+def list_cloud_projects():
+    """List all available cloud projects from Project Store."""
+    client = get_project_store_authenticated()
+    if not client:
+        return []
+    
+    # Get projects from all source apps
+    all_projects = []
+    for source_app in ['orggraph_us', 'orggraph_ca', 'actorgraph']:
+        projects, error = client.list_projects(source_app=source_app, include_public=True)
+        if projects:
+            all_projects.extend(projects)
+    
+    # Sort by updated_at (most recent first)
+    all_projects.sort(key=lambda p: p.updated_at, reverse=True)
+    return all_projects
+
+
+def load_cloud_project(project_id: str = None, slug: str = None) -> dict:
+    """
+    Load a project bundle from cloud storage.
+    
+    Downloads ZIP, extracts nodes.csv, edges.csv, grants_detail.csv.
+    
+    Returns:
+        dict with nodes_df, edges_df, grants_df, project metadata
+    """
+    client = get_project_store_authenticated()
+    if not client:
+        return {"error": "Not authenticated"}
+    
+    # Download bundle
+    bundle_data, error = client.load_project(project_id=project_id, slug=slug)
+    if error:
+        return {"error": error}
+    
+    # Get project metadata
+    project, _ = client.get_project(project_id=project_id, slug=slug)
+    
+    # Extract files from ZIP
+    try:
+        with zipfile.ZipFile(BytesIO(bundle_data), 'r') as zf:
+            file_list = zf.namelist()
+            
+            result = {
+                "project_id": project.slug if project else "cloud_project",
+                "source_app": project.source_app if project else "unknown",
+                "name": project.name if project else "Cloud Project",
+                "node_count": project.node_count if project else 0,
+                "edge_count": project.edge_count if project else 0,
+                "nodes_df": None,
+                "edges_df": None,
+                "grants_df": None,
+                "has_grants_detail": False,
+                "has_region_data": False,
+                "manifest": None,
+            }
+            
+            # Load manifest if present
+            if 'manifest.json' in file_list:
+                with zf.open('manifest.json') as f:
+                    result["manifest"] = json.load(f)
+            
+            # Load nodes.csv
+            if 'nodes.csv' in file_list:
+                with zf.open('nodes.csv') as f:
+                    result["nodes_df"] = pd.read_csv(f)
+            
+            # Load edges.csv
+            if 'edges.csv' in file_list:
+                with zf.open('edges.csv') as f:
+                    result["edges_df"] = pd.read_csv(f)
+            
+            # Load grants_detail.csv if present
+            if 'grants_detail.csv' in file_list:
+                with zf.open('grants_detail.csv') as f:
+                    grants_df = pd.read_csv(f)
+                    # Normalize columns
+                    grants_df = normalize_grants_detail_columns(grants_df)
+                    # Check region data
+                    if "region_relevant" in grants_df.columns:
+                        unique_vals = grants_df["region_relevant"].dropna().unique()
+                        result["has_region_data"] = len(unique_vals) > 1 or (len(unique_vals) == 1 and not unique_vals[0])
+                    # Add purpose classifications
+                    grants_df = add_purpose_classifications(grants_df)
+                    result["grants_df"] = grants_df
+                    result["has_grants_detail"] = True
+            
+            return result
+            
+    except Exception as e:
+        return {"error": f"Failed to extract bundle: {str(e)}"}
+
+
 def render_cloud_status():
     """Render cloud connection status and login UI in sidebar."""
-    db = st.session_state.get("supabase_db")
+    # Initialize Project Store
+    init_project_store()
     
-    if not db:
+    client = st.session_state.get("project_store")
+    
+    if not client:
         st.sidebar.caption("☁️ Cloud unavailable")
         return None
     
-    if db.is_authenticated:
-        user = db.get_user()
-        # Logged in: show email + logout button
+    if client.is_authenticated():
+        user = client.get_current_user()
+        
+        # Get total cloud project count
+        cloud_projects = list_cloud_projects()
+        project_count = len(cloud_projects) if cloud_projects else 0
+        
+        # Logged in: show email + project count + logout button
         st.sidebar.caption(f"☁️ {user['email']}")
+        st.sidebar.caption(f"📦 {project_count} cloud project(s)")
+        
         if st.sidebar.button("Logout", key="cloud_logout", use_container_width=True):
-            db.logout()
+            client.logout()
             st.rerun()
-        return db
+        return client
     else:
         # Not logged in: show status, then collapsible login form
         st.sidebar.caption("☁️ Not connected")
@@ -617,23 +760,25 @@ def render_cloud_status():
                 email = st.text_input("Email", key="cloud_login_email")
                 password = st.text_input("Password", type="password", key="cloud_login_pass")
                 if st.button("Login", key="cloud_login_btn"):
-                    if db.login(email, password):
+                    success, error = client.login(email, password)
+                    if success:
                         st.success("✅ Logged in!")
                         st.rerun()
                     else:
-                        st.error("Login failed")
+                        st.error(f"Login failed: {error}")
             
             with tab2:
                 st.caption("First time? Create an account.")
                 signup_email = st.text_input("Email", key="cloud_signup_email")
                 signup_pass = st.text_input("Password", type="password", key="cloud_signup_pass")
                 if st.button("Sign Up", key="cloud_signup_btn"):
-                    if db.signup(signup_email, signup_pass):
+                    success, error = client.signup(signup_email, signup_pass)
+                    if success:
                         st.success("✅ Check email to confirm")
                     else:
-                        st.error("Signup failed")
+                        st.error(f"Signup failed: {error}")
         
-        return db
+        return client
 
 
 def save_artifacts_to_cloud(project_id: str, data: dict):
@@ -1434,9 +1579,84 @@ def compute_insights(project: dict, project_id: str) -> dict:
             return None
 
 
-# =============================================================================
-# Main App
-# =============================================================================
+def compute_insights_from_dataframes(nodes_df: pd.DataFrame, edges_df: pd.DataFrame, 
+                                      grants_df: pd.DataFrame, project_id: str) -> dict:
+    """
+    Compute insights from dataframes directly (for cloud projects).
+    
+    This is used when loading from cloud storage where we have dataframes
+    but no file paths.
+    """
+    run_module = load_run_module()
+    if not run_module:
+        st.error("Cannot compute insights: run.py not found")
+        return None
+    
+    if nodes_df is None or edges_df is None:
+        st.error("Missing nodes or edges data")
+        return None
+    
+    with st.spinner("Computing insights from cloud data..."):
+        try:
+            # Validate dataframes (run_module.load_and_validate expects paths, 
+            # so we do basic validation here)
+            if nodes_df.empty:
+                st.error("Nodes dataframe is empty")
+                return None
+            if edges_df.empty:
+                st.warning("Edges dataframe is empty - some metrics may be limited")
+            
+            # Build graphs
+            grant_graph = run_module.build_grant_graph(nodes_df, edges_df)
+            board_graph = run_module.build_board_graph(nodes_df, edges_df)
+            interlock_graph = run_module.build_interlock_graph(nodes_df, edges_df)
+            
+            # Compute metrics
+            metrics_df = run_module.compute_base_metrics(nodes_df, grant_graph, board_graph, interlock_graph)
+            metrics_df = run_module.compute_derived_signals(metrics_df)
+            
+            # Flow stats
+            flow_stats = run_module.compute_flow_stats(edges_df, metrics_df)
+            overlap_df = run_module.compute_portfolio_overlap(edges_df)
+            
+            # Roles × Region Lens - use empty config for cloud projects
+            lens_config = None
+            nodes_with_roles = run_module.derive_network_roles(nodes_df.copy(), edges_df)
+            nodes_with_lens = run_module.compute_region_lens_membership(nodes_with_roles, lens_config)
+            roles_region_summary = run_module.generate_roles_region_summary(nodes_with_lens, edges_df, lens_config)
+            
+            # Generate insights
+            insight_cards = run_module.generate_insight_cards(
+                nodes_df, edges_df, metrics_df,
+                interlock_graph, flow_stats, overlap_df,
+                project_id=project_id
+            )
+            
+            # Project summary
+            project_summary = run_module.generate_project_summary(nodes_df, edges_df, metrics_df, flow_stats)
+            project_summary['roles_region'] = roles_region_summary
+            
+            # Generate markdown report
+            markdown_report = run_module.generate_markdown_report(
+                insight_cards, project_summary, project_id, roles_region_summary
+            )
+            
+            return {
+                "project_id": project_id,
+                "nodes_df": nodes_df,
+                "edges_df": edges_df,
+                "metrics_df": metrics_df,
+                "insight_cards": insight_cards,
+                "project_summary": project_summary,
+                "markdown_report": markdown_report,
+                "roles_region_summary": roles_region_summary,
+            }
+            
+        except Exception as e:
+            st.error(f"Error computing insights: {e}")
+            import traceback
+            st.code(traceback.format_exc())
+            return None
 
 def main():
     init_session_state()
@@ -1462,48 +1682,163 @@ def main():
     # Section 1: Project Selection
     # ==========================================================================
     st.subheader("🗂️ Project")
-    st.caption("Select a project folder containing nodes.csv and edges.csv (exported from OrgGraph).")
     
-    projects = get_projects()
+    # Check if user is authenticated for cloud access
+    client = get_project_store_authenticated()
+    cloud_available = client is not None
     
-    if not projects:
-        st.warning(f"""
-        **No projects found.**
+    # Tabs for Local vs Cloud
+    if cloud_available:
+        tab_local, tab_cloud = st.tabs(["📂 Local Projects", "☁️ Cloud Projects"])
+    else:
+        tab_local = st.container()
+        tab_cloud = None
+    
+    selected_project = None
+    inputs = None
+    is_cloud_project = False
+    
+    # -------------------------------------------------------------------------
+    # LOCAL PROJECTS TAB
+    # -------------------------------------------------------------------------
+    with tab_local:
+        st.caption("Select a project folder containing nodes.csv and edges.csv (exported from OrgGraph).")
         
-        Expected location: `{DEMO_DATA_DIR}`
+        projects = get_projects()
         
-        Each project folder must contain:
-        - `nodes.csv` (required)
-        - `edges.csv` (required)
-        - `grants_detail.csv` (optional, enables Purpose Explorer)
-        """)
+        if not projects:
+            st.warning(f"""
+            **No local projects found.**
+            
+            Expected location: `{DEMO_DATA_DIR}`
+            
+            Each project folder must contain:
+            - `nodes.csv` (required)
+            - `edges.csv` (required)
+            - `grants_detail.csv` (optional, enables Purpose Explorer)
+            """)
+            if not cloud_available:
+                st.info("💡 Login to access cloud projects from OrgGraph or ActorGraph.")
+        else:
+            # Build project selector
+            project_options = [p["id"] for p in projects]
+            
+            selected_id = st.selectbox(
+                "Select project",
+                project_options,
+                label_visibility="collapsed",
+                key="local_project_select"
+            )
+            
+            selected_project = next((p for p in projects if p["id"] == selected_id), None)
+            
+            if selected_project:
+                # Show project input status
+                st.markdown(f"**📂 {selected_id}**")
+                
+                col1, col2, col3 = st.columns(3)
+                col1.markdown("✅ nodes.csv" if selected_project["has_nodes"] else "❌ nodes.csv")
+                col2.markdown("✅ edges.csv" if selected_project["has_edges"] else "❌ edges.csv")
+                col3.markdown("✅ grants_detail.csv" if selected_project["has_grants_detail"] else "⚪ grants_detail.csv (optional)")
+                
+                if selected_project["has_precomputed"]:
+                    st.caption("💾 *Pre-computed results available from previous run*")
+                
+                # Load input data
+                inputs = load_project_inputs(selected_project)
+    
+    # -------------------------------------------------------------------------
+    # CLOUD PROJECTS TAB
+    # -------------------------------------------------------------------------
+    if tab_cloud is not None:
+        with tab_cloud:
+            st.caption("Load network bundles saved from OrgGraph US, OrgGraph CA, or ActorGraph.")
+            
+            cloud_projects = list_cloud_projects()
+            
+            if not cloud_projects:
+                st.info("No cloud projects found. Save a project from OrgGraph or ActorGraph first.")
+            else:
+                # Build cloud project options with source app icons
+                source_icons = {
+                    'orggraph_us': '🇺🇸',
+                    'orggraph_ca': '🇨🇦',
+                    'actorgraph': '🕸️',
+                }
+                
+                cloud_options = []
+                for p in cloud_projects:
+                    icon = source_icons.get(p.source_app, '📦')
+                    label = f"{icon} {p.name} ({p.node_count} nodes, {p.edge_count} edges)"
+                    cloud_options.append((p.id, p.slug, label, p))
+                
+                selected_cloud_label = st.selectbox(
+                    "Select cloud project",
+                    [opt[2] for opt in cloud_options],
+                    label_visibility="collapsed",
+                    key="cloud_project_select"
+                )
+                
+                # Find selected cloud project
+                selected_cloud = None
+                for opt in cloud_options:
+                    if opt[2] == selected_cloud_label:
+                        selected_cloud = opt[3]
+                        break
+                
+                if selected_cloud:
+                    st.markdown(f"**☁️ {selected_cloud.name}**")
+                    
+                    col1, col2, col3 = st.columns(3)
+                    col1.metric("Nodes", selected_cloud.node_count)
+                    col2.metric("Edges", selected_cloud.edge_count)
+                    col3.markdown(f"**Source:** {selected_cloud.source_app}")
+                    
+                    if selected_cloud.jurisdiction:
+                        st.caption(f"Jurisdiction: {selected_cloud.jurisdiction}")
+                    
+                    # Load from cloud button
+                    if st.button("☁️ Load from Cloud", type="primary", use_container_width=True):
+                        with st.spinner("☁️ Downloading bundle..."):
+                            cloud_data = load_cloud_project(project_id=selected_cloud.id)
+                            
+                            if cloud_data.get("error"):
+                                st.error(f"❌ {cloud_data['error']}")
+                            else:
+                                # Store in session state
+                                st.session_state.cloud_project_data = cloud_data
+                                st.session_state.current_project_id = f"cloud:{selected_cloud.slug}"
+                                st.session_state.project_data = None  # Clear local project data
+                                st.success(f"✅ Loaded {selected_cloud.name}")
+                                st.rerun()
+    
+    # -------------------------------------------------------------------------
+    # Check for loaded cloud project in session state
+    # -------------------------------------------------------------------------
+    if (st.session_state.get("current_project_id", "").startswith("cloud:") and 
+        st.session_state.get("cloud_project_data")):
+        
+        cloud_data = st.session_state.cloud_project_data
+        selected_project = {
+            "id": cloud_data["project_id"],
+            "path": None,
+            "has_nodes": cloud_data.get("nodes_df") is not None,
+            "has_edges": cloud_data.get("edges_df") is not None,
+            "has_grants_detail": cloud_data.get("has_grants_detail", False),
+            "has_precomputed": False,
+            "is_cloud": True,
+        }
+        inputs = cloud_data
+        is_cloud_project = True
+        
+        st.success(f"☁️ **Loaded from cloud:** {cloud_data.get('name', cloud_data['project_id'])}")
+    
+    # -------------------------------------------------------------------------
+    # Stop if no project selected
+    # -------------------------------------------------------------------------
+    if not selected_project or not inputs:
+        st.info("Select a project above to continue.")
         st.stop()
-    
-    # Build project selector
-    project_options = [p["id"] for p in projects]
-    
-    selected_id = st.selectbox(
-        "Select project",
-        project_options,
-        label_visibility="collapsed"
-    )
-    
-    selected_project = next((p for p in projects if p["id"] == selected_id), None)
-    
-    if not selected_project:
-        st.error("Project not found")
-        st.stop()
-    
-    # Show project input status
-    st.markdown(f"**📂 {selected_id}**")
-    
-    col1, col2, col3 = st.columns(3)
-    col1.markdown("✅ nodes.csv" if selected_project["has_nodes"] else "❌ nodes.csv")
-    col2.markdown("✅ edges.csv" if selected_project["has_edges"] else "❌ edges.csv")
-    col3.markdown("✅ grants_detail.csv" if selected_project["has_grants_detail"] else "⚪ grants_detail.csv (optional)")
-    
-    if selected_project["has_precomputed"]:
-        st.caption("💾 *Pre-computed results available from previous run*")
     
     st.divider()
     
@@ -1511,13 +1846,12 @@ def main():
     # Section 2: Run or Load
     # ==========================================================================
     
-    # Load input data (nodes, edges, grants_detail)
-    inputs = load_project_inputs(selected_project)
+    selected_id = selected_project["id"]
     
     # Check session state for computed results
     data = None
     
-    if selected_project["has_precomputed"]:
+    if not is_cloud_project and selected_project.get("has_precomputed"):
         # Offer choice: load previous or recompute
         col1, col2 = st.columns(2)
         with col1:
@@ -1540,11 +1874,27 @@ def main():
                 st.session_state.current_project_id = selected_id
                 st.rerun()
     else:
-        # No precomputed - must run
+        # No precomputed - must run (or cloud project)
         compute_btn = st.button("🚀 Run Insights Engine", type="primary")
         
         if compute_btn:
-            computed = compute_insights(selected_project, selected_id)
+            # For cloud projects, create a pseudo-project dict
+            if is_cloud_project:
+                pseudo_project = {
+                    "id": selected_id,
+                    "path": None,
+                    "has_nodes": True,
+                    "has_edges": True,
+                }
+                computed = compute_insights_from_dataframes(
+                    inputs.get("nodes_df"),
+                    inputs.get("edges_df"),
+                    inputs.get("grants_df"),
+                    selected_id
+                )
+            else:
+                computed = compute_insights(selected_project, selected_id)
+            
             if computed:
                 data = {**inputs, **computed}
                 st.session_state.project_data = data
@@ -1552,12 +1902,13 @@ def main():
                 st.rerun()
     
     # Check if we have data from session state
-    if st.session_state.get("project_data") and st.session_state.get("current_project_id") == selected_id:
+    current_id = st.session_state.get("current_project_id", "")
+    if st.session_state.get("project_data") and current_id == selected_id:
         data = st.session_state.project_data
         # Make sure grants_df is included from inputs
         if data.get("grants_df") is None and inputs.get("grants_df") is not None:
             data["grants_df"] = inputs["grants_df"]
-            data["has_grants_detail"] = inputs["has_grants_detail"]
+            data["has_grants_detail"] = inputs.get("has_grants_detail", False)
             data["has_region_data"] = inputs.get("has_region_data", False)
     
     if not data or not data.get("project_summary"):
