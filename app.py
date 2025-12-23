@@ -31,9 +31,10 @@ import plotly.graph_objects as go
 # APP VERSION
 # ============================================================================
 
-APP_VERSION = "0.4.0"
+APP_VERSION = "0.5.0"
 
 VERSION_HISTORY = [
+    "CLOUD v0.5.0: Phase 2 - Project Store cloud integration; save bundles to Supabase Storage",
     "SCHEMA v0.4.0: CoreGraph v1 schema alignment for InsightGraph compatibility; unified bundle format with manifest.json",
     "ADDED v0.3.13: Polinode Excel export (single .xlsx with Nodes + Edges tabs); requires openpyxl",
     "HARDENED v0.3.12: Name canonicalization (Unicode NFKC, whitespace, quotes, hyphens); post-export validation for Polinode",
@@ -108,6 +109,136 @@ def derive_node_type(node: dict) -> str:
         return 'school'
     # Default to person
     return 'person'
+
+
+# ============================================================================
+# PROJECT STORE CLOUD INTEGRATION (Phase 2)
+# ============================================================================
+
+def init_project_store():
+    """Initialize Project Store client for bundle storage (Phase 2)."""
+    if "project_store" not in st.session_state:
+        try:
+            url = st.secrets["supabase"]["url"]
+            key = st.secrets["supabase"]["key"]
+            
+            # Import Project Store client
+            from c4c_utils.c4c_project_store import ProjectStoreClient
+            
+            client = ProjectStoreClient(url, key)
+            st.session_state.project_store = client
+        except ImportError:
+            st.session_state.project_store = None
+        except Exception as e:
+            st.session_state.project_store = None
+    
+    return st.session_state.get("project_store")
+
+
+def get_project_store_authenticated():
+    """Get authenticated Project Store client, or None."""
+    client = st.session_state.get("project_store")
+    if client and client.is_authenticated():
+        return client
+    return None
+
+
+def render_cloud_status():
+    """Render cloud connection status and login UI in sidebar."""
+    # Initialize Project Store
+    init_project_store()
+    
+    client = st.session_state.get("project_store")
+    
+    if not client:
+        st.sidebar.caption("☁️ Cloud unavailable")
+        return None
+    
+    if client.is_authenticated():
+        user = client.get_current_user()
+        
+        # Get project count
+        projects, _ = client.list_projects(source_app=SOURCE_APP)
+        project_count = len(projects) if projects else 0
+        
+        # Logged in: show email + project count + logout button
+        st.sidebar.caption(f"☁️ {user['email']}")
+        st.sidebar.caption(f"📦 {project_count} cloud project(s)")
+        
+        if st.sidebar.button("Logout", key="cloud_logout", use_container_width=True):
+            client.logout()
+            st.rerun()
+        return client
+    else:
+        # Not logged in: show status, then collapsible login form
+        st.sidebar.caption("☁️ Not connected")
+        with st.sidebar.expander("Login / Sign Up", expanded=False):
+            tab1, tab2 = st.tabs(["Login", "Sign Up"])
+            
+            with tab1:
+                email = st.text_input("Email", key="cloud_login_email")
+                password = st.text_input("Password", type="password", key="cloud_login_pass")
+                if st.button("Login", key="cloud_login_btn"):
+                    success, error = client.login(email, password)
+                    if success:
+                        st.success("✅ Logged in!")
+                        st.rerun()
+                    else:
+                        st.error(f"Login failed: {error}")
+            
+            with tab2:
+                st.caption("First time? Create an account.")
+                signup_email = st.text_input("Email", key="cloud_signup_email")
+                signup_pass = st.text_input("Password", type="password", key="cloud_signup_pass")
+                if st.button("Sign Up", key="cloud_signup_btn"):
+                    success, error = client.signup(signup_email, signup_pass)
+                    if success:
+                        st.success("✅ Check email to confirm")
+                    else:
+                        st.error(f"Signup failed: {error}")
+        
+        return client
+
+
+def save_bundle_to_cloud(
+    project_name: str,
+    zip_data: bytes,
+    node_count: int,
+    edge_count: int,
+    crawl_type: str = None
+) -> tuple:
+    """
+    Save ActorGraph bundle to Project Store (Supabase Storage).
+    
+    Returns:
+        Tuple of (success: bool, message: str, project_slug: str or None)
+    """
+    client = get_project_store_authenticated()
+    
+    if not client:
+        return False, "Login required to save to cloud", None
+    
+    try:
+        project, error = client.save_project(
+            name=project_name,
+            bundle_data=zip_data,
+            source_app=SOURCE_APP,
+            node_count=node_count,
+            edge_count=edge_count,
+            jurisdiction=None,  # LinkedIn networks aren't jurisdiction-specific
+            region_preset=crawl_type,
+            app_version=APP_VERSION,
+            schema_version=COREGRAPH_VERSION,
+            bundle_version=BUNDLE_VERSION
+        )
+        
+        if error:
+            return False, f"Upload failed: {error}", None
+        
+        return True, f"Saved to cloud: {project.slug}", project.slug
+        
+    except Exception as e:
+        return False, f"Cloud save failed: {str(e)}", None
 
 
 # ============================================================================
@@ -1564,6 +1695,9 @@ def main():
         st.markdown("---")
         st.markdown(f"**Schema:** CoreGraph v1")
         st.markdown(f"**Bundle:** {BUNDLE_VERSION}")
+        
+        st.markdown("---")
+        render_cloud_status()
     
     # Main content
     st.header("🌱 Seed Profiles")
@@ -1807,11 +1941,43 @@ def main():
             help="CoreGraph v1 compatible bundle for InsightGraph"
         )
         
-        col1, col2 = st.columns(2)
+        # Cloud save and clear buttons
+        col1, col2, col3 = st.columns([2, 2, 1])
         with col1:
+            client = get_project_store_authenticated()
+            cloud_enabled = client is not None
+            
+            # Get project name from first seed profile
+            first_seed_name = list(seen_profiles.values())[0].get('name', 'Network') if seen_profiles else 'Network'
+            project_name = f"{first_seed_name} Network"
+            
+            if st.button("☁️ Save to Cloud", 
+                        disabled=not cloud_enabled,
+                        use_container_width=True,
+                        help="Login to enable cloud save" if not cloud_enabled else "Save bundle to Project Store"):
+                
+                with st.spinner("☁️ Uploading bundle..."):
+                    success, message, slug = save_bundle_to_cloud(
+                        project_name=project_name,
+                        zip_data=zip_data,
+                        node_count=len(seen_profiles),
+                        edge_count=len(edges),
+                        crawl_type=was_crawl_type
+                    )
+                    
+                    if success:
+                        st.success(f"☁️ {message}")
+                    else:
+                        st.error(f"❌ {message}")
+        
+        with col2:
             if st.button("🗑️ Clear Results", use_container_width=True):
                 st.session_state.crawl_results = None
                 st.rerun()
+        
+        with col3:
+            if not cloud_enabled:
+                st.caption("☁️ Login to enable")
         
         # CoreGraph Schema Downloads
         with st.expander("📄 CoreGraph Schema Files"):
