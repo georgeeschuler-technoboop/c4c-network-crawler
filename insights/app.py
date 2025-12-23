@@ -6,6 +6,14 @@ Reads exported data from OrgGraph US/CA projects.
 
 VERSION HISTORY:
 ----------------
+UPDATED v0.13.0: Phase 3 - Multi-project merge
+- NEW: "Merge Multiple" mode in Cloud Projects tab
+- Select 2+ projects with checkboxes to merge
+- Combines nodes, edges, grants with deduplication
+- Dedup by node_id, source+target+edge_type, grant keys
+- Adds merge_source column for provenance tracking
+- Preview shows combined counts before merge
+
 UPDATED v0.12.1: Disabled legacy Save to Cloud button
 - FIX: Removed broken save_artifacts_to_cloud call (incompatible with Phase 2 schema)
 - InsightGraph is a consumer - loads bundles from OrgGraph/ActorGraph
@@ -111,7 +119,7 @@ from c4c_utils.c4c_supabase import C4CSupabase
 # Config
 # =============================================================================
 
-APP_VERSION = "0.12.1"  # Phase 2: Load from Cloud + disabled legacy save
+APP_VERSION = "0.13.0"  # Phase 3: Multi-project merge
 C4C_LOGO_URL = "https://static.wixstatic.com/media/275a3f_9c48d5079fcf4b688606c81d8f34d5a5~mv2.jpg"
 INSIGHTGRAPH_ICON_URL = "https://static.wixstatic.com/media/275a3f_7736e28c9f5e40c1b2407e09dc5cb6e7~mv2.png"
 
@@ -583,6 +591,8 @@ def init_session_state():
         st.session_state.project_data = None
     if "cloud_project_data" not in st.session_state:
         st.session_state.cloud_project_data = None
+    if "merged_projects" not in st.session_state:
+        st.session_state.merged_projects = None
     
     # Initialize Supabase connection (legacy)
     init_supabase()
@@ -727,6 +737,132 @@ def load_cloud_project(project_id: str = None, slug: str = None) -> dict:
             
     except Exception as e:
         return {"error": f"Failed to extract bundle: {str(e)}"}
+
+
+def merge_cloud_projects(projects: list) -> dict:
+    """
+    Download and merge multiple cloud projects into a single dataset.
+    
+    Args:
+        projects: List of ProjectSummary objects to merge
+    
+    Returns:
+        dict with merged nodes_df, edges_df, grants_df
+    """
+    if not projects:
+        return {"error": "No projects to merge"}
+    
+    all_nodes = []
+    all_edges = []
+    all_grants = []
+    source_apps = set()
+    project_names = []
+    
+    # Download and collect data from each project
+    for p in projects:
+        data = load_cloud_project(project_id=p.id)
+        
+        if data.get("error"):
+            return {"error": f"Failed to load {p.name}: {data['error']}"}
+        
+        if data.get("nodes_df") is not None:
+            nodes_df = data["nodes_df"].copy()
+            # Add source tracking if not present
+            if "merge_source" not in nodes_df.columns:
+                nodes_df["merge_source"] = p.slug
+            all_nodes.append(nodes_df)
+        
+        if data.get("edges_df") is not None:
+            edges_df = data["edges_df"].copy()
+            if "merge_source" not in edges_df.columns:
+                edges_df["merge_source"] = p.slug
+            all_edges.append(edges_df)
+        
+        if data.get("grants_df") is not None:
+            grants_df = data["grants_df"].copy()
+            if "merge_source" not in grants_df.columns:
+                grants_df["merge_source"] = p.slug
+            all_grants.append(grants_df)
+        
+        source_apps.add(p.source_app)
+        project_names.append(p.name)
+    
+    # Merge nodes with deduplication
+    if all_nodes:
+        merged_nodes = pd.concat(all_nodes, ignore_index=True)
+        # Deduplicate by node_id (keep first occurrence)
+        before_dedup = len(merged_nodes)
+        merged_nodes = merged_nodes.drop_duplicates(subset=["node_id"], keep="first")
+        after_dedup = len(merged_nodes)
+        nodes_deduped = before_dedup - after_dedup
+    else:
+        merged_nodes = pd.DataFrame()
+        nodes_deduped = 0
+    
+    # Merge edges with deduplication
+    if all_edges:
+        merged_edges = pd.concat(all_edges, ignore_index=True)
+        # Deduplicate by source + target + edge_type (keep first)
+        before_dedup = len(merged_edges)
+        dedup_cols = ["source", "target"]
+        if "edge_type" in merged_edges.columns:
+            dedup_cols.append("edge_type")
+        merged_edges = merged_edges.drop_duplicates(subset=dedup_cols, keep="first")
+        after_dedup = len(merged_edges)
+        edges_deduped = before_dedup - after_dedup
+    else:
+        merged_edges = pd.DataFrame()
+        edges_deduped = 0
+    
+    # Merge grants with deduplication
+    merged_grants = None
+    has_grants = False
+    has_region_data = False
+    
+    if all_grants:
+        merged_grants = pd.concat(all_grants, ignore_index=True)
+        # Deduplicate by key fields
+        before_dedup = len(merged_grants)
+        dedup_cols = []
+        for col in ["funder_id", "grantee_name", "grant_amount", "grant_year"]:
+            if col in merged_grants.columns:
+                dedup_cols.append(col)
+        if dedup_cols:
+            merged_grants = merged_grants.drop_duplicates(subset=dedup_cols, keep="first")
+        
+        # Check region data
+        if "region_relevant" in merged_grants.columns:
+            unique_vals = merged_grants["region_relevant"].dropna().unique()
+            has_region_data = len(unique_vals) > 1 or (len(unique_vals) == 1 and not unique_vals[0])
+        
+        has_grants = True
+    
+    # Build merged name
+    merged_name = " + ".join(project_names[:3])
+    if len(project_names) > 3:
+        merged_name += f" (+{len(project_names) - 3} more)"
+    
+    return {
+        "project_id": f"merged-{len(projects)}-projects",
+        "source_app": "merged",
+        "name": merged_name,
+        "node_count": len(merged_nodes),
+        "edge_count": len(merged_edges),
+        "nodes_df": merged_nodes if not merged_nodes.empty else None,
+        "edges_df": merged_edges if not merged_edges.empty else None,
+        "grants_df": merged_grants,
+        "has_grants_detail": has_grants,
+        "has_region_data": has_region_data,
+        "manifest": {
+            "merged": True,
+            "source_projects": [p.slug for p in projects],
+            "source_apps": list(source_apps),
+            "dedup_stats": {
+                "nodes_removed": nodes_deduped,
+                "edges_removed": edges_deduped,
+            }
+        },
+    }
 
 
 def render_cloud_status():
@@ -1767,51 +1903,141 @@ def main():
                     'actorgraph': '🕸️',
                 }
                 
-                cloud_options = []
-                for p in cloud_projects:
-                    icon = source_icons.get(p.source_app, '📦')
-                    label = f"{icon} {p.name} ({p.node_count} nodes, {p.edge_count} edges)"
-                    cloud_options.append((p.id, p.slug, label, p))
+                # Initialize selection state
+                if "cloud_project_selections" not in st.session_state:
+                    st.session_state.cloud_project_selections = {}
                 
-                selected_cloud_label = st.selectbox(
-                    "Select cloud project",
-                    [opt[2] for opt in cloud_options],
-                    label_visibility="collapsed",
-                    key="cloud_project_select"
+                # Mode toggle: Single vs Merge
+                load_mode = st.radio(
+                    "Load mode",
+                    ["📄 Single Project", "🔀 Merge Multiple"],
+                    horizontal=True,
+                    key="cloud_load_mode"
                 )
                 
-                # Find selected cloud project
-                selected_cloud = None
-                for opt in cloud_options:
-                    if opt[2] == selected_cloud_label:
-                        selected_cloud = opt[3]
-                        break
+                st.divider()
                 
-                if selected_cloud:
-                    st.markdown(f"**☁️ {selected_cloud.name}**")
+                if load_mode == "📄 Single Project":
+                    # Original single-select dropdown
+                    cloud_options = []
+                    for p in cloud_projects:
+                        icon = source_icons.get(p.source_app, '📦')
+                        label = f"{icon} {p.name} ({p.node_count} nodes, {p.edge_count} edges)"
+                        cloud_options.append((p.id, p.slug, label, p))
                     
-                    col1, col2, col3 = st.columns(3)
-                    col1.metric("Nodes", selected_cloud.node_count)
-                    col2.metric("Edges", selected_cloud.edge_count)
-                    col3.markdown(f"**Source:** {selected_cloud.source_app}")
+                    selected_cloud_label = st.selectbox(
+                        "Select cloud project",
+                        [opt[2] for opt in cloud_options],
+                        label_visibility="collapsed",
+                        key="cloud_project_select"
+                    )
                     
-                    if selected_cloud.jurisdiction:
-                        st.caption(f"Jurisdiction: {selected_cloud.jurisdiction}")
+                    # Find selected cloud project
+                    selected_cloud = None
+                    for opt in cloud_options:
+                        if opt[2] == selected_cloud_label:
+                            selected_cloud = opt[3]
+                            break
                     
-                    # Load from cloud button
-                    if st.button("☁️ Load from Cloud", type="primary", use_container_width=True):
-                        with st.spinner("☁️ Downloading bundle..."):
-                            cloud_data = load_cloud_project(project_id=selected_cloud.id)
-                            
-                            if cloud_data.get("error"):
-                                st.error(f"❌ {cloud_data['error']}")
-                            else:
-                                # Store in session state
-                                st.session_state.cloud_project_data = cloud_data
-                                st.session_state.current_project_id = f"cloud:{selected_cloud.slug}"
-                                st.session_state.project_data = None  # Clear local project data
-                                st.success(f"✅ Loaded {selected_cloud.name}")
-                                st.rerun()
+                    if selected_cloud:
+                        st.markdown(f"**☁️ {selected_cloud.name}**")
+                        
+                        col1, col2, col3 = st.columns(3)
+                        col1.metric("Nodes", selected_cloud.node_count)
+                        col2.metric("Edges", selected_cloud.edge_count)
+                        col3.markdown(f"**Source:** {selected_cloud.source_app}")
+                        
+                        if selected_cloud.jurisdiction:
+                            st.caption(f"Jurisdiction: {selected_cloud.jurisdiction}")
+                        
+                        # Load from cloud button
+                        if st.button("☁️ Load from Cloud", type="primary", use_container_width=True):
+                            with st.spinner("☁️ Downloading bundle..."):
+                                cloud_data = load_cloud_project(project_id=selected_cloud.id)
+                                
+                                if cloud_data.get("error"):
+                                    st.error(f"❌ {cloud_data['error']}")
+                                else:
+                                    # Store in session state
+                                    st.session_state.cloud_project_data = cloud_data
+                                    st.session_state.current_project_id = f"cloud:{selected_cloud.slug}"
+                                    st.session_state.project_data = None  # Clear local project data
+                                    st.session_state.merged_projects = None  # Clear merge state
+                                    st.success(f"✅ Loaded {selected_cloud.name}")
+                                    st.rerun()
+                
+                else:
+                    # Multi-select with checkboxes
+                    st.markdown("**Select projects to merge:**")
+                    
+                    selected_projects = []
+                    total_nodes = 0
+                    total_edges = 0
+                    
+                    for p in cloud_projects:
+                        icon = source_icons.get(p.source_app, '📦')
+                        col1, col2, col3, col4 = st.columns([0.5, 3, 1.5, 1.5])
+                        
+                        with col1:
+                            is_selected = st.checkbox(
+                                "select",
+                                key=f"merge_select_{p.id}",
+                                label_visibility="collapsed"
+                            )
+                        
+                        with col2:
+                            st.markdown(f"{icon} **{p.name}**")
+                        
+                        with col3:
+                            st.caption(f"{p.node_count} nodes")
+                        
+                        with col4:
+                            st.caption(f"{p.edge_count} edges")
+                        
+                        if is_selected:
+                            selected_projects.append(p)
+                            total_nodes += p.node_count
+                            total_edges += p.edge_count
+                    
+                    st.divider()
+                    
+                    # Show merge preview
+                    if len(selected_projects) == 0:
+                        st.info("Select 2 or more projects to merge.")
+                    elif len(selected_projects) == 1:
+                        st.warning("Select at least 2 projects to merge, or use Single Project mode.")
+                    else:
+                        st.markdown(f"**🔀 Merge Preview:** {len(selected_projects)} projects")
+                        
+                        col1, col2, col3 = st.columns(3)
+                        col1.metric("Total Nodes (before dedup)", total_nodes)
+                        col2.metric("Total Edges (before dedup)", total_edges)
+                        
+                        # Show source breakdown
+                        sources = {}
+                        for p in selected_projects:
+                            src = p.source_app
+                            sources[src] = sources.get(src, 0) + 1
+                        source_summary = ", ".join([f"{source_icons.get(k, '📦')} {v}" for k, v in sources.items()])
+                        col3.markdown(f"**Sources:** {source_summary}")
+                        
+                        st.caption("⚠️ Node/edge counts may decrease after deduplication.")
+                        
+                        # Merge button
+                        if st.button("🔀 Merge & Load", type="primary", use_container_width=True):
+                            with st.spinner(f"☁️ Downloading and merging {len(selected_projects)} projects..."):
+                                merged_data = merge_cloud_projects(selected_projects)
+                                
+                                if merged_data.get("error"):
+                                    st.error(f"❌ {merged_data['error']}")
+                                else:
+                                    # Store in session state
+                                    st.session_state.cloud_project_data = merged_data
+                                    st.session_state.current_project_id = f"cloud:merged-{len(selected_projects)}"
+                                    st.session_state.project_data = None
+                                    st.session_state.merged_projects = [p.slug for p in selected_projects]
+                                    st.success(f"✅ Merged {len(selected_projects)} projects: {merged_data['node_count']} nodes, {merged_data['edge_count']} edges")
+                                    st.rerun()
     
     # -------------------------------------------------------------------------
     # Check for loaded cloud project in session state
