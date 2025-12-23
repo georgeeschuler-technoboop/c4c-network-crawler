@@ -6,6 +6,10 @@ Reads exported data from OrgGraph US/CA projects.
 
 VERSION HISTORY:
 ----------------
+UPDATED v0.15.2: Entity Linking Column Fix
+- FIXED: Now detects 'label' column from CoreGraph schema (not just 'name')
+- Checks multiple possible column names for flexibility
+
 UPDATED v0.15.1: Entity Linking Stats Display
 - NEW: Shows link stats in Downloads section after linking
 - Displays: auto-matched, user confirmed, rejected, total linked
@@ -148,7 +152,7 @@ from c4c_utils.c4c_supabase import C4CSupabase
 # Config
 # =============================================================================
 
-APP_VERSION = "0.15.1"  # Phase 4: Entity Linking + Stats Display
+APP_VERSION = "0.15.2"  # Phase 4: Entity Linking + Stats Display + Column Fix
 C4C_LOGO_URL = "https://static.wixstatic.com/media/275a3f_9c48d5079fcf4b688606c81d8f34d5a5~mv2.jpg"
 INSIGHTGRAPH_ICON_URL = "https://static.wixstatic.com/media/275a3f_7736e28c9f5e40c1b2407e09dc5cb6e7~mv2.png"
 
@@ -1006,13 +1010,22 @@ def find_entity_matches(actor_df: pd.DataFrame, org_df: pd.DataFrame) -> dict:
     # Get organization nodes from OrgGraph (filter to orgs only)
     org_nodes = org_df[org_df['node_type'] == 'organization'].copy() if 'node_type' in org_df.columns else org_df.copy()
     
-    # Determine name columns
-    actor_name_col = 'name' if 'name' in actor_df.columns else 'Name'
-    org_name_col = 'label' if 'label' in org_df.columns else 'name'
+    # Determine name columns - check multiple possible column names
+    actor_name_col = None
+    for col in ['label', 'name', 'Name', 'organization', 'company']:
+        if col in actor_df.columns:
+            actor_name_col = col
+            break
     
-    if actor_name_col not in actor_df.columns:
+    org_name_col = None
+    for col in ['label', 'name', 'Name', 'organization']:
+        if col in org_nodes.columns:
+            org_name_col = col
+            break
+    
+    if actor_name_col is None:
         return {"error": f"ActorGraph missing name column. Found: {list(actor_df.columns)}"}
-    if org_name_col not in org_nodes.columns:
+    if org_name_col is None:
         return {"error": f"OrgGraph missing label column. Found: {list(org_nodes.columns)}"}
     
     # Normalize names
