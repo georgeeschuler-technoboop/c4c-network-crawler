@@ -6,6 +6,12 @@ Reads exported data from OrgGraph US/CA projects.
 
 VERSION HISTORY:
 ----------------
+UPDATED v0.15.1: Entity Linking Stats Display
+- NEW: Shows link stats in Downloads section after linking
+- Displays: auto-matched, user confirmed, rejected, total linked
+- Shows coverage percentage (linked orgs / total orgs)
+- Clears link state when loading different projects
+
 UPDATED v0.15.0: Phase 4 - Entity Linking
 - NEW: "🔗 Link Entities" mode in Cloud Projects tab
 - Select ActorGraph (LinkedIn) + OrgGraph projects to link
@@ -142,7 +148,7 @@ from c4c_utils.c4c_supabase import C4CSupabase
 # Config
 # =============================================================================
 
-APP_VERSION = "0.15.0"  # Phase 4: Entity Linking
+APP_VERSION = "0.15.1"  # Phase 4: Entity Linking + Stats Display
 C4C_LOGO_URL = "https://static.wixstatic.com/media/275a3f_9c48d5079fcf4b688606c81d8f34d5a5~mv2.jpg"
 INSIGHTGRAPH_ICON_URL = "https://static.wixstatic.com/media/275a3f_7736e28c9f5e40c1b2407e09dc5cb6e7~mv2.png"
 
@@ -626,6 +632,8 @@ def init_session_state():
         st.session_state.link_actor_data = None
     if "link_org_data" not in st.session_state:
         st.session_state.link_org_data = None
+    if "linked_project_info" not in st.session_state:
+        st.session_state.linked_project_info = None
     
     # Initialize Supabase connection (legacy)
     init_supabase()
@@ -1203,6 +1211,8 @@ def render_entity_match_review():
                 st.session_state.current_project_id = f"cloud:linked-network"
                 st.session_state.project_data = None
                 st.session_state.merged_projects = None
+                # Track linked project info for display
+                st.session_state.linked_project_info = linked_data.get("manifest", {}).get("match_stats", {})
                 st.success(f"✅ Created linked network: {linked_data['node_count']} nodes, {linked_data['edge_count']} edges")
                 st.rerun()
             else:
@@ -2186,8 +2196,31 @@ def render_downloads(data: dict):
     
     # Cloud save option for merged projects
     is_merged = st.session_state.get("merged_projects") is not None
+    is_linked = st.session_state.get("linked_project_info") is not None
     client = get_project_store_authenticated()
     cloud_enabled = client is not None
+    
+    # Display link stats if this is a linked project
+    if is_linked:
+        st.divider()
+        link_stats = st.session_state.get("linked_project_info", {})
+        
+        st.markdown("**🔗 Entity Linking Results**")
+        
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("✅ Auto-matched", link_stats.get("auto_matched", 0))
+        col2.metric("✓ User Confirmed", link_stats.get("confirmed", 0))
+        col3.metric("✗ Rejected", link_stats.get("rejected", 0))
+        col4.metric("🔗 Total Linked", link_stats.get("total_linked", 0))
+        
+        # Calculate and show coverage
+        total_nodes = data.get("node_count", 0)
+        total_linked = link_stats.get("total_linked", 0)
+        if total_nodes > 0:
+            coverage_pct = (total_linked / total_nodes) * 100
+            st.caption(f"📊 {total_linked} of {total_nodes} organizations linked with LinkedIn data ({coverage_pct:.1f}% coverage)")
+        
+        st.caption("Linked organizations now have: `linkedin_url`, `linkedin_industry`, `linkedin_website` columns")
     
     if is_merged and cloud_enabled:
         st.divider()
@@ -2612,6 +2645,7 @@ def main():
                                     st.session_state.current_project_id = f"cloud:{selected_cloud.slug}"
                                     st.session_state.project_data = None  # Clear local project data
                                     st.session_state.merged_projects = None  # Clear merge state
+                                    st.session_state.linked_project_info = None  # Clear link state
                                     st.success(f"✅ Loaded {selected_cloud.name}")
                                     st.rerun()
                 
@@ -2685,6 +2719,7 @@ def main():
                                     st.session_state.current_project_id = f"cloud:merged-{len(selected_projects)}"
                                     st.session_state.project_data = None
                                     st.session_state.merged_projects = [p.slug for p in selected_projects]
+                                    st.session_state.linked_project_info = None  # Clear link state
                                     st.success(f"✅ Merged {len(selected_projects)} projects: {merged_data['node_count']} nodes, {merged_data['edge_count']} edges")
                                     st.rerun()
                 
