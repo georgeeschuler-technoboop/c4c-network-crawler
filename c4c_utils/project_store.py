@@ -98,7 +98,7 @@ class Project:
             bundle_size_bytes=data.get('bundle_size_bytes'),
             created_at=data.get('created_at', ''),
             updated_at=data.get('updated_at', ''),
-            created_by=data.get('created_by', ''),
+            created_by=data.get('user_id', ''),  # DB column is user_id
             is_public=data.get('is_public', False),
         )
     
@@ -370,7 +370,7 @@ class ProjectStoreClient:
             'region_preset': region_preset,
             'bundle_path': bundle_path,
             'bundle_size_bytes': len(bundle_data),
-            'created_by': self.user_id,
+            'user_id': self.user_id,  # DB column is user_id
             'is_public': False,
         }
         
@@ -490,14 +490,14 @@ class ProjectStoreClient:
         try:
             # Build query
             query = self.client.table(self.TABLE_NAME).select(
-                'id, slug, name, source_app, node_count, edge_count, jurisdiction, updated_at, is_public, created_by'
+                'id, slug, name, source_app, node_count, edge_count, jurisdiction, updated_at, is_public, user_id'
             )
             
             # Filter by ownership or public
             if include_public:
-                query = query.or_(f"created_by.eq.{self.user_id},is_public.eq.true")
+                query = query.or_(f"user_id.eq.{self.user_id},is_public.eq.true")
             else:
-                query = query.eq('created_by', self.user_id)
+                query = query.eq('user_id', self.user_id)
             
             # Apply filters
             if source_app:
