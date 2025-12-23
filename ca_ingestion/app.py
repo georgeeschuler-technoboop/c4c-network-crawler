@@ -13,6 +13,12 @@ Outputs conform to C4C Network Schema v1 (MVP):
 
 VERSION HISTORY:
 ----------------
+UPDATED v0.15.0: Phase 2 - Project Store cloud integration
+- Save bundles to cloud (Supabase Storage + projects table)
+- ZIP bundles uploaded with full metadata
+- Project Store client replaces old row-based storage
+- Compatible with InsightGraph cloud loading
+
 UPDATED v0.14.0: Phase 1c - ZIP bundle format with manifest.json
 - Download All ZIP now includes manifest.json with bundle metadata
 - Files at root level (removed c4c_schema/ subfolder)
@@ -95,7 +101,7 @@ from enum import Enum
 # Config
 # =============================================================================
 
-APP_VERSION = "0.14.0"  # Phase 1c: ZIP bundle format with manifest.json
+APP_VERSION = "0.15.0"  # Phase 2: Project Store cloud integration
 C4C_LOGO_URL = "https://static.wixstatic.com/media/275a3f_bcf888c01ebe499ca978b82f5291947b~mv2.png"
 SOURCE_SYSTEM = "CHARITYDATA_CA"
 JURISDICTION = "CA"
@@ -136,22 +142,60 @@ def init_supabase():
     return st.session_state.get("supabase_db")
 
 
+def init_project_store():
+    """Initialize Project Store client for bundle storage (Phase 2)."""
+    if "project_store" not in st.session_state:
+        try:
+            url = st.secrets["supabase"]["url"]
+            key = st.secrets["supabase"]["key"]
+            
+            # Import Project Store client
+            from c4c_utils.c4c_project_store import ProjectStoreClient
+            
+            client = ProjectStoreClient(url, key)
+            st.session_state.project_store = client
+        except ImportError:
+            st.session_state.project_store = None
+        except Exception as e:
+            st.session_state.project_store = None
+    
+    return st.session_state.get("project_store")
+
+
+def get_project_store_authenticated():
+    """Get authenticated Project Store client, or None."""
+    client = st.session_state.get("project_store")
+    if client and client.is_authenticated():
+        return client
+    return None
+
+
 def render_cloud_status():
     """Render cloud connection status and login UI in sidebar."""
-    db = st.session_state.get("supabase_db")
+    # Initialize Project Store
+    init_project_store()
     
-    if not db:
+    client = st.session_state.get("project_store")
+    
+    if not client:
         st.sidebar.caption("☁️ Cloud unavailable")
         return None
     
-    if db.is_authenticated:
-        user = db.get_user()
-        # Logged in: show email + logout button
+    if client.is_authenticated():
+        user = client.get_current_user()
+        
+        # Get project count
+        projects, _ = client.list_projects(source_app=SOURCE_APP)
+        project_count = len(projects) if projects else 0
+        
+        # Logged in: show email + project count + logout button
         st.sidebar.caption(f"☁️ {user['email']}")
+        st.sidebar.caption(f"📦 {project_count} cloud project(s)")
+        
         if st.sidebar.button("Logout", key="cloud_logout", use_container_width=True):
-            db.logout()
+            client.logout()
             st.rerun()
-        return db
+        return client
     else:
         # Not logged in: show status, then collapsible login form
         st.sidebar.caption("☁️ Not connected")
@@ -162,23 +206,25 @@ def render_cloud_status():
                 email = st.text_input("Email", key="cloud_login_email")
                 password = st.text_input("Password", type="password", key="cloud_login_pass")
                 if st.button("Login", key="cloud_login_btn"):
-                    if db.login(email, password):
+                    success, error = client.login(email, password)
+                    if success:
                         st.success("✅ Logged in!")
                         st.rerun()
                     else:
-                        st.error("Login failed")
+                        st.error(f"Login failed: {error}")
             
             with tab2:
                 st.caption("First time? Create an account.")
                 signup_email = st.text_input("Email", key="cloud_signup_email")
                 signup_pass = st.text_input("Password", type="password", key="cloud_signup_pass")
                 if st.button("Sign Up", key="cloud_signup_btn"):
-                    if db.signup(signup_email, signup_pass):
+                    success, error = client.signup(signup_email, signup_pass)
+                    if success:
                         st.success("✅ Check email to confirm")
                     else:
-                        st.error("Signup failed")
+                        st.error(f"Signup failed: {error}")
         
-        return db
+        return client
 
 
 def save_to_cloud(project_name: str, nodes_df: pd.DataFrame, edges_df: pd.DataFrame,
@@ -249,9 +295,88 @@ def save_to_cloud(project_name: str, nodes_df: pd.DataFrame, edges_df: pd.DataFr
             return False
 
 
-# =============================================================================
-# Regional Perspective (Shared Logic with OrgGraph US)
-# =============================================================================
+def save_bundle_to_cloud(
+    project_name: str,
+    nodes_df: pd.DataFrame,
+    edges_df: pd.DataFrame,
+    grants_df: pd.DataFrame = None,
+    region_def: dict = None,
+    poli_nodes: pd.DataFrame = None,
+    poli_edges: pd.DataFrame = None,
+    polinode_excel: bytes = None
+) -> tuple:
+    """
+    Save project as ZIP bundle to Project Store (Supabase Storage).
+    
+    This is the Phase 2 cloud storage approach - stores complete bundles
+    rather than individual rows.
+    
+    Returns:
+        Tuple of (success: bool, message: str, project_slug: str or None)
+    """
+    client = get_project_store_authenticated()
+    
+    if not client:
+        return False, "Login required to save to cloud", None
+    
+    # Create ZIP bundle in memory
+    zip_buffer = BytesIO()
+    
+    try:
+        with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+            # manifest.json
+            manifest = generate_bundle_manifest(
+                nodes_df=nodes_df,
+                edges_df=edges_df,
+                grants_detail_df=grants_df,
+                project_name=project_name
+            )
+            zip_file.writestr('manifest.json', json.dumps(manifest, indent=2))
+            
+            # Core data files
+            if nodes_df is not None and not nodes_df.empty:
+                zip_file.writestr('nodes.csv', nodes_df.to_csv(index=False))
+            if edges_df is not None and not edges_df.empty:
+                zip_file.writestr('edges.csv', edges_df.to_csv(index=False))
+            if grants_df is not None and not grants_df.empty:
+                zip_file.writestr('grants_detail.csv', grants_df.to_csv(index=False))
+            
+            # Polinode files
+            if poli_nodes is not None and not poli_nodes.empty:
+                zip_file.writestr('polinode/nodes_polinode.csv', poli_nodes.to_csv(index=False))
+            if poli_edges is not None and not poli_edges.empty:
+                zip_file.writestr('polinode/edges_polinode.csv', poli_edges.to_csv(index=False))
+            if polinode_excel:
+                zip_file.writestr('polinode/polinode_import.xlsx', polinode_excel)
+        
+        zip_buffer.seek(0)
+        bundle_data = zip_buffer.getvalue()
+        
+        # Upload to Project Store
+        node_count = len(nodes_df) if nodes_df is not None else 0
+        edge_count = len(edges_df) if edges_df is not None else 0
+        region_preset = region_def.get('id') if region_def else None
+        
+        project, error = client.save_project(
+            name=project_name,
+            bundle_data=bundle_data,
+            source_app=SOURCE_APP,
+            node_count=node_count,
+            edge_count=edge_count,
+            jurisdiction=JURISDICTION,
+            region_preset=region_preset,
+            app_version=APP_VERSION,
+            schema_version=COREGRAPH_VERSION,
+            bundle_version="1.0"
+        )
+        
+        if error:
+            return False, f"Upload failed: {error}", None
+        
+        return True, f"Saved to cloud: {project.slug}", project.slug
+        
+    except Exception as e:
+        return False, f"Bundle creation failed: {str(e)}", None
 
 class RegionMode(Enum):
     OFF = "off"
@@ -2154,21 +2279,37 @@ def render_downloads(nodes_df: pd.DataFrame, edges_df: pd.DataFrame,
                 except Exception as e:
                     st.error(f"Error saving: {e}")
         
-        # Cloud save
+        # Cloud save (Project Store - ZIP bundle)
         with save_col2:
-            db = st.session_state.get("supabase_db")
-            cloud_enabled = db and db.is_authenticated
+            client = get_project_store_authenticated()
+            cloud_enabled = client is not None
             
             if st.button("☁️ Save to Cloud", 
                         disabled=not cloud_enabled,
                         use_container_width=True,
-                        help="Login to enable cloud save" if not cloud_enabled else "Save to Supabase"):
-                save_to_cloud(
-                    project_name=project_name,
-                    nodes_df=nodes_df,
-                    edges_df=edges_df,
-                    grants_df=grants_detail_df
-                )
+                        help="Login to enable cloud save" if not cloud_enabled else "Save bundle to Project Store"):
+                
+                # Generate Polinode data for bundle
+                poli_nodes_bundle, poli_edges_bundle = convert_to_polinode_format(nodes_df, edges_df)
+                polinode_excel_bundle = None
+                if not poli_nodes_bundle.empty:
+                    polinode_excel_bundle = generate_polinode_excel(poli_nodes_bundle, poli_edges_bundle if not poli_edges_bundle.empty else pd.DataFrame())
+                
+                with st.spinner("☁️ Uploading bundle..."):
+                    success, message, slug = save_bundle_to_cloud(
+                        project_name=project_name,
+                        nodes_df=nodes_df,
+                        edges_df=edges_df,
+                        grants_df=grants_detail_df,
+                        poli_nodes=poli_nodes_bundle,
+                        poli_edges=poli_edges_bundle,
+                        polinode_excel=polinode_excel_bundle
+                    )
+                    
+                    if success:
+                        st.success(f"☁️ {message}")
+                    else:
+                        st.error(f"❌ {message}")
         
         with save_col3:
             if not cloud_enabled:
@@ -2569,8 +2710,11 @@ def render_upload_interface(project_name: str):
 # =============================================================================
 
 def main():
-    # Initialize Supabase
+    # Initialize Supabase (legacy)
     init_supabase()
+    
+    # Initialize Project Store (Phase 2)
+    init_project_store()
     
     # Header with logo, title, and help button
     col1, col2, col3 = st.columns([1, 8, 1])
