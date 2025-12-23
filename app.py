@@ -7,6 +7,11 @@ Compute centrality metrics, detect communities, and generate strategic insights.
 Part of the C4C Network Intelligence Platform.
 """
 
+import sys
+from pathlib import Path
+# Ensure repo root is in path for c4c_utils import
+sys.path.insert(0, str(Path(__file__).parent))
+
 import streamlit as st
 import pandas as pd
 import requests
@@ -31,9 +36,11 @@ import plotly.graph_objects as go
 # APP VERSION
 # ============================================================================
 
-APP_VERSION = "0.5.1"
+APP_VERSION = "0.5.3"
 
 VERSION_HISTORY = [
+    "FIXED v0.5.3: Moved cloud login to top of sidebar for consistency with other apps",
+    "FIXED v0.5.2: Added sys.path fix for c4c_utils import on Streamlit Cloud",
     "FIXED v0.5.1: Restored CSV upload for seed profiles; added app icon; improved cloud login visibility",
     "CLOUD v0.5.0: Phase 2 - Project Store cloud integration; save bundles to Supabase Storage",
     "SCHEMA v0.4.0: CoreGraph v1 schema alignment for InsightGraph compatibility; unified bundle format with manifest.json",
@@ -146,7 +153,6 @@ def get_project_store_authenticated():
 
 def render_cloud_status():
     """Render cloud connection status and login UI in sidebar."""
-    st.sidebar.markdown("---")
     st.sidebar.subheader("☁️ Cloud Storage")
     
     # Initialize Project Store
@@ -157,6 +163,7 @@ def render_cloud_status():
     if not client:
         st.sidebar.warning("☁️ Cloud unavailable")
         st.sidebar.caption("c4c_utils package not found")
+        st.sidebar.markdown("---")
         return None
     
     if client.is_authenticated():
@@ -173,6 +180,7 @@ def render_cloud_status():
         if st.sidebar.button("Logout", key="cloud_logout", use_container_width=True):
             client.logout()
             st.rerun()
+        st.sidebar.markdown("---")
         return client
     else:
         # Not logged in: show login form directly (not collapsed)
@@ -202,6 +210,9 @@ def render_cloud_status():
                         st.success("✅ Check email to confirm")
                     else:
                         st.error(f"Signup failed: {error}")
+        
+        st.sidebar.markdown("---")
+        return client
         
         return client
 
@@ -1675,6 +1686,9 @@ def main():
     
     # Sidebar
     with st.sidebar:
+        # Cloud login at top (consistent with other apps)
+        render_cloud_status()
+        
         st.header("⚙️ Configuration")
         
         api_token = st.text_input("EnrichLayer API Token", type="password", 
@@ -1705,8 +1719,6 @@ def main():
         st.markdown("---")
         st.markdown(f"**Schema:** CoreGraph v1")
         st.markdown(f"**Bundle:** {BUNDLE_VERSION}")
-        
-        render_cloud_status()
     
     # Main content
     st.header("🌱 Seed Profiles")
