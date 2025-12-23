@@ -45,9 +45,10 @@ import plotly.graph_objects as go
 # APP VERSION
 # ============================================================================
 
-APP_VERSION = "0.5.7"
+APP_VERSION = "0.5.8"
 
 VERSION_HISTORY = [
+    "IMPROVED v0.5.8: User can now name project before saving to cloud; CSV filename used as default",
     "FIXED v0.5.7: Company API now uses correct v2 endpoint (GET /api/v2/company); fixed response parsing for v2 schema",
     "FIXED v0.5.6: Company crawl now checks similar_companies/affiliated_companies/related_companies fields; added API debug output",
     "FIXED v0.5.5: Handle empty edges in validate_polinode_export and generate_polinode_excel",
@@ -1884,6 +1885,8 @@ def main():
                     # Show preview
                     if seeds:
                         st.success(f"✅ Loaded {len(seeds)} seed profile(s) from CSV")
+                        # Store CSV filename for default project name
+                        st.session_state.uploaded_csv_name = uploaded_file.name
                         with st.expander("Preview seeds", expanded=False):
                             preview_df = pd.DataFrame(seeds)
                             st.dataframe(preview_df, use_container_width=True)
@@ -2118,23 +2121,44 @@ def main():
         )
         
         # Cloud save and clear buttons
-        col1, col2, col3 = st.columns([2, 2, 1])
-        with col1:
-            client = get_project_store_authenticated()
-            cloud_enabled = client is not None
-            
-            # Get project name from first seed profile
-            first_seed_name = list(seen_profiles.values())[0].get('name', 'Network') if seen_profiles else 'Network'
-            project_name = f"{first_seed_name} Network"
-            
-            if st.button("☁️ Save to Cloud", 
-                        disabled=not cloud_enabled,
+        client = get_project_store_authenticated()
+        cloud_enabled = client is not None
+        
+        # Generate default project name
+        first_seed_name = list(seen_profiles.values())[0].get('name', 'Network') if seen_profiles else 'Network'
+        default_name = f"{first_seed_name} Network"
+        
+        # Check if we have a CSV filename to use
+        if st.session_state.get('uploaded_csv_name'):
+            # Use CSV filename (without extension) as default
+            csv_name = st.session_state.uploaded_csv_name
+            if csv_name.endswith('.csv'):
+                csv_name = csv_name[:-4]
+            default_name = csv_name
+        
+        # Project name input
+        st.markdown("**☁️ Save to Cloud**")
+        col_name, col_save = st.columns([3, 1])
+        
+        with col_name:
+            project_name = st.text_input(
+                "Project name",
+                value=default_name,
+                key="cloud_project_name",
+                label_visibility="collapsed",
+                placeholder="Enter project name..."
+            )
+        
+        with col_save:
+            save_disabled = not cloud_enabled or not project_name.strip()
+            if st.button("☁️ Save", 
+                        disabled=save_disabled,
                         use_container_width=True,
                         help="Login to enable cloud save" if not cloud_enabled else "Save bundle to Project Store"):
                 
                 with st.spinner("☁️ Uploading bundle..."):
                     success, message, slug = save_bundle_to_cloud(
-                        project_name=project_name,
+                        project_name=project_name.strip(),
                         zip_data=zip_data,
                         node_count=len(seen_profiles),
                         edge_count=len(edges),
@@ -2146,14 +2170,14 @@ def main():
                     else:
                         st.error(f"❌ {message}")
         
-        with col2:
+        if not cloud_enabled:
+            st.caption("🔒 Login to enable cloud save")
+        
+        col1, col2 = st.columns(2)
+        with col1:
             if st.button("🗑️ Clear Results", use_container_width=True):
                 st.session_state.crawl_results = None
                 st.rerun()
-        
-        with col3:
-            if not cloud_enabled:
-                st.caption("☁️ Login to enable")
         
         # CoreGraph Schema Downloads
         with st.expander("📄 CoreGraph Schema Files"):
