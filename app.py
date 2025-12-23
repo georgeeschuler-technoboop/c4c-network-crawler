@@ -31,9 +31,10 @@ import plotly.graph_objects as go
 # APP VERSION
 # ============================================================================
 
-APP_VERSION = "0.5.0"
+APP_VERSION = "0.5.1"
 
 VERSION_HISTORY = [
+    "FIXED v0.5.1: Restored CSV upload for seed profiles; added app icon; improved cloud login visibility",
     "CLOUD v0.5.0: Phase 2 - Project Store cloud integration; save bundles to Supabase Storage",
     "SCHEMA v0.4.0: CoreGraph v1 schema alignment for InsightGraph compatibility; unified bundle format with manifest.json",
     "ADDED v0.3.13: Polinode Excel export (single .xlsx with Nodes + Edges tabs); requires openpyxl",
@@ -145,13 +146,17 @@ def get_project_store_authenticated():
 
 def render_cloud_status():
     """Render cloud connection status and login UI in sidebar."""
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("☁️ Cloud Storage")
+    
     # Initialize Project Store
     init_project_store()
     
     client = st.session_state.get("project_store")
     
     if not client:
-        st.sidebar.caption("☁️ Cloud unavailable")
+        st.sidebar.warning("☁️ Cloud unavailable")
+        st.sidebar.caption("c4c_utils package not found")
         return None
     
     if client.is_authenticated():
@@ -162,7 +167,7 @@ def render_cloud_status():
         project_count = len(projects) if projects else 0
         
         # Logged in: show email + project count + logout button
-        st.sidebar.caption(f"☁️ {user['email']}")
+        st.sidebar.success(f"✅ {user['email']}")
         st.sidebar.caption(f"📦 {project_count} cloud project(s)")
         
         if st.sidebar.button("Logout", key="cloud_logout", use_container_width=True):
@@ -170,15 +175,16 @@ def render_cloud_status():
             st.rerun()
         return client
     else:
-        # Not logged in: show status, then collapsible login form
-        st.sidebar.caption("☁️ Not connected")
-        with st.sidebar.expander("Login / Sign Up", expanded=False):
+        # Not logged in: show login form directly (not collapsed)
+        st.sidebar.info("🔒 Not logged in")
+        
+        with st.sidebar.expander("🔑 Login / Sign Up", expanded=True):
             tab1, tab2 = st.tabs(["Login", "Sign Up"])
             
             with tab1:
                 email = st.text_input("Email", key="cloud_login_email")
                 password = st.text_input("Password", type="password", key="cloud_login_pass")
-                if st.button("Login", key="cloud_login_btn"):
+                if st.button("Login", key="cloud_login_btn", use_container_width=True):
                     success, error = client.login(email, password)
                     if success:
                         st.success("✅ Logged in!")
@@ -190,7 +196,7 @@ def render_cloud_status():
                 st.caption("First time? Create an account.")
                 signup_email = st.text_input("Email", key="cloud_signup_email")
                 signup_pass = st.text_input("Password", type="password", key="cloud_signup_pass")
-                if st.button("Sign Up", key="cloud_signup_btn"):
+                if st.button("Sign Up", key="cloud_signup_btn", use_container_width=True):
                     success, error = client.signup(signup_email, signup_pass)
                     if success:
                         st.success("✅ Check email to confirm")
@@ -1658,7 +1664,11 @@ def create_brokerage_role_chart(brokerage_roles: Dict[str, str]) -> 'go.Figure':
 # ============================================================================
 
 def main():
-    st.set_page_config(page_title="ActorGraph", page_icon="🕸️", layout="wide")
+    st.set_page_config(
+        page_title="ActorGraph", 
+        page_icon="https://static.wixstatic.com/media/275a3f_87490929c29444a99f948f1e12cac9a8~mv2.png", 
+        layout="wide"
+    )
     
     st.title("🕸️ ActorGraph")
     st.markdown(f"*People-centered Network Graphs* — v{APP_VERSION}")
@@ -1696,26 +1706,86 @@ def main():
         st.markdown(f"**Schema:** CoreGraph v1")
         st.markdown(f"**Bundle:** {BUNDLE_VERSION}")
         
-        st.markdown("---")
         render_cloud_status()
     
     # Main content
     st.header("🌱 Seed Profiles")
     
-    seed_input = st.text_area(
-        "Enter LinkedIn URLs (one per line)",
-        placeholder="https://linkedin.com/in/johndoe\nhttps://linkedin.com/company/acme-corp",
-        height=150
+    # Two input methods: Manual URLs or CSV upload
+    input_method = st.radio(
+        "Input method",
+        ["📝 Manual URLs", "📁 Upload CSV"],
+        horizontal=True,
+        label_visibility="collapsed"
     )
     
-    # Parse seeds
     seeds = []
-    if seed_input:
-        for line in seed_input.strip().split('\n'):
-            url = line.strip()
-            if url and ('linkedin.com/in/' in url or 'linkedin.com/company/' in url):
-                name = canonical_id_from_url(url).replace('-', ' ').title()
-                seeds.append({'name': name, 'profile_url': url})
+    
+    if input_method == "📝 Manual URLs":
+        seed_input = st.text_area(
+            "Enter LinkedIn URLs (one per line)",
+            placeholder="https://linkedin.com/in/johndoe\nhttps://linkedin.com/company/acme-corp",
+            height=150
+        )
+        
+        # Parse seeds from text input
+        if seed_input:
+            for line in seed_input.strip().split('\n'):
+                url = line.strip()
+                if url and ('linkedin.com/in/' in url or 'linkedin.com/company/' in url):
+                    name = canonical_id_from_url(url).replace('-', ' ').title()
+                    seeds.append({'name': name, 'profile_url': url})
+    
+    else:  # CSV upload
+        st.caption("Upload a CSV with columns: `name`, `profile_url` (LinkedIn URL)")
+        uploaded_file = st.file_uploader(
+            "Choose CSV file",
+            type=['csv'],
+            help="CSV should have 'name' and 'profile_url' columns"
+        )
+        
+        if uploaded_file:
+            try:
+                df = pd.read_csv(uploaded_file)
+                
+                # Find the URL column (flexible naming)
+                url_col = None
+                for col in ['profile_url', 'linkedin_url', 'url', 'LinkedIn URL', 'linkedin']:
+                    if col in df.columns:
+                        url_col = col
+                        break
+                
+                # Find the name column (flexible naming)
+                name_col = None
+                for col in ['name', 'Name', 'organization', 'Organization', 'company', 'Company']:
+                    if col in df.columns:
+                        name_col = col
+                        break
+                
+                if url_col is None:
+                    st.error("❌ CSV must have a URL column (profile_url, linkedin_url, or url)")
+                else:
+                    # Parse seeds from CSV
+                    for _, row in df.iterrows():
+                        url = str(row.get(url_col, '')).strip()
+                        if url and ('linkedin.com/in/' in url or 'linkedin.com/company/' in url):
+                            if name_col and pd.notna(row.get(name_col)):
+                                name = str(row[name_col]).strip()
+                            else:
+                                name = canonical_id_from_url(url).replace('-', ' ').title()
+                            seeds.append({'name': name, 'profile_url': url})
+                    
+                    # Show preview
+                    if seeds:
+                        st.success(f"✅ Loaded {len(seeds)} seed profile(s) from CSV")
+                        with st.expander("Preview seeds", expanded=False):
+                            preview_df = pd.DataFrame(seeds)
+                            st.dataframe(preview_df, use_container_width=True)
+                    else:
+                        st.warning("⚠️ No valid LinkedIn URLs found in CSV")
+                        
+            except Exception as e:
+                st.error(f"❌ Error reading CSV: {str(e)}")
     
     if seeds:
         st.success(f"✅ {len(seeds)} valid seed(s) detected")
