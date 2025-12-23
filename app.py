@@ -45,9 +45,11 @@ import plotly.graph_objects as go
 # APP VERSION
 # ============================================================================
 
-APP_VERSION = "0.5.5"
+APP_VERSION = "0.5.7"
 
 VERSION_HISTORY = [
+    "FIXED v0.5.7: Company API now uses correct v2 endpoint (GET /api/v2/company); fixed response parsing for v2 schema",
+    "FIXED v0.5.6: Company crawl now checks similar_companies/affiliated_companies/related_companies fields; added API debug output",
     "FIXED v0.5.5: Handle empty edges in validate_polinode_export and generate_polinode_excel",
     "FIXED v0.5.4: Enhanced path handling for c4c_utils; added logo via st.image; better error messages",
     "FIXED v0.5.3: Moved cloud login to top of sidebar for consistency with other apps",
@@ -802,16 +804,24 @@ def call_enrichlayer_api(api_token: str, profile_url: str, crawl_type: str = "pe
     if mock_mode:
         return generate_mock_response(profile_url, crawl_type), None
     
-    if crawl_type == "company":
-        endpoint = "https://api.enrichlayer.com/v1/linkedin/company"
-    else:
-        endpoint = "https://api.enrichlayer.com/v1/linkedin/people"
-    
-    headers = {"Authorization": f"Bearer {api_token}", "Content-Type": "application/json"}
-    payload = {"linkedin_url": profile_url}
+    headers = {"Authorization": f"Bearer {api_token}"}
     
     try:
-        response = requests.post(endpoint, headers=headers, json=payload, timeout=30)
+        if crawl_type == "company":
+            # Company API uses GET with URL params (v2)
+            endpoint = "https://enrichlayer.com/api/v2/company"
+            params = {
+                "url": profile_url,
+                "use_cache": "if-present",
+                "fallback_to_cache": "on-error"
+            }
+            response = requests.get(endpoint, headers=headers, params=params, timeout=30)
+        else:
+            # People API uses POST with JSON body (v1)
+            endpoint = "https://api.enrichlayer.com/v1/linkedin/people"
+            headers["Content-Type"] = "application/json"
+            payload = {"linkedin_url": profile_url}
+            response = requests.post(endpoint, headers=headers, json=payload, timeout=30)
         
         if response.status_code == 429:
             return None, "Rate limit exceeded"
@@ -1204,25 +1214,45 @@ def run_crawler(
         stats['successful_calls'] += 1
         raw_profiles.append(response)
         
-        enriched_id = response.get('public_identifier', current_id)
-        current_node['headline'] = response.get('headline', '')
+        # Debug: show API response keys for company crawls
+        if crawl_type == 'company':
+            status_container.write(f"   └─ API keys: {list(response.keys())[:15]}...")
+        
+        # Get identifier - v2 company API uses universal_name_id
+        if crawl_type == 'company':
+            enriched_id = response.get('universal_name_id') or response.get('public_identifier', current_id)
+        else:
+            enriched_id = response.get('public_identifier', current_id)
+        
+        # Update node with response data
+        current_node['headline'] = response.get('headline') or response.get('industry', '')
         current_node['location'] = response.get('location_str') or response.get('location', '')
         
-        # Store company-specific fields if present
-        if response.get('is_company'):
+        # Store company-specific fields if present (v2 API structure)
+        if response.get('is_company') or crawl_type == 'company':
             current_node['is_company'] = True
+            current_node['name'] = response.get('name', current_node.get('name', ''))
             current_node['website'] = response.get('website', '')
             current_node['industry'] = response.get('industry', '')
             current_node['company_size'] = response.get('company_size')
             current_node['founded_year'] = response.get('founded_year')
             current_node['company_type'] = response.get('company_type', '')
+            current_node['description'] = response.get('description', '')
+            current_node['follower_count'] = response.get('follower_count')
+            
+            # Extract HQ location from v2 API
+            hq = response.get('hq', {})
+            if hq:
+                current_node['city'] = hq.get('city', '')
+                current_node['state'] = hq.get('state', '')
+                current_node['country'] = hq.get('country', '')
         
-        # Store location components if available
-        if response.get('city'):
+        # Store location components if available (flat structure)
+        if response.get('city') and not current_node.get('city'):
             current_node['city'] = response.get('city', '')
-        if response.get('state'):
+        if response.get('state') and not current_node.get('state'):
             current_node['state'] = response.get('state', '')
-        if response.get('country'):
+        if response.get('country') and not current_node.get('country'):
             current_node['country'] = response.get('country', '')
         
         if advanced_mode:
@@ -1238,7 +1268,17 @@ def run_crawler(
             current_id = enriched_id
             current_node = seen_profiles[current_id]
         
-        neighbors = response.get('people_also_viewed', [])
+        # Get neighbors - check multiple field names for compatibility
+        if crawl_type == 'company':
+            similar = response.get('similar_companies', [])
+            affiliated = response.get('affiliated_companies', [])
+            # Combine both lists for maximum coverage
+            neighbors = similar + affiliated
+            # Debug: show what we found
+            status_container.write(f"   └─ similar_companies: {len(similar)}, affiliated_companies: {len(affiliated)}")
+        else:
+            neighbors = response.get('people_also_viewed', []) or response.get('similar_companies', [])
+        
         if not neighbors:
             stats['profiles_with_no_neighbors'] += 1
         else:
@@ -1250,7 +1290,11 @@ def run_crawler(
             
             neighbor_url = neighbor.get('link') or neighbor.get('profile_url', '')
             neighbor_name = neighbor.get('name') or neighbor.get('full_name', '')
-            neighbor_headline = neighbor.get('summary') or neighbor.get('headline', '')
+            # For companies, use industry as headline
+            if crawl_type == 'company':
+                neighbor_headline = neighbor.get('industry') or neighbor.get('summary', '')
+            else:
+                neighbor_headline = neighbor.get('summary') or neighbor.get('headline', '')
             
             if not neighbor_url:
                 continue
@@ -1281,7 +1325,7 @@ def run_crawler(
             
             if crawl_type == 'company':
                 neighbor_node['is_company'] = True
-                neighbor_node['industry'] = neighbor.get('summary') or neighbor.get('industry', '')
+                neighbor_node['industry'] = neighbor.get('industry') or neighbor.get('summary', '')
             
             if advanced_mode:
                 extracted_org = extract_org_from_summary(neighbor_headline)
