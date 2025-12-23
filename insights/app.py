@@ -792,7 +792,10 @@ def merge_cloud_projects(projects: list) -> dict:
         merged_nodes = pd.concat(all_nodes, ignore_index=True)
         # Deduplicate by node_id (keep first occurrence)
         before_dedup = len(merged_nodes)
-        merged_nodes = merged_nodes.drop_duplicates(subset=["node_id"], keep="first")
+        if "node_id" in merged_nodes.columns:
+            merged_nodes = merged_nodes.drop_duplicates(subset=["node_id"], keep="first")
+        elif "id" in merged_nodes.columns:
+            merged_nodes = merged_nodes.drop_duplicates(subset=["id"], keep="first")
         after_dedup = len(merged_nodes)
         nodes_deduped = before_dedup - after_dedup
     else:
@@ -804,10 +807,27 @@ def merge_cloud_projects(projects: list) -> dict:
         merged_edges = pd.concat(all_edges, ignore_index=True)
         # Deduplicate by source + target + edge_type (keep first)
         before_dedup = len(merged_edges)
-        dedup_cols = ["source", "target"]
+        
+        # Find which columns exist for deduplication
+        dedup_cols = []
+        # Try common column names for source/target
+        if "source" in merged_edges.columns:
+            dedup_cols.append("source")
+        elif "source_id" in merged_edges.columns:
+            dedup_cols.append("source_id")
+        
+        if "target" in merged_edges.columns:
+            dedup_cols.append("target")
+        elif "target_id" in merged_edges.columns:
+            dedup_cols.append("target_id")
+        
         if "edge_type" in merged_edges.columns:
             dedup_cols.append("edge_type")
-        merged_edges = merged_edges.drop_duplicates(subset=dedup_cols, keep="first")
+        
+        # Only deduplicate if we have columns to dedupe on
+        if len(dedup_cols) >= 2:
+            merged_edges = merged_edges.drop_duplicates(subset=dedup_cols, keep="first")
+        
         after_dedup = len(merged_edges)
         edges_deduped = before_dedup - after_dedup
     else:
@@ -821,13 +841,14 @@ def merge_cloud_projects(projects: list) -> dict:
     
     if all_grants:
         merged_grants = pd.concat(all_grants, ignore_index=True)
-        # Deduplicate by key fields
+        # Deduplicate by key fields that exist
         before_dedup = len(merged_grants)
         dedup_cols = []
-        for col in ["funder_id", "grantee_name", "grant_amount", "grant_year"]:
+        for col in ["funder_id", "funder_ein", "grantee_name", "grant_amount", "grant_year"]:
             if col in merged_grants.columns:
                 dedup_cols.append(col)
-        if dedup_cols:
+        
+        if len(dedup_cols) >= 2:
             merged_grants = merged_grants.drop_duplicates(subset=dedup_cols, keep="first")
         
         # Check region data
