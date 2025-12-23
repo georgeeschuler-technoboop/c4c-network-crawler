@@ -6,6 +6,15 @@ Reads exported data from OrgGraph US/CA projects.
 
 VERSION HISTORY:
 ----------------
+UPDATED v0.15.0: Phase 4 - Entity Linking
+- NEW: "🔗 Link Entities" mode in Cloud Projects tab
+- Select ActorGraph (LinkedIn) + OrgGraph projects to link
+- Auto-match by normalized organization name
+- Fuzzy matching (>70% similarity) for suggested matches
+- Review UI: confirm/reject suggested matches
+- Creates linked network with LinkedIn metadata on OrgGraph orgs
+- Adds linkedin_url, linkedin_industry, linkedin_website columns
+
 UPDATED v0.14.0: Phase 3B - Project Management UI
 - NEW: "⚙️ Manage" tab for cloud project management
 - View all projects with source icons and metadata
@@ -133,7 +142,7 @@ from c4c_utils.c4c_supabase import C4CSupabase
 # Config
 # =============================================================================
 
-APP_VERSION = "0.14.0"  # Phase 3B: Project Management UI
+APP_VERSION = "0.15.0"  # Phase 4: Entity Linking
 C4C_LOGO_URL = "https://static.wixstatic.com/media/275a3f_9c48d5079fcf4b688606c81d8f34d5a5~mv2.jpg"
 INSIGHTGRAPH_ICON_URL = "https://static.wixstatic.com/media/275a3f_7736e28c9f5e40c1b2407e09dc5cb6e7~mv2.png"
 
@@ -608,6 +617,16 @@ def init_session_state():
     if "merged_projects" not in st.session_state:
         st.session_state.merged_projects = None
     
+    # Entity linking state (Phase 4)
+    if "entity_matches" not in st.session_state:
+        st.session_state.entity_matches = None
+    if "match_confirmations" not in st.session_state:
+        st.session_state.match_confirmations = {}
+    if "link_actor_data" not in st.session_state:
+        st.session_state.link_actor_data = None
+    if "link_org_data" not in st.session_state:
+        st.session_state.link_org_data = None
+    
     # Initialize Supabase connection (legacy)
     init_supabase()
     
@@ -895,6 +914,397 @@ def merge_cloud_projects(projects: list) -> dict:
             "dedup_stats": {
                 "nodes_removed": nodes_deduped,
                 "edges_removed": edges_deduped,
+            }
+        },
+    }
+
+
+# =============================================================================
+# Entity Linking (Phase 4)
+# =============================================================================
+
+def normalize_org_name(name: str) -> str:
+    """Normalize organization name for matching."""
+    if not name or pd.isna(name):
+        return ""
+    
+    name = str(name).lower().strip()
+    
+    # Remove common suffixes
+    suffixes = [
+        ' incorporated', ' inc', ' llc', ' nfp', ' corp', ' corporation',
+        ' foundation', ' fund', ' trust', ' society', ' association',
+        ' organization', ' org', ' company', ' co', ' ltd', ' limited'
+    ]
+    for suffix in suffixes:
+        if name.endswith(suffix):
+            name = name[:-len(suffix)].strip()
+    
+    # Remove "the " prefix
+    if name.startswith('the '):
+        name = name[4:]
+    
+    # Remove punctuation except spaces
+    name = re.sub(r'[^\w\s]', ' ', name)
+    
+    # Normalize whitespace
+    name = ' '.join(name.split())
+    
+    return name
+
+
+def calculate_similarity(name1: str, name2: str) -> float:
+    """Calculate similarity between two normalized names (0-100)."""
+    if not name1 or not name2:
+        return 0.0
+    
+    # Exact match
+    if name1 == name2:
+        return 100.0
+    
+    # Token-based Jaccard similarity
+    tokens1 = set(name1.split())
+    tokens2 = set(name2.split())
+    
+    if not tokens1 or not tokens2:
+        return 0.0
+    
+    intersection = len(tokens1 & tokens2)
+    union = len(tokens1 | tokens2)
+    
+    jaccard = (intersection / union) * 100 if union > 0 else 0.0
+    
+    # Boost if one is substring of other
+    if name1 in name2 or name2 in name1:
+        jaccard = max(jaccard, 80.0)
+    
+    return jaccard
+
+
+def find_entity_matches(actor_df: pd.DataFrame, org_df: pd.DataFrame) -> dict:
+    """
+    Find matches between ActorGraph organizations and OrgGraph nodes.
+    
+    Args:
+        actor_df: ActorGraph nodes dataframe (companies from LinkedIn)
+        org_df: OrgGraph nodes dataframe (funders + grantees)
+    
+    Returns:
+        dict with auto_matches, suggested_matches, unmatched_actor, unmatched_org
+    """
+    if actor_df is None or org_df is None:
+        return {"error": "Missing data"}
+    
+    # Get organization nodes from OrgGraph (filter to orgs only)
+    org_nodes = org_df[org_df['node_type'] == 'organization'].copy() if 'node_type' in org_df.columns else org_df.copy()
+    
+    # Determine name columns
+    actor_name_col = 'name' if 'name' in actor_df.columns else 'Name'
+    org_name_col = 'label' if 'label' in org_df.columns else 'name'
+    
+    if actor_name_col not in actor_df.columns:
+        return {"error": f"ActorGraph missing name column. Found: {list(actor_df.columns)}"}
+    if org_name_col not in org_nodes.columns:
+        return {"error": f"OrgGraph missing label column. Found: {list(org_nodes.columns)}"}
+    
+    # Normalize names
+    actor_df = actor_df.copy()
+    org_nodes = org_nodes.copy()
+    
+    actor_df['_normalized'] = actor_df[actor_name_col].apply(normalize_org_name)
+    org_nodes['_normalized'] = org_nodes[org_name_col].apply(normalize_org_name)
+    
+    # Build lookup dict for OrgGraph
+    org_lookup = {}
+    for idx, row in org_nodes.iterrows():
+        norm_name = row['_normalized']
+        if norm_name:
+            if norm_name not in org_lookup:
+                org_lookup[norm_name] = []
+            org_lookup[norm_name].append({
+                'idx': idx,
+                'node_id': row.get('node_id', ''),
+                'label': row.get(org_name_col, ''),
+                'node_type': row.get('node_type', 'organization'),
+            })
+    
+    auto_matches = []      # Exact normalized matches
+    suggested_matches = [] # Fuzzy matches (>70% similarity)
+    unmatched_actor = []   # No match found
+    matched_org_ids = set()
+    
+    for idx, actor_row in actor_df.iterrows():
+        actor_name = actor_row.get(actor_name_col, '')
+        actor_norm = actor_row.get('_normalized', '')
+        
+        if not actor_norm:
+            continue
+        
+        actor_info = {
+            'idx': idx,
+            'name': actor_name,
+            'normalized': actor_norm,
+            'linkedin_url': actor_row.get('profile_url', actor_row.get('LinkedIn URL', '')),
+            'website': actor_row.get('website', actor_row.get('Website', '')),
+            'industry': actor_row.get('industry', actor_row.get('Industry', '')),
+        }
+        
+        # Check for exact normalized match
+        if actor_norm in org_lookup:
+            org_match = org_lookup[actor_norm][0]  # Take first match
+            auto_matches.append({
+                'actor': actor_info,
+                'org': org_match,
+                'similarity': 100.0,
+                'match_type': 'exact',
+            })
+            matched_org_ids.add(org_match['node_id'])
+            continue
+        
+        # Fuzzy matching - find best match
+        best_match = None
+        best_similarity = 0.0
+        
+        for org_norm, org_list in org_lookup.items():
+            similarity = calculate_similarity(actor_norm, org_norm)
+            if similarity > best_similarity and similarity >= 70.0:
+                best_similarity = similarity
+                best_match = org_list[0]
+        
+        if best_match and best_similarity >= 70.0:
+            suggested_matches.append({
+                'actor': actor_info,
+                'org': best_match,
+                'similarity': round(best_similarity, 1),
+                'match_type': 'fuzzy',
+                'confirmed': None,  # User needs to confirm
+            })
+        else:
+            unmatched_actor.append(actor_info)
+    
+    # Find unmatched OrgGraph orgs
+    unmatched_org = []
+    for idx, row in org_nodes.iterrows():
+        node_id = row.get('node_id', '')
+        if node_id not in matched_org_ids:
+            unmatched_org.append({
+                'node_id': node_id,
+                'label': row.get(org_name_col, ''),
+            })
+    
+    return {
+        'auto_matches': auto_matches,
+        'suggested_matches': suggested_matches,
+        'unmatched_actor': unmatched_actor,
+        'unmatched_org': unmatched_org,
+        'stats': {
+            'total_actor': len(actor_df),
+            'total_org': len(org_nodes),
+            'auto_matched': len(auto_matches),
+            'suggested': len(suggested_matches),
+            'unmatched_actor': len(unmatched_actor),
+            'unmatched_org': len(unmatched_org),
+        }
+    }
+
+
+def render_entity_match_review():
+    """Render the entity match review UI."""
+    matches = st.session_state.get("entity_matches", {})
+    
+    if not matches or matches.get("error"):
+        st.error(f"❌ {matches.get('error', 'No matches found')}")
+        return
+    
+    stats = matches.get('stats', {})
+    auto_matches = matches.get('auto_matches', [])
+    suggested_matches = matches.get('suggested_matches', [])
+    unmatched_actor = matches.get('unmatched_actor', [])
+    
+    st.divider()
+    st.markdown("### Match Results")
+    
+    # Summary metrics
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("✅ Auto-matched", stats.get('auto_matched', 0))
+    col2.metric("🔶 Review needed", stats.get('suggested', 0))
+    col3.metric("❌ Unmatched (Actor)", stats.get('unmatched_actor', 0))
+    col4.metric("📊 Total OrgGraph", stats.get('total_org', 0))
+    
+    # Auto-matches (collapsed by default)
+    if auto_matches:
+        with st.expander(f"✅ Auto-matched ({len(auto_matches)})", expanded=False):
+            for match in auto_matches[:20]:  # Show first 20
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.markdown(f"**{match['actor']['name']}**")
+                with col2:
+                    st.markdown(f"↔ {match['org']['label']}")
+            if len(auto_matches) > 20:
+                st.caption(f"...and {len(auto_matches) - 20} more")
+    
+    # Suggested matches (need review)
+    if suggested_matches:
+        st.markdown(f"**🔶 Review Suggested Matches ({len(suggested_matches)})**")
+        
+        # Initialize confirmation state
+        if "match_confirmations" not in st.session_state:
+            st.session_state.match_confirmations = {}
+        
+        for i, match in enumerate(suggested_matches[:15]):  # Show first 15
+            col1, col2, col3, col4 = st.columns([3, 3, 1, 1])
+            
+            with col1:
+                st.markdown(f"**{match['actor']['name']}**")
+                if match['actor'].get('industry'):
+                    st.caption(match['actor']['industry'])
+            
+            with col2:
+                st.markdown(f"↔ {match['org']['label']}")
+                st.caption(f"{match['similarity']}% similar")
+            
+            with col3:
+                if st.button("✓", key=f"confirm_{i}", help="Confirm match"):
+                    st.session_state.match_confirmations[i] = True
+                    st.rerun()
+            
+            with col4:
+                if st.button("✗", key=f"reject_{i}", help="Reject match"):
+                    st.session_state.match_confirmations[i] = False
+                    st.rerun()
+            
+            # Show confirmation status
+            if i in st.session_state.match_confirmations:
+                status = "✅ Confirmed" if st.session_state.match_confirmations[i] else "❌ Rejected"
+                st.caption(status)
+        
+        if len(suggested_matches) > 15:
+            st.caption(f"...and {len(suggested_matches) - 15} more to review")
+    
+    # Unmatched ActorGraph orgs
+    if unmatched_actor:
+        with st.expander(f"❌ Unmatched ActorGraph ({len(unmatched_actor)})", expanded=False):
+            for org in unmatched_actor[:20]:
+                st.markdown(f"• {org['name']}")
+            if len(unmatched_actor) > 20:
+                st.caption(f"...and {len(unmatched_actor) - 20} more")
+    
+    st.divider()
+    
+    # Action buttons
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        if st.button("🔗 Create Linked Network", type="primary", use_container_width=True):
+            # Build linked network from confirmed matches
+            linked_data = create_linked_network()
+            if linked_data and not linked_data.get("error"):
+                st.session_state.cloud_project_data = linked_data
+                st.session_state.current_project_id = f"cloud:linked-network"
+                st.session_state.project_data = None
+                st.session_state.merged_projects = None
+                st.success(f"✅ Created linked network: {linked_data['node_count']} nodes, {linked_data['edge_count']} edges")
+                st.rerun()
+            else:
+                st.error(f"❌ {linked_data.get('error', 'Failed to create linked network')}")
+    
+    with col2:
+        if st.button("🗑️ Clear Matches", use_container_width=True):
+            st.session_state.entity_matches = None
+            st.session_state.match_confirmations = {}
+            st.rerun()
+
+
+def create_linked_network() -> dict:
+    """
+    Create a linked network from confirmed matches.
+    
+    Combines OrgGraph data with ActorGraph metadata for matched orgs.
+    """
+    matches = st.session_state.get("entity_matches", {})
+    confirmations = st.session_state.get("match_confirmations", {})
+    org_data = st.session_state.get("link_org_data", {})
+    actor_data = st.session_state.get("link_actor_data", {})
+    
+    if not org_data or not actor_data:
+        return {"error": "Missing project data"}
+    
+    # Start with OrgGraph data as base
+    nodes_df = org_data.get("nodes_df")
+    edges_df = org_data.get("edges_df")
+    grants_df = org_data.get("grants_df")
+    
+    if nodes_df is None:
+        return {"error": "No nodes data"}
+    
+    nodes_df = nodes_df.copy()
+    
+    # Add LinkedIn columns if not present
+    if 'linkedin_url' not in nodes_df.columns:
+        nodes_df['linkedin_url'] = None
+    if 'linkedin_industry' not in nodes_df.columns:
+        nodes_df['linkedin_industry'] = None
+    if 'linkedin_website' not in nodes_df.columns:
+        nodes_df['linkedin_website'] = None
+    if 'linkedin_matched' not in nodes_df.columns:
+        nodes_df['linkedin_matched'] = False
+    
+    # Apply auto-matches
+    auto_matches = matches.get('auto_matches', [])
+    for match in auto_matches:
+        org_node_id = match['org']['node_id']
+        actor_info = match['actor']
+        
+        mask = nodes_df['node_id'] == org_node_id
+        if mask.any():
+            nodes_df.loc[mask, 'linkedin_url'] = actor_info.get('linkedin_url')
+            nodes_df.loc[mask, 'linkedin_industry'] = actor_info.get('industry')
+            nodes_df.loc[mask, 'linkedin_website'] = actor_info.get('website')
+            nodes_df.loc[mask, 'linkedin_matched'] = True
+    
+    # Apply confirmed suggested matches
+    suggested_matches = matches.get('suggested_matches', [])
+    for i, match in enumerate(suggested_matches):
+        if confirmations.get(i) == True:  # Explicitly confirmed
+            org_node_id = match['org']['node_id']
+            actor_info = match['actor']
+            
+            mask = nodes_df['node_id'] == org_node_id
+            if mask.any():
+                nodes_df.loc[mask, 'linkedin_url'] = actor_info.get('linkedin_url')
+                nodes_df.loc[mask, 'linkedin_industry'] = actor_info.get('industry')
+                nodes_df.loc[mask, 'linkedin_website'] = actor_info.get('website')
+                nodes_df.loc[mask, 'linkedin_matched'] = True
+    
+    # Count matches
+    match_count = nodes_df['linkedin_matched'].sum()
+    
+    # Build result
+    actor_project = st.session_state.get("link_actor_project")
+    org_project = st.session_state.get("link_org_project")
+    
+    return {
+        "project_id": f"linked-{org_project.slug if org_project else 'network'}",
+        "source_app": "linked",
+        "name": f"Linked: {org_project.name if org_project else 'Network'} + {actor_project.name if actor_project else 'LinkedIn'}",
+        "node_count": len(nodes_df),
+        "edge_count": len(edges_df) if edges_df is not None else 0,
+        "nodes_df": nodes_df,
+        "edges_df": edges_df,
+        "grants_df": grants_df,
+        "has_grants_detail": grants_df is not None and not grants_df.empty,
+        "has_region_data": org_data.get("has_region_data", False),
+        "manifest": {
+            "linked": True,
+            "source_projects": [
+                actor_project.slug if actor_project else "actorgraph",
+                org_project.slug if org_project else "orggraph",
+            ],
+            "match_stats": {
+                "auto_matched": len(auto_matches),
+                "confirmed": sum(1 for v in confirmations.values() if v == True),
+                "rejected": sum(1 for v in confirmations.values() if v == False),
+                "total_linked": int(match_count),
             }
         },
     }
@@ -2146,10 +2556,10 @@ def main():
                 if "cloud_project_selections" not in st.session_state:
                     st.session_state.cloud_project_selections = {}
                 
-                # Mode toggle: Single vs Merge
+                # Mode toggle: Single vs Merge vs Link
                 load_mode = st.radio(
                     "Load mode",
-                    ["📄 Single Project", "🔀 Merge Multiple"],
+                    ["📄 Single Project", "🔀 Merge Multiple", "🔗 Link Entities"],
                     horizontal=True,
                     key="cloud_load_mode"
                 )
@@ -2205,7 +2615,7 @@ def main():
                                     st.success(f"✅ Loaded {selected_cloud.name}")
                                     st.rerun()
                 
-                else:
+                elif load_mode == "🔀 Merge Multiple":
                     # Multi-select with checkboxes
                     st.markdown("**Select projects to merge:**")
                     
@@ -2277,6 +2687,103 @@ def main():
                                     st.session_state.merged_projects = [p.slug for p in selected_projects]
                                     st.success(f"✅ Merged {len(selected_projects)} projects: {merged_data['node_count']} nodes, {merged_data['edge_count']} edges")
                                     st.rerun()
+                
+                elif load_mode == "🔗 Link Entities":
+                    # Link ActorGraph orgs to OrgGraph funders/grantees
+                    st.markdown("**Link ActorGraph organizations to OrgGraph funders/grantees**")
+                    st.caption("Match LinkedIn company data to foundation network organizations.")
+                    
+                    # Separate projects by source type
+                    actorgraph_projects = [p for p in cloud_projects if p.source_app == 'actorgraph']
+                    orggraph_projects = [p for p in cloud_projects if p.source_app in ('orggraph_us', 'orggraph_ca', 'insightgraph')]
+                    
+                    if not actorgraph_projects:
+                        st.warning("No ActorGraph projects found. Save a company crawl from ActorGraph first.")
+                    elif not orggraph_projects:
+                        st.warning("No OrgGraph projects found. Save a project from OrgGraph first.")
+                    else:
+                        col1, col2 = st.columns(2)
+                        
+                        with col1:
+                            st.markdown("**🕸️ ActorGraph (LinkedIn)**")
+                            actor_options = []
+                            for p in actorgraph_projects:
+                                label = f"{p.name} ({p.node_count} orgs)"
+                                actor_options.append((p.id, label, p))
+                            
+                            selected_actor_label = st.selectbox(
+                                "Select ActorGraph project",
+                                [opt[1] for opt in actor_options],
+                                key="link_actor_select",
+                                label_visibility="collapsed"
+                            )
+                            
+                            selected_actor = None
+                            for opt in actor_options:
+                                if opt[1] == selected_actor_label:
+                                    selected_actor = opt[2]
+                                    break
+                        
+                        with col2:
+                            st.markdown("**🏛️ OrgGraph (Funders/Grantees)**")
+                            org_options = []
+                            for p in orggraph_projects:
+                                icon = source_icons.get(p.source_app, '📦')
+                                label = f"{icon} {p.name} ({p.node_count} nodes)"
+                                org_options.append((p.id, label, p))
+                            
+                            selected_org_label = st.selectbox(
+                                "Select OrgGraph project",
+                                [opt[1] for opt in org_options],
+                                key="link_org_select",
+                                label_visibility="collapsed"
+                            )
+                            
+                            selected_org = None
+                            for opt in org_options:
+                                if opt[1] == selected_org_label:
+                                    selected_org = opt[2]
+                                    break
+                        
+                        st.divider()
+                        
+                        if selected_actor and selected_org:
+                            # Show selection summary
+                            col1, col2 = st.columns(2)
+                            with col1:
+                                st.metric("ActorGraph Orgs", selected_actor.node_count)
+                            with col2:
+                                st.metric("OrgGraph Nodes", selected_org.node_count)
+                            
+                            # Find Matches button
+                            if st.button("🔍 Find Matches", type="primary", use_container_width=True):
+                                with st.spinner("🔍 Analyzing organizations for matches..."):
+                                    # Load both projects
+                                    actor_data = load_cloud_project(project_id=selected_actor.id)
+                                    org_data = load_cloud_project(project_id=selected_org.id)
+                                    
+                                    if actor_data.get("error"):
+                                        st.error(f"❌ Failed to load ActorGraph: {actor_data['error']}")
+                                    elif org_data.get("error"):
+                                        st.error(f"❌ Failed to load OrgGraph: {org_data['error']}")
+                                    else:
+                                        # Find matches
+                                        matches = find_entity_matches(
+                                            actor_data.get("nodes_df"),
+                                            org_data.get("nodes_df")
+                                        )
+                                        
+                                        # Store in session state for review
+                                        st.session_state.entity_matches = matches
+                                        st.session_state.link_actor_data = actor_data
+                                        st.session_state.link_org_data = org_data
+                                        st.session_state.link_actor_project = selected_actor
+                                        st.session_state.link_org_project = selected_org
+                                        st.rerun()
+                            
+                            # Show match results if available
+                            if st.session_state.get("entity_matches"):
+                                render_entity_match_review()
     
     # -------------------------------------------------------------------------
     # MANAGE PROJECTS TAB
