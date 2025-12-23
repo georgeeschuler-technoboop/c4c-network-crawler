@@ -6,6 +6,11 @@ Reads exported data from OrgGraph US/CA projects.
 
 VERSION HISTORY:
 ----------------
+UPDATED v0.15.5: Overlap Analysis in Reports
+- NEW: Overlap analysis now included in markdown report for linked projects
+- NEW: Overlap analysis stored in manifest for persistence
+- Report includes: overlap summary table, match statistics, interpretation, strategic implications
+
 UPDATED v0.15.4: Strategic Network Overlap Analysis
 - UPGRADED: Interpretation tiers now signal action, not just status
   - High (≥70%): "Structural Alignment" — risk of groupthink/incumbency
@@ -172,7 +177,7 @@ from c4c_utils.c4c_supabase import C4CSupabase
 # Config
 # =============================================================================
 
-APP_VERSION = "0.15.4"  # Phase 4: Strategic Network Overlap Analysis
+APP_VERSION = "0.15.5"  # Phase 4: Overlap Analysis in Reports
 C4C_LOGO_URL = "https://static.wixstatic.com/media/275a3f_9c48d5079fcf4b688606c81d8f34d5a5~mv2.jpg"
 INSIGHTGRAPH_ICON_URL = "https://static.wixstatic.com/media/275a3f_7736e28c9f5e40c1b2407e09dc5cb6e7~mv2.png"
 
@@ -1478,6 +1483,29 @@ def create_linked_network() -> dict:
     # Count matches
     match_count = nodes_df['linkedin_matched'].sum()
     
+    # Calculate overlap analysis
+    stats = matches.get('stats', {})
+    total_actor = stats.get('total_actor', 0)
+    auto_matched_count = len(auto_matches)
+    suggested_count = len(suggested_matches)
+    potential_matches = auto_matched_count + suggested_count
+    
+    # Configurable thresholds (same as UI)
+    OVERLAP_HIGH_THRESHOLD = 70
+    OVERLAP_MODERATE_THRESHOLD = 40
+    
+    overlap_pct = (potential_matches / total_actor * 100) if total_actor > 0 else 0
+    
+    if overlap_pct >= OVERLAP_HIGH_THRESHOLD:
+        overlap_level = "High"
+        overlap_signal = "Structural Alignment"
+    elif overlap_pct >= OVERLAP_MODERATE_THRESHOLD:
+        overlap_level = "Moderate"
+        overlap_signal = "Partial Alignment"
+    else:
+        overlap_level = "Low"
+        overlap_signal = "Structural Disconnect"
+    
     # Build result
     actor_project = st.session_state.get("link_actor_project")
     org_project = st.session_state.get("link_org_project")
@@ -1500,10 +1528,19 @@ def create_linked_network() -> dict:
                 org_project.slug if org_project else "orggraph",
             ],
             "match_stats": {
-                "auto_matched": len(auto_matches),
+                "auto_matched": auto_matched_count,
                 "confirmed": sum(1 for v in confirmations.values() if v == True),
                 "rejected": sum(1 for v in confirmations.values() if v == False),
                 "total_linked": int(match_count),
+            },
+            "overlap_analysis": {
+                "overlap_pct": round(overlap_pct, 1),
+                "overlap_level": overlap_level,
+                "overlap_signal": overlap_signal,
+                "total_actor_orgs": total_actor,
+                "total_org_orgs": stats.get('total_org', 0),
+                "potential_matches": potential_matches,
+                "unmatched_actor": stats.get('unmatched_actor', 0),
             }
         },
     }
@@ -2586,12 +2623,16 @@ def compute_insights(project: dict, project_id: str) -> dict:
 
 
 def compute_insights_from_dataframes(nodes_df: pd.DataFrame, edges_df: pd.DataFrame, 
-                                      grants_df: pd.DataFrame, project_id: str) -> dict:
+                                      grants_df: pd.DataFrame, project_id: str,
+                                      manifest: dict = None) -> dict:
     """
     Compute insights from dataframes directly (for cloud projects).
     
     This is used when loading from cloud storage where we have dataframes
     but no file paths.
+    
+    Args:
+        manifest: Optional manifest dict that may contain overlap_analysis for linked projects
     """
     run_module = load_run_module()
     if not run_module:
@@ -2646,6 +2687,88 @@ def compute_insights_from_dataframes(nodes_df: pd.DataFrame, edges_df: pd.DataFr
             markdown_report = run_module.generate_markdown_report(
                 insight_cards, project_summary, project_id, roles_region_summary
             )
+            
+            # Add overlap analysis section if this is a linked project
+            if manifest and manifest.get("overlap_analysis"):
+                overlap = manifest["overlap_analysis"]
+                match_stats = manifest.get("match_stats", {})
+                
+                overlap_section = f"""
+
+---
+
+## 🔗 Network Overlap Analysis
+
+*Are the organizations shaping this ecosystem also connected to formal funding flows?*
+
+### Overlap Summary
+
+| Metric | Value |
+|--------|-------|
+| **Overlap** | {overlap.get('overlap_pct', 0):.1f}% |
+| **Signal** | {overlap.get('overlap_signal', 'Unknown')} |
+| **Influence Network Orgs** | {overlap.get('total_actor_orgs', 0)} |
+| **Funding Network Orgs** | {overlap.get('total_org_orgs', 0)} |
+| **Potential Matches** | {overlap.get('potential_matches', 0)} |
+| **Unmatched (Influence)** | {overlap.get('unmatched_actor', 0)} |
+
+### Match Statistics
+
+| Metric | Count |
+|--------|-------|
+| Auto-matched | {match_stats.get('auto_matched', 0)} |
+| User Confirmed | {match_stats.get('confirmed', 0)} |
+| User Rejected | {match_stats.get('rejected', 0)} |
+| **Total Linked** | {match_stats.get('total_linked', 0)} |
+
+### Interpretation
+
+"""
+                # Add interpretation based on level
+                level = overlap.get('overlap_level', 'Unknown')
+                if level == "High":
+                    overlap_section += """**Structural Alignment** — Coalition activity is well-resourced and institutionally supported. 
+Funding reinforces existing influence pathways. 
+
+*Risk:* Potential for groupthink or incumbency bias — emergent voices may be crowded out.
+"""
+                elif level == "Moderate":
+                    overlap_section += """**Partial Alignment** — A hybrid ecosystem where momentum is not fully matched by capital.
+
+Some influential organizations may be under-resourced relative to their network role. 
+Funding may be reinforcing established actors rather than emergent ones.
+"""
+                else:
+                    overlap_section += """**Structural Disconnect** — Influence and funding are decoupled. 
+The coalition relies on under-resourced actors operating outside formal funding streams.
+
+*Opportunity:* High leverage for first-mover funders willing to support this space.
+"""
+                
+                # Add strategic implications
+                overlap_section += """
+### Strategic Implications
+
+**For Funders:**
+- Unmatched organizations represent potential early-signal funding opportunities
+- Check for over-concentration on "usual suspects"
+- Key question: *Are we funding the organizations that actually move the system?*
+
+**For Coalitions:**
+- Identify high-centrality, low-funding organizations at risk of burnout
+- Assess power asymmetry: who coordinates vs who controls resources
+- Key question: *Which parts of our network are carrying disproportionate load without capital?*
+
+**For Intermediaries:**
+- Target brokerage or fiscal mechanisms to bridge funding gaps
+- Identify translation gaps where structure/form blocks funding access
+- Key question: *Where would a small structural intervention unlock outsized impact?*
+
+---
+
+*This analysis surfaces structural patterns, not recommendations. Interpretation requires context.*
+"""
+                markdown_report += overlap_section
             
             return {
                 "project_id": project_id,
@@ -3193,7 +3316,8 @@ def main():
                     inputs.get("nodes_df"),
                     inputs.get("edges_df"),
                     inputs.get("grants_df"),
-                    selected_id
+                    selected_id,
+                    manifest=inputs.get("manifest")
                 )
                 # Preserve cloud: prefix for session state
                 session_project_id = f"cloud:{selected_id}"
