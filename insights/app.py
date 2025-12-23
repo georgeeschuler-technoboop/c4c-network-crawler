@@ -1620,8 +1620,8 @@ def compute_insights_from_dataframes(nodes_df: pd.DataFrame, edges_df: pd.DataFr
             flow_stats = run_module.compute_flow_stats(edges_df, metrics_df)
             overlap_df = run_module.compute_portfolio_overlap(edges_df)
             
-            # Roles × Region Lens - use empty config for cloud projects
-            lens_config = None
+            # Roles × Region Lens - use disabled config for cloud projects
+            lens_config = {'enabled': False}
             nodes_with_roles = run_module.derive_network_roles(nodes_df.copy(), edges_df)
             nodes_with_lens = run_module.compute_region_lens_membership(nodes_with_roles, lens_config)
             roles_region_summary = run_module.generate_roles_region_summary(nodes_with_lens, edges_df, lens_config)
