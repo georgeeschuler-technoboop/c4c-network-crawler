@@ -6,6 +6,13 @@ Reads exported data from OrgGraph US/CA projects.
 
 VERSION HISTORY:
 ----------------
+UPDATED v0.13.1: Save merged projects to cloud
+- NEW: "Save Merged to Cloud" button in Downloads section
+- Enter custom name for merged project
+- Bundle includes nodes, edges, grants, and analysis artifacts
+- source_app="insightgraph" for merged projects
+- Manifest tracks source_projects list
+
 UPDATED v0.13.0: Phase 3 - Multi-project merge
 - NEW: "Merge Multiple" mode in Cloud Projects tab
 - Select 2+ projects with checkboxes to merge
@@ -119,7 +126,7 @@ from c4c_utils.c4c_supabase import C4CSupabase
 # Config
 # =============================================================================
 
-APP_VERSION = "0.13.0"  # Phase 3: Multi-project merge
+APP_VERSION = "0.13.1"  # Phase 3: Multi-project merge + save merged
 C4C_LOGO_URL = "https://static.wixstatic.com/media/275a3f_9c48d5079fcf4b688606c81d8f34d5a5~mv2.jpg"
 INSIGHTGRAPH_ICON_URL = "https://static.wixstatic.com/media/275a3f_7736e28c9f5e40c1b2407e09dc5cb6e7~mv2.png"
 
@@ -653,7 +660,7 @@ def list_cloud_projects():
     
     # Get projects from all source apps
     all_projects = []
-    for source_app in ['orggraph_us', 'orggraph_ca', 'actorgraph']:
+    for source_app in ['orggraph_us', 'orggraph_ca', 'actorgraph', 'insightgraph']:
         projects, error = client.list_projects(source_app=source_app, include_public=True)
         if projects:
             all_projects.extend(projects)
@@ -884,6 +891,95 @@ def merge_cloud_projects(projects: list) -> dict:
             }
         },
     }
+
+
+def save_merged_to_cloud(name: str, data: dict, source_projects: list) -> tuple:
+    """
+    Save a merged project bundle to cloud storage.
+    
+    Args:
+        name: Project name
+        data: Dict with nodes_df, edges_df, grants_df, etc.
+        source_projects: List of source project slugs
+    
+    Returns:
+        Tuple of (success: bool, message: str, slug: str or None)
+    """
+    client = get_project_store_authenticated()
+    if not client:
+        return False, "Not authenticated", None
+    
+    # Create ZIP bundle
+    zip_buffer = BytesIO()
+    
+    try:
+        from datetime import datetime, timezone
+        
+        with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
+            # Create manifest
+            manifest = {
+                "schema_version": "c4c_coregraph_v1",
+                "bundle_version": "1.0",
+                "source_app": "insightgraph_merged",
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "merged": True,
+                "source_projects": source_projects,
+                "node_count": len(data.get("nodes_df", [])) if data.get("nodes_df") is not None else 0,
+                "edge_count": len(data.get("edges_df", [])) if data.get("edges_df") is not None else 0,
+            }
+            zf.writestr("manifest.json", json.dumps(manifest, indent=2))
+            
+            # Write nodes.csv
+            if data.get("nodes_df") is not None and not data["nodes_df"].empty:
+                zf.writestr("nodes.csv", data["nodes_df"].to_csv(index=False))
+            
+            # Write edges.csv
+            if data.get("edges_df") is not None and not data["edges_df"].empty:
+                zf.writestr("edges.csv", data["edges_df"].to_csv(index=False))
+            
+            # Write grants_detail.csv
+            if data.get("grants_df") is not None and not data["grants_df"].empty:
+                zf.writestr("grants_detail.csv", data["grants_df"].to_csv(index=False))
+            
+            # Write analysis artifacts if present
+            if data.get("insight_cards"):
+                zf.writestr("analysis/insight_cards.json", json.dumps(data["insight_cards"], indent=2))
+            if data.get("project_summary"):
+                zf.writestr("analysis/project_summary.json", json.dumps(data["project_summary"], indent=2))
+            if data.get("markdown_report"):
+                zf.writestr("analysis/insight_report.md", data["markdown_report"])
+            if data.get("metrics_df") is not None and not data["metrics_df"].empty:
+                zf.writestr("analysis/node_metrics.csv", data["metrics_df"].to_csv(index=False))
+        
+        zip_buffer.seek(0)
+        bundle_data = zip_buffer.getvalue()
+        
+        # Calculate counts
+        node_count = len(data.get("nodes_df", [])) if data.get("nodes_df") is not None else 0
+        edge_count = len(data.get("edges_df", [])) if data.get("edges_df") is not None else 0
+        
+        # Save to Project Store
+        project, error = client.save_project(
+            name=name,
+            bundle_data=bundle_data,
+            source_app="insightgraph",  # Use insightgraph as source for merged
+            node_count=node_count,
+            edge_count=edge_count,
+            jurisdiction=None,  # Merged projects may span jurisdictions
+            region_preset=None,
+            app_version=APP_VERSION,
+            schema_version="c4c_coregraph_v1",
+            bundle_version="1.0",
+            description=f"Merged from: {', '.join(source_projects)}"
+        )
+        
+        if error:
+            return False, f"Upload failed: {error}", None
+        
+        return True, f"Saved as '{project.slug}'", project.slug
+        
+    except Exception as e:
+        return False, f"Failed to create bundle: {str(e)}", None
 
 
 def render_cloud_status():
@@ -1599,18 +1695,59 @@ def render_downloads(data: dict):
                 help="Source markdown file"
             )
     
-    # Cloud save option (disabled - InsightGraph is a consumer, not producer)
-    # Note: InsightGraph loads bundles from OrgGraph/ActorGraph via Project Store
-    # Saving InsightGraph artifacts back to cloud could be added in a future release
+    # Cloud save option for merged projects
+    is_merged = st.session_state.get("merged_projects") is not None
+    client = get_project_store_authenticated()
+    cloud_enabled = client is not None
     
-    col_cloud1, col_cloud2 = st.columns([2, 1])
-    with col_cloud1:
-        st.button("☁️ Save to Cloud",
-                  disabled=True,
-                  use_container_width=True,
-                  help="Coming soon: save InsightGraph artifacts to cloud")
-    with col_cloud2:
-        st.caption("☁️ Coming soon")
+    if is_merged and cloud_enabled:
+        st.divider()
+        st.markdown("**☁️ Save Merged Project to Cloud**")
+        st.caption("Save this merged dataset to cloud for quick access later.")
+        
+        # Get default name from merged sources
+        merged_slugs = st.session_state.get("merged_projects", [])
+        default_name = f"Merged: {' + '.join(merged_slugs[:2])}"
+        if len(merged_slugs) > 2:
+            default_name += f" (+{len(merged_slugs) - 2})"
+        
+        col_name, col_btn = st.columns([3, 1])
+        
+        with col_name:
+            merged_name = st.text_input(
+                "Project name",
+                value=default_name,
+                key="merged_project_name",
+                label_visibility="collapsed",
+                placeholder="Enter name for merged project"
+            )
+        
+        with col_btn:
+            if st.button("☁️ Save", type="primary", use_container_width=True):
+                if merged_name:
+                    with st.spinner("☁️ Saving merged project..."):
+                        success, message, slug = save_merged_to_cloud(
+                            name=merged_name,
+                            data=data,
+                            source_projects=merged_slugs
+                        )
+                        if success:
+                            st.success(f"✅ {message}")
+                        else:
+                            st.error(f"❌ {message}")
+                else:
+                    st.warning("Enter a name for the merged project")
+    
+    elif not is_merged:
+        # Not a merged project - show disabled button
+        col_cloud1, col_cloud2 = st.columns([2, 1])
+        with col_cloud1:
+            st.button("☁️ Save to Cloud",
+                      disabled=True,
+                      use_container_width=True,
+                      help="Only available for merged projects")
+        with col_cloud2:
+            st.caption("☁️ Merge projects first")
     
     # Individual files
     st.caption("Individual data files:")
@@ -1922,6 +2059,7 @@ def main():
                     'orggraph_us': '🇺🇸',
                     'orggraph_ca': '🇨🇦',
                     'actorgraph': '🕸️',
+                    'insightgraph': '🔀',  # Merged projects
                 }
                 
                 # Initialize selection state
