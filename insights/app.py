@@ -6,6 +6,11 @@ Reads exported data from OrgGraph US/CA projects.
 
 VERSION HISTORY:
 ----------------
+UPDATED v0.12.1: Disabled legacy Save to Cloud button
+- FIX: Removed broken save_artifacts_to_cloud call (incompatible with Phase 2 schema)
+- InsightGraph is a consumer - loads bundles from OrgGraph/ActorGraph
+- Saving artifacts to cloud may be added in future release
+
 UPDATED v0.12.0: Phase 2 - Load from Cloud
 - NEW: "Load from Cloud" tab in Project section
 - Lists all cloud projects from OrgGraph US, CA, and ActorGraph
@@ -106,7 +111,7 @@ from c4c_utils.c4c_supabase import C4CSupabase
 # Config
 # =============================================================================
 
-APP_VERSION = "0.12.0"  # Phase 2: Load from Cloud
+APP_VERSION = "0.12.1"  # Phase 2: Load from Cloud + disabled legacy save
 C4C_LOGO_URL = "https://static.wixstatic.com/media/275a3f_9c48d5079fcf4b688606c81d8f34d5a5~mv2.jpg"
 INSIGHTGRAPH_ICON_URL = "https://static.wixstatic.com/media/275a3f_7736e28c9f5e40c1b2407e09dc5cb6e7~mv2.png"
 
@@ -1437,22 +1442,18 @@ def render_downloads(data: dict):
                 help="Source markdown file"
             )
     
-    # Cloud save option
-    db = st.session_state.get("supabase_db")
-    cloud_enabled = db and db.is_authenticated
+    # Cloud save option (disabled - InsightGraph is a consumer, not producer)
+    # Note: InsightGraph loads bundles from OrgGraph/ActorGraph via Project Store
+    # Saving InsightGraph artifacts back to cloud could be added in a future release
     
     col_cloud1, col_cloud2 = st.columns([2, 1])
     with col_cloud1:
-        if st.button("☁️ Save to Cloud",
-                    disabled=not cloud_enabled,
-                    use_container_width=True,
-                    help="Login to enable cloud save" if not cloud_enabled else "Save artifacts to Supabase"):
-            save_artifacts_to_cloud(data["project_id"], data)
+        st.button("☁️ Save to Cloud",
+                  disabled=True,
+                  use_container_width=True,
+                  help="Coming soon: save InsightGraph artifacts to cloud")
     with col_cloud2:
-        if not cloud_enabled:
-            st.caption("☁️ Login to enable cloud save")
-        else:
-            st.caption("☁️ Ready")
+        st.caption("☁️ Coming soon")
     
     # Individual files
     st.caption("Individual data files:")
