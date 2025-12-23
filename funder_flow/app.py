@@ -298,8 +298,7 @@ def init_project_store():
             key = st.secrets["supabase"]["key"]
             
             # Import Project Store client
-            from c4c_project_store import ProjectStoreClient
-            
+from c4c_utils.c4c_project_store import ProjectStoreClient            
             client = ProjectStoreClient(url, key)
             st.session_state.project_store = client
         except ImportError:
