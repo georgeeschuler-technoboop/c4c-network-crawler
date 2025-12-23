@@ -1816,7 +1816,8 @@ def main():
     # -------------------------------------------------------------------------
     # Check for loaded cloud project in session state
     # -------------------------------------------------------------------------
-    if (st.session_state.get("current_project_id", "").startswith("cloud:") and 
+    current_proj_id = st.session_state.get("current_project_id") or ""
+    if (current_proj_id.startswith("cloud:") and 
         st.session_state.get("cloud_project_data")):
         
         cloud_data = st.session_state.cloud_project_data
@@ -1903,7 +1904,7 @@ def main():
                 st.rerun()
     
     # Check if we have data from session state
-    current_id = st.session_state.get("current_project_id", "")
+    current_id = st.session_state.get("current_project_id") or ""
     if st.session_state.get("project_data") and current_id == selected_id:
         data = st.session_state.project_data
         # Make sure grants_df is included from inputs
