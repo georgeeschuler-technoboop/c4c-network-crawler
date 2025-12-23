@@ -8,9 +8,18 @@ Part of the C4C Network Intelligence Platform.
 """
 
 import sys
+import os
 from pathlib import Path
+
 # Ensure repo root is in path for c4c_utils import
-sys.path.insert(0, str(Path(__file__).parent))
+# ActorGraph is at repo root, so add current directory
+_APP_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(_APP_DIR))
+
+# Also try adding via os.path for compatibility
+_APP_DIR_OS = os.path.dirname(os.path.abspath(__file__))
+if _APP_DIR_OS not in sys.path:
+    sys.path.insert(0, _APP_DIR_OS)
 
 import streamlit as st
 import pandas as pd
@@ -36,9 +45,10 @@ import plotly.graph_objects as go
 # APP VERSION
 # ============================================================================
 
-APP_VERSION = "0.5.3"
+APP_VERSION = "0.5.4"
 
 VERSION_HISTORY = [
+    "FIXED v0.5.4: Enhanced path handling for c4c_utils; added logo via st.image; better error messages",
     "FIXED v0.5.3: Moved cloud login to top of sidebar for consistency with other apps",
     "FIXED v0.5.2: Added sys.path fix for c4c_utils import on Streamlit Cloud",
     "FIXED v0.5.1: Restored CSV upload for seed profiles; added app icon; improved cloud login visibility",
@@ -135,10 +145,16 @@ def init_project_store():
             
             client = ProjectStoreClient(url, key)
             st.session_state.project_store = client
-        except ImportError:
+            st.session_state.project_store_error = None
+        except ImportError as e:
             st.session_state.project_store = None
+            st.session_state.project_store_error = f"ImportError: {e}"
+        except KeyError as e:
+            st.session_state.project_store = None
+            st.session_state.project_store_error = f"Missing secret: {e}"
         except Exception as e:
             st.session_state.project_store = None
+            st.session_state.project_store_error = f"{type(e).__name__}: {e}"
     
     return st.session_state.get("project_store")
 
@@ -162,7 +178,8 @@ def render_cloud_status():
     
     if not client:
         st.sidebar.warning("☁️ Cloud unavailable")
-        st.sidebar.caption("c4c_utils package not found")
+        error = st.session_state.get("project_store_error", "Unknown error")
+        st.sidebar.caption(f"Error: {error}")
         st.sidebar.markdown("---")
         return None
     
@@ -1677,12 +1694,20 @@ def create_brokerage_role_chart(brokerage_roles: Dict[str, str]) -> 'go.Figure':
 def main():
     st.set_page_config(
         page_title="ActorGraph", 
-        page_icon="https://static.wixstatic.com/media/275a3f_87490929c29444a99f948f1e12cac9a8~mv2.png", 
+        page_icon="🕸️",  # Emoji for browser tab
         layout="wide"
     )
     
-    st.title("🕸️ ActorGraph")
-    st.markdown(f"*People and Company-centered Network Graphs* — v{APP_VERSION}")
+    # Header with logo
+    col_logo, col_title = st.columns([1, 10])
+    with col_logo:
+        st.image(
+            "https://static.wixstatic.com/media/275a3f_87490929c29444a99f948f1e12cac9a8~mv2.png",
+            width=60
+        )
+    with col_title:
+        st.title("ActorGraph")
+        st.markdown(f"*People-centered Network Graphs* — v{APP_VERSION}")
     
     # Sidebar
     with st.sidebar:
