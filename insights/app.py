@@ -6,6 +6,26 @@ Reads exported data from OrgGraph US/CA projects.
 
 VERSION HISTORY:
 ----------------
+UPDATED v0.15.4: Strategic Network Overlap Analysis
+- UPGRADED: Interpretation tiers now signal action, not just status
+  - High (≥70%): "Structural Alignment" — risk of groupthink/incumbency
+  - Moderate (40-69%): "Partial Alignment" — hybrid ecosystem
+  - Low (<40%): "Structural Disconnect" — movement before money
+- NEW: Strategic Implications tabs for Funders / Coalitions / Intermediaries
+- NEW: Downloadable CSV of unmatched organizations
+- NEW: Scrollable dataframe view for all unmatched orgs
+- REFINED: Thresholds as configurable constants
+- REFINED: "Surfaces, not judges" — clear that analysis is diagnostic, not normative
+
+UPDATED v0.15.3: Network Overlap Insights
+- NEW: Shows all suggested matches (not limited to 15)
+- NEW: Bulk actions: "Confirm All" / "Reject All" buttons
+- NEW: Undo button for individual confirmations
+- NEW: Network Overlap Analysis section with strategic interpretation
+- Calculates overlap percentage between networks
+- Provides context: High/Moderate/Low alignment meanings
+- Strategic implications for unmatched organizations
+
 UPDATED v0.15.2: Entity Linking Column Fix
 - FIXED: Now detects 'label' column from CoreGraph schema (not just 'name')
 - Checks multiple possible column names for flexibility
@@ -152,7 +172,7 @@ from c4c_utils.c4c_supabase import C4CSupabase
 # Config
 # =============================================================================
 
-APP_VERSION = "0.15.2"  # Phase 4: Entity Linking + Stats Display + Column Fix
+APP_VERSION = "0.15.4"  # Phase 4: Strategic Network Overlap Analysis
 C4C_LOGO_URL = "https://static.wixstatic.com/media/275a3f_9c48d5079fcf4b688606c81d8f34d5a5~mv2.jpg"
 INSIGHTGRAPH_ICON_URL = "https://static.wixstatic.com/media/275a3f_7736e28c9f5e40c1b2407e09dc5cb6e7~mv2.png"
 
@@ -1152,6 +1172,113 @@ def render_entity_match_review():
     col3.metric("❌ Unmatched (Actor)", stats.get('unmatched_actor', 0))
     col4.metric("📊 Total OrgGraph", stats.get('total_org', 0))
     
+    # Calculate overlap metrics
+    total_actor = stats.get('total_actor', 0)
+    total_org = stats.get('total_org', 0)
+    auto_matched = stats.get('auto_matched', 0)
+    suggested = stats.get('suggested', 0)
+    potential_matches = auto_matched + suggested
+    unmatched_actor_count = stats.get('unmatched_actor', 0)
+    
+    # Configurable thresholds
+    OVERLAP_HIGH_THRESHOLD = 70
+    OVERLAP_MODERATE_THRESHOLD = 40
+    
+    # Network Overlap Analysis
+    if total_actor > 0:
+        overlap_pct = (potential_matches / total_actor) * 100
+        
+        st.markdown("---")
+        st.markdown("### 🔍 Network Overlap Analysis")
+        st.caption("*Are the organizations shaping this ecosystem also connected to formal funding flows?*")
+        
+        # Determine overlap level and interpretation
+        if overlap_pct >= OVERLAP_HIGH_THRESHOLD:
+            overlap_level = "Structural Alignment"
+            overlap_color = "🟢"
+            interpretation = f"""
+There is **strong alignment** between the influence/coalition network and the foundation funding ecosystem.
+
+Coalition activity is well-resourced and institutionally supported. Funding reinforces existing influence pathways.
+
+**What this means:**
+- Most organizations shaping the field are also resourced to sustain it
+- Funders and network actors share priorities and relationships
+- *Risk:* Potential for groupthink or incumbency bias — emergent voices may be crowded out
+            """
+        elif overlap_pct >= OVERLAP_MODERATE_THRESHOLD:
+            overlap_level = "Partial Alignment"
+            overlap_color = "🟡"
+            interpretation = f"""
+There is **partial alignment** between the influence/coalition network and the foundation funding ecosystem.
+
+A core set of organizations are both influential and funded, while a significant share of network participants operate outside formal funding streams. This suggests a hybrid ecosystem where momentum is not fully matched by capital.
+
+**What this means:**
+- Some influential organizations may be under-resourced relative to their network role
+- Funding may be reinforcing established actors rather than emergent ones
+- The network likely relies on informal, corporate, or volunteer support to function
+            """
+        else:
+            overlap_level = "Structural Disconnect"
+            overlap_color = "🔴"
+            interpretation = f"""
+There is **limited alignment** between the influence/coalition network and the foundation funding ecosystem.
+
+Influence and funding are decoupled. The coalition relies on under-resourced actors operating outside formal funding streams.
+
+**What this means:**
+- High fragility — key actors may be at risk of burnout or departure
+- High leverage for first-mover funders willing to support this space
+- The field may be "movement before money" — grassroots energy awaiting institutional support
+            """
+        
+        col1, col2 = st.columns([1, 3])
+        with col1:
+            st.metric(f"{overlap_color} Overlap", f"{overlap_pct:.1f}%", overlap_level)
+        with col2:
+            st.markdown(interpretation)
+        
+        # Strategic implications by audience
+        if unmatched_actor_count > 0:
+            with st.expander("📋 Strategic Implications", expanded=True):
+                tab1, tab2, tab3 = st.tabs(["For Funders", "For Coalitions", "For Intermediaries"])
+                
+                with tab1:
+                    st.markdown(f"""
+**Blind spot detection:** {unmatched_actor_count} organizations are shaping this field but not in foundation portfolios.
+
+**Early-signal investing:** Grassroots or emergent actors gaining traction before institutional funding arrives.
+
+**Portfolio balance:** Check for over-concentration on "usual suspects."
+
+*Key question: Are we funding the organizations that actually move the system — or just the ones easiest to diligence?*
+                    """)
+                
+                with tab2:
+                    st.markdown(f"""
+**Sustainability risk:** High-centrality, low-funding organizations are at burnout risk.
+
+**Power asymmetry:** Who coordinates the work vs who controls the resources?
+
+**Growth constraints:** Why does scale stall despite network momentum?
+
+*Key question: Which parts of our network are carrying disproportionate load without capital?*
+                    """)
+                
+                with tab3:
+                    st.markdown(f"""
+**Broker opportunity mapping:** Organizations sitting between funded and unfunded clusters.
+
+**Translation gaps:** Where do language, governance, or form (501c3 vs coalition) block funding access?
+
+**Intervention design:** Fiscal sponsorship, pooled funds, regranting vehicles.
+
+*Key question: Where would a small structural intervention unlock outsized impact?*
+                    """)
+            
+            st.caption("*This analysis surfaces structural patterns, not recommendations. Interpretation requires context.*")
+    
     # Auto-matches (collapsed by default)
     if auto_matches:
         with st.expander(f"✅ Auto-matched ({len(auto_matches)})", expanded=False):
@@ -1166,49 +1293,98 @@ def render_entity_match_review():
     
     # Suggested matches (need review)
     if suggested_matches:
-        st.markdown(f"**🔶 Review Suggested Matches ({len(suggested_matches)})**")
-        
-        # Initialize confirmation state
-        if "match_confirmations" not in st.session_state:
-            st.session_state.match_confirmations = {}
-        
-        for i, match in enumerate(suggested_matches[:15]):  # Show first 15
-            col1, col2, col3, col4 = st.columns([3, 3, 1, 1])
+        with st.expander(f"🔶 Review Suggested Matches ({len(suggested_matches)})", expanded=True):
+            # Initialize confirmation state
+            if "match_confirmations" not in st.session_state:
+                st.session_state.match_confirmations = {}
             
-            with col1:
-                st.markdown(f"**{match['actor']['name']}**")
-                if match['actor'].get('industry'):
-                    st.caption(match['actor']['industry'])
-            
-            with col2:
-                st.markdown(f"↔ {match['org']['label']}")
-                st.caption(f"{match['similarity']}% similar")
-            
-            with col3:
-                if st.button("✓", key=f"confirm_{i}", help="Confirm match"):
-                    st.session_state.match_confirmations[i] = True
+            # Bulk actions
+            col_all, col_none, col_status = st.columns([1, 1, 2])
+            with col_all:
+                if st.button("✓ Confirm All", key="confirm_all_suggested"):
+                    for i in range(len(suggested_matches)):
+                        st.session_state.match_confirmations[i] = True
                     st.rerun()
-            
-            with col4:
-                if st.button("✗", key=f"reject_{i}", help="Reject match"):
-                    st.session_state.match_confirmations[i] = False
+            with col_none:
+                if st.button("✗ Reject All", key="reject_all_suggested"):
+                    for i in range(len(suggested_matches)):
+                        st.session_state.match_confirmations[i] = False
                     st.rerun()
+            with col_status:
+                confirmed = sum(1 for i in range(len(suggested_matches)) if st.session_state.match_confirmations.get(i) == True)
+                rejected = sum(1 for i in range(len(suggested_matches)) if st.session_state.match_confirmations.get(i) == False)
+                pending = len(suggested_matches) - confirmed - rejected
+                st.caption(f"✅ {confirmed} confirmed · ❌ {rejected} rejected · ⏳ {pending} pending")
             
-            # Show confirmation status
-            if i in st.session_state.match_confirmations:
-                status = "✅ Confirmed" if st.session_state.match_confirmations[i] else "❌ Rejected"
-                st.caption(status)
-        
-        if len(suggested_matches) > 15:
-            st.caption(f"...and {len(suggested_matches) - 15} more to review")
+            st.divider()
+            
+            # Show ALL matches
+            for i, match in enumerate(suggested_matches):
+                col1, col2, col3, col4 = st.columns([3, 3, 1, 1])
+                
+                with col1:
+                    st.markdown(f"**{match['actor']['name']}**")
+                    if match['actor'].get('industry'):
+                        st.caption(match['actor']['industry'])
+                
+                with col2:
+                    st.markdown(f"↔ {match['org']['label']}")
+                    st.caption(f"{match['similarity']}% similar")
+                
+                # Show status or buttons based on current state
+                if i in st.session_state.match_confirmations:
+                    status = "✅" if st.session_state.match_confirmations[i] else "❌"
+                    with col3:
+                        st.markdown(f"**{status}**")
+                    with col4:
+                        if st.button("↩️", key=f"undo_{i}", help="Undo"):
+                            del st.session_state.match_confirmations[i]
+                            st.rerun()
+                else:
+                    with col3:
+                        if st.button("✓", key=f"confirm_{i}", help="Confirm match"):
+                            st.session_state.match_confirmations[i] = True
+                            st.rerun()
+                    
+                    with col4:
+                        if st.button("✗", key=f"reject_{i}", help="Reject match"):
+                            st.session_state.match_confirmations[i] = False
+                            st.rerun()
     
-    # Unmatched ActorGraph orgs
+    # Unmatched ActorGraph orgs (with CSV download)
     if unmatched_actor:
-        with st.expander(f"❌ Unmatched ActorGraph ({len(unmatched_actor)})", expanded=False):
-            for org in unmatched_actor[:20]:
-                st.markdown(f"• {org['name']}")
-            if len(unmatched_actor) > 20:
-                st.caption(f"...and {len(unmatched_actor) - 20} more")
+        with st.expander(f"❌ Unmatched Organizations ({len(unmatched_actor)})", expanded=False):
+            st.caption("Organizations in the influence network but not found in the funding network.")
+            
+            # Create DataFrame for display and download
+            unmatched_df = pd.DataFrame(unmatched_actor)
+            display_cols = ['name']
+            if 'industry' in unmatched_df.columns:
+                display_cols.append('industry')
+            if 'linkedin_url' in unmatched_df.columns:
+                display_cols.append('linkedin_url')
+            if 'website' in unmatched_df.columns:
+                display_cols.append('website')
+            
+            # Download button
+            csv_data = unmatched_df[display_cols].to_csv(index=False)
+            st.download_button(
+                "📥 Download Unmatched List (CSV)",
+                data=csv_data,
+                file_name="unmatched_organizations.csv",
+                mime="text/csv",
+                use_container_width=True,
+                help="Use this list for outreach, research, or funding prospecting"
+            )
+            
+            st.divider()
+            
+            # Show all orgs in scrollable dataframe
+            st.dataframe(
+                unmatched_df[display_cols],
+                use_container_width=True,
+                height=300
+            )
     
     st.divider()
     
