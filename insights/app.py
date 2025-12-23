@@ -6,6 +6,13 @@ Reads exported data from OrgGraph US/CA projects.
 
 VERSION HISTORY:
 ----------------
+UPDATED v0.14.0: Phase 3B - Project Management UI
+- NEW: "⚙️ Manage" tab for cloud project management
+- View all projects with source icons and metadata
+- 🗑️ Delete projects (with confirmation)
+- ✏️ Rename projects (name only, slug preserved)
+- 🔒/🌐 Toggle public/private visibility
+
 UPDATED v0.13.1: Save merged projects to cloud
 - NEW: "Save Merged to Cloud" button in Downloads section
 - Enter custom name for merged project
@@ -126,7 +133,7 @@ from c4c_utils.c4c_supabase import C4CSupabase
 # Config
 # =============================================================================
 
-APP_VERSION = "0.13.1"  # Phase 3: Multi-project merge + save merged
+APP_VERSION = "0.14.0"  # Phase 3B: Project Management UI
 C4C_LOGO_URL = "https://static.wixstatic.com/media/275a3f_9c48d5079fcf4b688606c81d8f34d5a5~mv2.jpg"
 INSIGHTGRAPH_ICON_URL = "https://static.wixstatic.com/media/275a3f_7736e28c9f5e40c1b2407e09dc5cb6e7~mv2.png"
 
@@ -980,6 +987,78 @@ def save_merged_to_cloud(name: str, data: dict, source_projects: list) -> tuple:
         
     except Exception as e:
         return False, f"Failed to create bundle: {str(e)}", None
+
+
+def delete_cloud_project(project_id: str) -> tuple:
+    """
+    Delete a project from cloud storage.
+    
+    Returns:
+        Tuple of (success: bool, message: str)
+    """
+    client = get_project_store_authenticated()
+    if not client:
+        return False, "Not authenticated"
+    
+    try:
+        success, error = client.delete_project(project_id=project_id)
+        if success:
+            return True, "Project deleted"
+        else:
+            return False, f"Delete failed: {error}"
+    except Exception as e:
+        return False, f"Error: {str(e)}"
+
+
+def rename_project(project_id: str, new_name: str) -> tuple:
+    """
+    Rename a project (update name only, slug stays the same).
+    
+    Returns:
+        Tuple of (success: bool, message: str)
+    """
+    client = get_project_store_authenticated()
+    if not client:
+        return False, "Not authenticated"
+    
+    try:
+        # Update project name in database
+        response = client.client.table('projects').update({
+            'name': new_name
+        }).eq('id', project_id).execute()
+        
+        if response.data:
+            return True, f"Renamed to '{new_name}'"
+        else:
+            return False, "Rename failed"
+    except Exception as e:
+        return False, f"Error: {str(e)}"
+
+
+def toggle_project_public(project_id: str, is_public: bool) -> tuple:
+    """
+    Toggle project public/private visibility.
+    
+    Returns:
+        Tuple of (success: bool, message: str)
+    """
+    client = get_project_store_authenticated()
+    if not client:
+        return False, "Not authenticated"
+    
+    try:
+        # Update is_public in database
+        response = client.client.table('projects').update({
+            'is_public': is_public
+        }).eq('id', project_id).execute()
+        
+        if response.data:
+            status = "public" if is_public else "private"
+            return True, f"Project is now {status}"
+        else:
+            return False, "Update failed"
+    except Exception as e:
+        return False, f"Error: {str(e)}"
 
 
 def render_cloud_status():
@@ -1982,12 +2061,13 @@ def main():
     client = get_project_store_authenticated()
     cloud_available = client is not None
     
-    # Tabs for Local vs Cloud
+    # Tabs for Local vs Cloud vs Manage
     if cloud_available:
-        tab_local, tab_cloud = st.tabs(["📂 Local Projects", "☁️ Cloud Projects"])
+        tab_local, tab_cloud, tab_manage = st.tabs(["📂 Local Projects", "☁️ Cloud Projects", "⚙️ Manage"])
     else:
         tab_local = st.container()
         tab_cloud = None
+        tab_manage = None
     
     selected_project = None
     inputs = None
@@ -2197,6 +2277,111 @@ def main():
                                     st.session_state.merged_projects = [p.slug for p in selected_projects]
                                     st.success(f"✅ Merged {len(selected_projects)} projects: {merged_data['node_count']} nodes, {merged_data['edge_count']} edges")
                                     st.rerun()
+    
+    # -------------------------------------------------------------------------
+    # MANAGE PROJECTS TAB
+    # -------------------------------------------------------------------------
+    if tab_manage is not None:
+        with tab_manage:
+            st.caption("View, rename, delete, or share your cloud projects.")
+            
+            cloud_projects = list_cloud_projects()
+            
+            if not cloud_projects:
+                st.info("No cloud projects to manage. Save a project first.")
+            else:
+                # Source icons
+                source_icons = {
+                    'orggraph_us': '🇺🇸',
+                    'orggraph_ca': '🇨🇦',
+                    'actorgraph': '🕸️',
+                    'insightgraph': '🔀',
+                }
+                
+                # Show project count
+                st.markdown(f"**{len(cloud_projects)} project(s)**")
+                
+                # Project list with actions
+                for i, p in enumerate(cloud_projects):
+                    icon = source_icons.get(p.source_app, '📦')
+                    
+                    with st.container():
+                        col1, col2, col3, col4 = st.columns([3, 1, 1, 1])
+                        
+                        with col1:
+                            # Project name and details
+                            st.markdown(f"{icon} **{p.name}**")
+                            st.caption(f"{p.node_count} nodes · {p.edge_count} edges · {p.source_app}")
+                        
+                        with col2:
+                            # Public/Private toggle
+                            is_public = p.is_public
+                            public_label = "🌐 Public" if is_public else "🔒 Private"
+                            if st.button(public_label, key=f"toggle_public_{p.id}", use_container_width=True):
+                                success, msg = toggle_project_public(p.id, not is_public)
+                                if success:
+                                    st.success(msg)
+                                    st.rerun()
+                                else:
+                                    st.error(msg)
+                        
+                        with col3:
+                            # Rename button
+                            if st.button("✏️ Rename", key=f"rename_btn_{p.id}", use_container_width=True):
+                                st.session_state[f"renaming_{p.id}"] = True
+                                st.rerun()
+                        
+                        with col4:
+                            # Delete button
+                            if st.button("🗑️ Delete", key=f"delete_btn_{p.id}", use_container_width=True):
+                                st.session_state[f"confirm_delete_{p.id}"] = True
+                                st.rerun()
+                        
+                        # Rename dialog
+                        if st.session_state.get(f"renaming_{p.id}"):
+                            new_name = st.text_input(
+                                "New name",
+                                value=p.name,
+                                key=f"rename_input_{p.id}"
+                            )
+                            col_save, col_cancel = st.columns(2)
+                            with col_save:
+                                if st.button("💾 Save", key=f"rename_save_{p.id}", use_container_width=True):
+                                    if new_name and new_name != p.name:
+                                        success, msg = rename_project(p.id, new_name)
+                                        if success:
+                                            st.success(msg)
+                                            st.session_state[f"renaming_{p.id}"] = False
+                                            st.rerun()
+                                        else:
+                                            st.error(msg)
+                                    else:
+                                        st.session_state[f"renaming_{p.id}"] = False
+                                        st.rerun()
+                            with col_cancel:
+                                if st.button("Cancel", key=f"rename_cancel_{p.id}", use_container_width=True):
+                                    st.session_state[f"renaming_{p.id}"] = False
+                                    st.rerun()
+                        
+                        # Delete confirmation
+                        if st.session_state.get(f"confirm_delete_{p.id}"):
+                            st.warning(f"⚠️ Delete **{p.name}**? This cannot be undone.")
+                            col_yes, col_no = st.columns(2)
+                            with col_yes:
+                                if st.button("🗑️ Yes, Delete", key=f"delete_confirm_{p.id}", type="primary", use_container_width=True):
+                                    success, msg = delete_cloud_project(p.id)
+                                    if success:
+                                        st.success(msg)
+                                        st.session_state[f"confirm_delete_{p.id}"] = False
+                                        st.rerun()
+                                    else:
+                                        st.error(msg)
+                            with col_no:
+                                if st.button("Cancel", key=f"delete_cancel_{p.id}", use_container_width=True):
+                                    st.session_state[f"confirm_delete_{p.id}"] = False
+                                    st.rerun()
+                        
+                        st.divider()
     
     # -------------------------------------------------------------------------
     # Check for loaded cloud project in session state
