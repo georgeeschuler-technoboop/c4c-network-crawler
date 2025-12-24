@@ -1,4 +1,5 @@
 import math
+import time
 import pandas as pd
 import networkx as nx
 import streamlit as st
@@ -26,8 +27,17 @@ def read_table(uploaded_file, sheet_name=None) -> pd.DataFrame:
     return pd.read_csv(uploaded_file)
 
 
+def safe_float(x, default=1.0) -> float:
+    try:
+        if pd.isna(x):
+            return float(default)
+        return float(x)
+    except Exception:
+        return float(default)
+
+
 def detect_communities(G: nx.Graph) -> dict:
-    """node -> community_id (Louvain if available, else greedy modularity fallback)"""
+    """node -> community_id (Louvain if available, else greedy modularity fallback)."""
     H = G.to_undirected() if isinstance(G, nx.DiGraph) else G
     try:
         from networkx.algorithms.community import louvain_communities
@@ -41,15 +51,6 @@ def detect_communities(G: nx.Graph) -> dict:
         for n in comm:
             node_to_comm[n] = i
     return node_to_comm
-
-
-def safe_float(x, default=1.0) -> float:
-    try:
-        if pd.isna(x):
-            return float(default)
-        return float(x)
-    except Exception:
-        return float(default)
 
 
 def build_graph(
@@ -95,7 +96,7 @@ def build_graph(
 
         attrs = row.to_dict()
 
-        # Normalize optional fields onto standard keys
+        # Normalize optional fields to standard keys
         if edge_type_col and edge_type_col in edges_df.columns:
             attrs["type"] = "" if pd.isna(row.get(edge_type_col)) else str(row.get(edge_type_col))
         if edge_label_col and edge_label_col in edges_df.columns:
@@ -110,16 +111,41 @@ def build_graph(
     return G
 
 
+def compute_layout_positions(G: nx.Graph, layout_algo: str, seed: int) -> dict:
+    """
+    Returns dict[node] -> {"x": float, "y": float}
+    """
+    H = G.to_undirected() if isinstance(G, nx.DiGraph) else G
+
+    if H.number_of_nodes() == 0:
+        return {}
+
+    # spring_layout is robust for general use; kamada_kawai can be slower on big graphs.
+    if layout_algo == "spring":
+        pos = nx.spring_layout(H, seed=seed, k=None, iterations=100)
+    elif layout_algo == "kamada_kawai":
+        pos = nx.kamada_kawai_layout(H)
+    else:
+        pos = nx.spring_layout(H, seed=seed, iterations=100)
+
+    # Scale to look nicer in pyvis space
+    scaled = {}
+    for n, (x, y) in pos.items():
+        scaled[n] = {"x": float(x) * 800, "y": float(y) * 800}
+    return scaled
+
+
 def to_pyvis(
     G: nx.Graph,
     height: str,
-    physics: bool,
+    physics_enabled: bool,
     node_color_attr: str | None,
     node_size_mode: str,
     label_attr: str | None,
     edge_label_attr: str | None,
     edge_color_attr: str | None,
     max_nodes: int,
+    positions: dict | None,
 ):
     net = Network(
         height=height,
@@ -128,7 +154,7 @@ def to_pyvis(
         font_color="#111111",
         directed=isinstance(G, nx.DiGraph),
     )
-    net.toggle_physics(physics)
+    net.toggle_physics(physics_enabled)
 
     degree = dict(G.degree())
     betweenness = nx.betweenness_centrality(G) if node_size_mode == "betweenness" else {}
@@ -149,11 +175,13 @@ def to_pyvis(
     color_idx = 0
 
     for n, attrs in H.nodes(data=True):
+        # Label
         if label_attr and label_attr in attrs and pd.notna(attrs.get(label_attr)):
             label = str(attrs.get(label_attr))
         else:
             label = str(n)
 
+        # Node color
         color = "#4c78a8"
         if node_color_attr and node_color_attr in attrs and pd.notna(attrs.get(node_color_attr)):
             cat = str(attrs.get(node_color_attr))
@@ -162,6 +190,7 @@ def to_pyvis(
                 color_idx += 1
             color = category_to_color[cat]
 
+        # Node size
         if node_size_mode == "degree":
             size = 8 + 3 * math.log1p(degree.get(n, 0))
         elif node_size_mode == "betweenness":
@@ -176,13 +205,28 @@ def to_pyvis(
             title_lines.append(f"{k}: {v}")
         title = "<br/>".join(title_lines)
 
-        net.add_node(n, label=label, color=color, size=size, title=title)
+        # Optional fixed positions (Python layout mode)
+        if positions and n in positions:
+            net.add_node(
+                n,
+                label=label,
+                color=color,
+                size=size,
+                title=title,
+                x=positions[n]["x"],
+                y=positions[n]["y"],
+                physics=False,  # node-level freeze
+            )
+        else:
+            net.add_node(n, label=label, color=color, size=size, title=title)
 
     for u, v, attrs in H.edges(data=True):
+        # Edge label
         e_label = ""
         if edge_label_attr and edge_label_attr in attrs and pd.notna(attrs.get(edge_label_attr)):
             e_label = str(attrs.get(edge_label_attr))
 
+        # Edge color
         e_color = "#999999"
         if edge_color_attr and edge_color_attr in attrs and pd.notna(attrs.get(edge_color_attr)):
             e_cat = str(attrs.get(edge_color_attr))
@@ -191,6 +235,7 @@ def to_pyvis(
                 color_idx += 1
             e_color = category_to_color[e_cat]
 
+        # Edge width by weight
         w = attrs.get("weight", 1.0)
         try:
             width = 1 + 2 * math.log1p(float(w))
@@ -199,16 +244,31 @@ def to_pyvis(
 
         net.add_edge(u, v, label=e_label, color=e_color, width=width, title=str(attrs))
 
+    # Physics settings: stabilize quickly; user can also disable.
     net.set_options("""
     var options = {
       "nodes": { "borderWidth": 0 },
       "edges": { "smooth": { "type": "dynamic" } },
-      "interaction": { "hover": true, "tooltipDelay": 100, "hideEdgesOnDrag": true },
-      "physics": { "enabled": true, "stabilization": { "iterations": 200 } }
-    }
+      "interaction": {
+        "hover": true,
+        "tooltipDelay": 100,
+        "hideEdgesOnDrag": true
+      },
+      "physics": {
+        "enabled": true,
+        "stabilization": { "enabled": true, "iterations": 200, "updateInterval": 25 }
+      }
+    };
     """)
 
     return net
+
+
+# ----------------------------
+# Session State
+# ----------------------------
+if "layout_seed" not in st.session_state:
+    st.session_state.layout_seed = int(time.time()) % 1_000_000
 
 
 # ----------------------------
@@ -219,7 +279,7 @@ st.title("Mini Network Mapper (Polinode/Gephi-lite)")
 with st.sidebar:
     st.header("Upload")
 
-    st.markdown("**Option A (recommended):** Upload a single Polinode-style workbook (`.xlsx`) with sheets `Nodes` and `Edges`.")
+    st.markdown("**Option A (recommended):** Upload a Polinode-style workbook (`.xlsx`) with sheets `Nodes` and `Edges`.")
     workbook = st.file_uploader("Upload workbook (.xlsx)", type=["xlsx", "xls"], key="workbook")
 
     st.markdown("---")
@@ -230,14 +290,31 @@ with st.sidebar:
     st.divider()
     st.header("Display settings")
     directed = st.checkbox("Directed graph", value=False)
-    physics = st.checkbox("Physics layout", value=True)
+
+    layout_mode = st.radio(
+        "Layout mode",
+        ["Auto (best)", "Physics (vis.js)", "Python layout (frozen)"],
+        index=0,
+        help="Auto uses Python frozen layout for big graphs (no drifting), physics for small graphs."
+    )
+
+    physics_checkbox = st.checkbox("Physics layout (can drift)", value=True)
+
     detect_comm = st.checkbox("Detect communities (Louvain)", value=False)
+
     height = st.selectbox("Canvas height", ["650px", "750px", "900px"], index=0)
     max_nodes = st.slider("Max nodes to render (performance)", 50, 5000, 1500, step=50)
 
     st.divider()
     st.header("Styling")
     node_size_mode = st.selectbox("Node size by", ["degree", "betweenness", "fixed"], index=0)
+
+    python_layout_algo = st.selectbox("Python layout algorithm", ["spring", "kamada_kawai"], index=0)
+
+    st.divider()
+    st.header("Layout actions")
+    if st.button("Re-run layout"):
+        st.session_state.layout_seed = (st.session_state.layout_seed + 1) % 1_000_000
 
 # Load data
 if workbook is not None:
@@ -271,7 +348,6 @@ with mcol1:
                 return c
         return cols[0]
 
-    # Polinode defaults are Source/Target/Type/Amount
     default_source = pick_default(e_cols, ["Source", "source", "From", "from"])
     default_target = pick_default(e_cols, ["Target", "target", "To", "to"])
     default_type = pick_default(e_cols, ["Type", "type", "Edge Type", "edge_type"])
@@ -300,7 +376,6 @@ with mcol2:
         node_id_col = None
     else:
         n_cols = list(nodes_df_raw.columns)
-        # Polinode default is Name
         default_node_id = "Name" if "Name" in n_cols else n_cols[0]
         node_id_col = st.selectbox("Which column is the node id?", n_cols, index=n_cols.index(default_node_id))
 
@@ -330,6 +405,7 @@ if detect_comm and G.number_of_nodes() > 0 and G.number_of_edges() > 0:
 all_node_attrs = sorted({k for _, a in G.nodes(data=True) for k in a.keys()})
 all_edge_attrs = sorted({k for _, _, a in G.edges(data=True) for k in a.keys()})
 
+# UI columns
 col1, col2 = st.columns([0.35, 0.65], gap="large")
 
 with col1:
@@ -369,17 +445,38 @@ with col1:
     st.write(f"**Edges:** {G.number_of_edges():,}")
     if G.number_of_nodes() > 0:
         st.write(f"**Density:** {nx.density(G):.4f}")
+
+    # Community legend (counts)
     if "_community" in all_node_attrs:
-        comm_vals = [a.get("_community") for _, a in G.nodes(data=True) if a.get("_community") is not None]
-        if comm_vals:
-            st.write(f"**Communities:** {len(set(comm_vals)):,}")
+        st.divider()
+        st.subheader("Community legend")
+        comm_series = pd.Series(
+            [a.get("_community") for _, a in G.nodes(data=True) if a.get("_community") is not None],
+            name="community"
+        )
+        if not comm_series.empty:
+            legend = (
+                comm_series.value_counts()
+                .rename_axis("community_id")
+                .reset_index(name="node_count")
+                .sort_values("node_count", ascending=False)
+                .reset_index(drop=True)
+            )
+            st.dataframe(legend, use_container_width=True, height=240)
+
+            st.download_button(
+                "Download community_legend.csv",
+                data=legend.to_csv(index=False).encode("utf-8"),
+                file_name="community_legend.csv",
+                mime="text/csv",
+            )
 
 with col2:
     st.subheader("Network")
 
+    # Node filtering
     keep_nodes = set()
     degrees = dict(G.degree())
-
     for n, attrs in G.nodes(data=True):
         if degrees.get(n, 0) < min_deg:
             continue
@@ -393,6 +490,7 @@ with col2:
 
     H = G.subgraph(keep_nodes).copy()
 
+    # Edge type filter
     if selected_types:
         remove_edges = []
         for u, v, attrs in H.edges(data=True):
@@ -402,32 +500,87 @@ with col2:
             if str(t) not in selected_types:
                 remove_edges.append((u, v))
         H.remove_edges_from(remove_edges)
+
         isolates = [n for n in H.nodes() if H.degree(n) == 0]
         H.remove_nodes_from(isolates)
+
+    # ----------------------------
+    # Physics fix + layout modes
+    # ----------------------------
+    # Auto mode: python frozen when big; physics when small.
+    # This avoids drifting by default.
+    N = H.number_of_nodes()
+
+    # Decide final physics + positions
+    positions = None
+    physics_enabled = physics_checkbox
+
+    if layout_mode == "Physics (vis.js)":
+        # For large graphs, force-disable unless user insists via checkbox
+        if N > 250 and physics_checkbox:
+            # Keep user's intent, but warn
+            st.warning("Physics on a large graph may drift. Consider Python layout (frozen) or turn physics off.")
+        physics_enabled = physics_checkbox
+        positions = None
+
+    elif layout_mode == "Python layout (frozen)":
+        physics_enabled = False
+        positions = compute_layout_positions(H, python_layout_algo, seed=st.session_state.layout_seed)
+
+    else:  # Auto (best)
+        if N > 250:
+            physics_enabled = False
+            positions = compute_layout_positions(H, python_layout_algo, seed=st.session_state.layout_seed)
+        else:
+            # Small graphs: physics ok, but auto-freeze by recommending turning it off if drifting.
+            physics_enabled = physics_checkbox
+            positions = None
 
     net = to_pyvis(
         H,
         height=height,
-        physics=physics,
+        physics_enabled=physics_enabled,
         node_color_attr=node_color_attr,
         node_size_mode=node_size_mode,
         label_attr=label_attr,
         edge_label_attr=edge_label_attr,
         edge_color_attr=edge_color_attr,
         max_nodes=max_nodes,
+        positions=positions,
     )
 
     st.components.v1.html(net.generate_html(), height=int(height.replace("px", "")) + 30, scrolling=True)
 
-    with st.expander("Download filtered subgraph as CSV"):
+    # ----------------------------
+    # Downloads
+    # ----------------------------
+    with st.expander("Downloads"):
         out_nodes = pd.DataFrame([{"id": n, **a} for n, a in H.nodes(data=True)])
         out_edges = pd.DataFrame([{"source": u, "target": v, **a} for u, v, a in H.edges(data=True)])
 
-        st.download_button("Download nodes_filtered.csv",
-                           data=out_nodes.to_csv(index=False).encode("utf-8"),
-                           file_name="nodes_filtered.csv",
-                           mime="text/csv")
-        st.download_button("Download edges_filtered.csv",
-                           data=out_edges.to_csv(index=False).encode("utf-8"),
-                           file_name="edges_filtered.csv",
-                           mime="text/csv")
+        st.download_button(
+            "Download nodes_filtered.csv",
+            data=out_nodes.to_csv(index=False).encode("utf-8"),
+            file_name="nodes_filtered.csv",
+            mime="text/csv",
+        )
+        st.download_button(
+            "Download edges_filtered.csv",
+            data=out_edges.to_csv(index=False).encode("utf-8"),
+            file_name="edges_filtered.csv",
+            mime="text/csv",
+        )
+
+        # Save node positions to CSV (only reliable in Python layout mode)
+        if positions is not None and len(positions) > 0:
+            pos_df = pd.DataFrame(
+                [{"id": n, "x": positions[n]["x"], "y": positions[n]["y"]} for n in positions.keys()]
+            )
+            st.download_button(
+                "Download node_positions.csv",
+                data=pos_df.to_csv(index=False).encode("utf-8"),
+                file_name="node_positions.csv",
+                mime="text/csv",
+            )
+        else:
+            st.info("Node positions export is available when using **Python layout (frozen)** (or Auto on larger graphs).")
