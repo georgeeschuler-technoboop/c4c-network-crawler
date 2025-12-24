@@ -1,3 +1,4 @@
+import json
 import math
 import time
 import pandas as pd
@@ -5,7 +6,18 @@ import networkx as nx
 import streamlit as st
 from pyvis.network import Network
 
-st.set_page_config(page_title="Mini Network Mapper", layout="wide")
+# =============================================================================
+# App Versioning
+# =============================================================================
+APP_VERSION = "0.2.2"
+
+VERSION_HISTORY = [
+    ("0.2.2", "Fix PyVis set_options JSONDecodeError (use json.dumps). Add in-app version + version history. Keep physics auto-freeze, rerun layout, community legend, export positions."),
+    ("0.2.1", "Add layout modes (Auto/Physics/Python frozen), re-run layout button, community legend, export node positions (Python layout)."),
+    ("0.2.0", "Add Polinode workbook support (Nodes/Edges sheets) + column mapping dropdowns + Louvain communities + basic filters."),
+]
+
+st.set_page_config(page_title=f"Mini Network Mapper v{APP_VERSION}", layout="wide")
 
 
 # ----------------------------
@@ -96,7 +108,6 @@ def build_graph(
 
         attrs = row.to_dict()
 
-        # Normalize optional fields to standard keys
         if edge_type_col and edge_type_col in edges_df.columns:
             attrs["type"] = "" if pd.isna(row.get(edge_type_col)) else str(row.get(edge_type_col))
         if edge_label_col and edge_label_col in edges_df.columns:
@@ -116,19 +127,16 @@ def compute_layout_positions(G: nx.Graph, layout_algo: str, seed: int) -> dict:
     Returns dict[node] -> {"x": float, "y": float}
     """
     H = G.to_undirected() if isinstance(G, nx.DiGraph) else G
-
     if H.number_of_nodes() == 0:
         return {}
 
-    # spring_layout is robust for general use; kamada_kawai can be slower on big graphs.
     if layout_algo == "spring":
-        pos = nx.spring_layout(H, seed=seed, k=None, iterations=100)
+        pos = nx.spring_layout(H, seed=seed, iterations=120)
     elif layout_algo == "kamada_kawai":
         pos = nx.kamada_kawai_layout(H)
     else:
-        pos = nx.spring_layout(H, seed=seed, iterations=100)
+        pos = nx.spring_layout(H, seed=seed, iterations=120)
 
-    # Scale to look nicer in pyvis space
     scaled = {}
     for n, (x, y) in pos.items():
         scaled[n] = {"x": float(x) * 800, "y": float(y) * 800}
@@ -175,13 +183,13 @@ def to_pyvis(
     color_idx = 0
 
     for n, attrs in H.nodes(data=True):
-        # Label
+        # label
         if label_attr and label_attr in attrs and pd.notna(attrs.get(label_attr)):
             label = str(attrs.get(label_attr))
         else:
             label = str(n)
 
-        # Node color
+        # color
         color = "#4c78a8"
         if node_color_attr and node_color_attr in attrs and pd.notna(attrs.get(node_color_attr)):
             cat = str(attrs.get(node_color_attr))
@@ -190,7 +198,7 @@ def to_pyvis(
                 color_idx += 1
             color = category_to_color[cat]
 
-        # Node size
+        # size
         if node_size_mode == "degree":
             size = 8 + 3 * math.log1p(degree.get(n, 0))
         elif node_size_mode == "betweenness":
@@ -198,6 +206,7 @@ def to_pyvis(
         else:
             size = 10
 
+        # tooltip
         title_lines = [f"<b>{label}</b>"]
         for k, v in attrs.items():
             if k == "id":
@@ -205,28 +214,20 @@ def to_pyvis(
             title_lines.append(f"{k}: {v}")
         title = "<br/>".join(title_lines)
 
-        # Optional fixed positions (Python layout mode)
+        # fixed position if provided
         if positions and n in positions:
             net.add_node(
-                n,
-                label=label,
-                color=color,
-                size=size,
-                title=title,
-                x=positions[n]["x"],
-                y=positions[n]["y"],
-                physics=False,  # node-level freeze
+                n, label=label, color=color, size=size, title=title,
+                x=positions[n]["x"], y=positions[n]["y"], physics=False
             )
         else:
             net.add_node(n, label=label, color=color, size=size, title=title)
 
     for u, v, attrs in H.edges(data=True):
-        # Edge label
         e_label = ""
         if edge_label_attr and edge_label_attr in attrs and pd.notna(attrs.get(edge_label_attr)):
             e_label = str(attrs.get(edge_label_attr))
 
-        # Edge color
         e_color = "#999999"
         if edge_color_attr and edge_color_attr in attrs and pd.notna(attrs.get(edge_color_attr)):
             e_cat = str(attrs.get(edge_color_attr))
@@ -235,7 +236,6 @@ def to_pyvis(
                 color_idx += 1
             e_color = category_to_color[e_cat]
 
-        # Edge width by weight
         w = attrs.get("weight", 1.0)
         try:
             width = 1 + 2 * math.log1p(float(w))
@@ -244,22 +244,15 @@ def to_pyvis(
 
         net.add_edge(u, v, label=e_label, color=e_color, width=width, title=str(attrs))
 
-    # Physics settings: stabilize quickly; user can also disable.
-    net.set_options("""
-    var options = {
-      "nodes": { "borderWidth": 0 },
-      "edges": { "smooth": { "type": "dynamic" } },
-      "interaction": {
-        "hover": true,
-        "tooltipDelay": 100,
-        "hideEdgesOnDrag": true
-      },
-      "physics": {
-        "enabled": true,
-        "stabilization": { "enabled": true, "iterations": 200, "updateInterval": 25 }
-      }
-    };
-    """)
+    # IMPORTANT: PyVis expects JSON here, not JavaScript.
+    # (Your crash was due to passing `var options = {...}`.)
+    options = {
+        "nodes": {"borderWidth": 0},
+        "edges": {"smooth": {"type": "dynamic"}},
+        "interaction": {"hover": True, "tooltipDelay": 100, "hideEdgesOnDrag": True},
+        "physics": {"enabled": True, "stabilization": {"enabled": True, "iterations": 200, "updateInterval": 25}},
+    }
+    net.set_options(json.dumps(options))
 
     return net
 
@@ -274,16 +267,21 @@ if "layout_seed" not in st.session_state:
 # ----------------------------
 # UI
 # ----------------------------
-st.title("Spider: A Mini Network Mapper")
+st.title("Mini Network Mapper")
+st.caption(f"Version: **v{APP_VERSION}**")
+
+with st.expander("Version history", expanded=False):
+    for v, note in VERSION_HISTORY:
+        st.markdown(f"- **{v}** — {note}")
 
 with st.sidebar:
     st.header("Upload")
 
-    st.markdown("**Option A (recommended):** Upload a Polinode-style workbook (`.xlsx`) with sheets `Nodes` and `Edges`.")
+    st.markdown("**Option A (recommended):** Polinode-style workbook (`.xlsx`) with sheets `Nodes` and `Edges`.")
     workbook = st.file_uploader("Upload workbook (.xlsx)", type=["xlsx", "xls"], key="workbook")
 
     st.markdown("---")
-    st.markdown("**Option B:** Upload CSVs")
+    st.markdown("**Option B:** CSVs")
     edges_file = st.file_uploader("Upload edges.csv", type=["csv"], key="edges")
     nodes_file = st.file_uploader("Upload nodes.csv (optional)", type=["csv"], key="nodes")
 
@@ -299,7 +297,6 @@ with st.sidebar:
     )
 
     physics_checkbox = st.checkbox("Physics layout (can drift)", value=True)
-
     detect_comm = st.checkbox("Detect communities (Louvain)", value=False)
 
     height = st.selectbox("Canvas height", ["650px", "750px", "900px"], index=0)
@@ -308,7 +305,6 @@ with st.sidebar:
     st.divider()
     st.header("Styling")
     node_size_mode = st.selectbox("Node size by", ["degree", "betweenness", "fixed"], index=0)
-
     python_layout_algo = st.selectbox("Python layout algorithm", ["spring", "kamada_kawai"], index=0)
 
     st.divider()
@@ -329,7 +325,7 @@ else:
     nodes_df_raw = strip_and_drop_unnamed(read_table(nodes_file)) if nodes_file else pd.DataFrame()
     source_mode = "csv"
 
-# Column Mapping UI
+# Column mapping
 st.subheader("Column Mapping")
 st.caption("Pick which columns to use (works with Polinode exports and almost anything else).")
 
@@ -401,7 +397,6 @@ if detect_comm and G.number_of_nodes() > 0 and G.number_of_edges() > 0:
     node_to_comm = detect_communities(G)
     nx.set_node_attributes(G, node_to_comm, "_community")
 
-# Attributes
 all_node_attrs = sorted({k for _, a in G.nodes(data=True) for k in a.keys()})
 all_edge_attrs = sorted({k for _, _, a in G.edges(data=True) for k in a.keys()})
 
@@ -446,23 +441,21 @@ with col1:
     if G.number_of_nodes() > 0:
         st.write(f"**Density:** {nx.density(G):.4f}")
 
-    # Community legend (counts)
+    # Community legend
     if "_community" in all_node_attrs:
         st.divider()
         st.subheader("Community legend")
-        comm_series = pd.Series(
-            [a.get("_community") for _, a in G.nodes(data=True) if a.get("_community") is not None],
-            name="community"
-        )
-        if not comm_series.empty:
+        comm_vals = [a.get("_community") for _, a in G.nodes(data=True) if a.get("_community") is not None]
+        if comm_vals:
             legend = (
-                comm_series.value_counts()
+                pd.Series(comm_vals, name="community")
+                .value_counts()
                 .rename_axis("community_id")
                 .reset_index(name="node_count")
                 .sort_values("node_count", ascending=False)
                 .reset_index(drop=True)
             )
-            st.dataframe(legend, use_container_width=True, height=240)
+            st.dataframe(legend, width="stretch", height=240)
 
             st.download_button(
                 "Download community_legend.csv",
@@ -474,7 +467,7 @@ with col1:
 with col2:
     st.subheader("Network")
 
-    # Node filtering
+    # Filter nodes
     keep_nodes = set()
     degrees = dict(G.degree())
     for n, attrs in G.nodes(data=True):
@@ -490,7 +483,7 @@ with col2:
 
     H = G.subgraph(keep_nodes).copy()
 
-    # Edge type filter
+    # Filter edges by type
     if selected_types:
         remove_edges = []
         for u, v, attrs in H.edges(data=True):
@@ -504,35 +497,26 @@ with col2:
         isolates = [n for n in H.nodes() if H.degree(n) == 0]
         H.remove_nodes_from(isolates)
 
-    # ----------------------------
-    # Physics fix + layout modes
-    # ----------------------------
-    # Auto mode: python frozen when big; physics when small.
-    # This avoids drifting by default.
+    # Layout behavior
     N = H.number_of_nodes()
-
-    # Decide final physics + positions
     positions = None
     physics_enabled = physics_checkbox
 
     if layout_mode == "Physics (vis.js)":
-        # For large graphs, force-disable unless user insists via checkbox
         if N > 250 and physics_checkbox:
-            # Keep user's intent, but warn
             st.warning("Physics on a large graph may drift. Consider Python layout (frozen) or turn physics off.")
-        physics_enabled = physics_checkbox
         positions = None
+        physics_enabled = physics_checkbox
 
     elif layout_mode == "Python layout (frozen)":
         physics_enabled = False
         positions = compute_layout_positions(H, python_layout_algo, seed=st.session_state.layout_seed)
 
-    else:  # Auto (best)
+    else:  # Auto
         if N > 250:
             physics_enabled = False
             positions = compute_layout_positions(H, python_layout_algo, seed=st.session_state.layout_seed)
         else:
-            # Small graphs: physics ok, but auto-freeze by recommending turning it off if drifting.
             physics_enabled = physics_checkbox
             positions = None
 
@@ -551,9 +535,6 @@ with col2:
 
     st.components.v1.html(net.generate_html(), height=int(height.replace("px", "")) + 30, scrolling=True)
 
-    # ----------------------------
-    # Downloads
-    # ----------------------------
     with st.expander("Downloads"):
         out_nodes = pd.DataFrame([{"id": n, **a} for n, a in H.nodes(data=True)])
         out_edges = pd.DataFrame([{"source": u, "target": v, **a} for u, v, a in H.edges(data=True)])
@@ -571,8 +552,7 @@ with col2:
             mime="text/csv",
         )
 
-        # Save node positions to CSV (only reliable in Python layout mode)
-        if positions is not None and len(positions) > 0:
+        if positions:
             pos_df = pd.DataFrame(
                 [{"id": n, "x": positions[n]["x"], "y": positions[n]["y"]} for n in positions.keys()]
             )
