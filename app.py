@@ -45,12 +45,9 @@ import plotly.graph_objects as go
 # APP VERSION
 # ============================================================================
 
-APP_VERSION = "0.5.8"
+APP_VERSION = "0.5.5"
 
 VERSION_HISTORY = [
-    "IMPROVED v0.5.8: User can now name project before saving to cloud; CSV filename used as default",
-    "FIXED v0.5.7: Company API now uses correct v2 endpoint (GET /api/v2/company); fixed response parsing for v2 schema",
-    "FIXED v0.5.6: Company crawl now checks similar_companies/affiliated_companies/related_companies fields; added API debug output",
     "FIXED v0.5.5: Handle empty edges in validate_polinode_export and generate_polinode_excel",
     "FIXED v0.5.4: Enhanced path handling for c4c_utils; added logo via st.image; better error messages",
     "FIXED v0.5.3: Moved cloud login to top of sidebar for consistency with other apps",
@@ -805,24 +802,16 @@ def call_enrichlayer_api(api_token: str, profile_url: str, crawl_type: str = "pe
     if mock_mode:
         return generate_mock_response(profile_url, crawl_type), None
     
-    headers = {"Authorization": f"Bearer {api_token}"}
+    if crawl_type == "company":
+        endpoint = "https://api.enrichlayer.com/v1/linkedin/company"
+    else:
+        endpoint = "https://api.enrichlayer.com/v1/linkedin/people"
+    
+    headers = {"Authorization": f"Bearer {api_token}", "Content-Type": "application/json"}
+    payload = {"linkedin_url": profile_url}
     
     try:
-        if crawl_type == "company":
-            # Company API uses GET with URL params (v2)
-            endpoint = "https://enrichlayer.com/api/v2/company"
-            params = {
-                "url": profile_url,
-                "use_cache": "if-present",
-                "fallback_to_cache": "on-error"
-            }
-            response = requests.get(endpoint, headers=headers, params=params, timeout=30)
-        else:
-            # People API uses POST with JSON body (v1)
-            endpoint = "https://api.enrichlayer.com/v1/linkedin/people"
-            headers["Content-Type"] = "application/json"
-            payload = {"linkedin_url": profile_url}
-            response = requests.post(endpoint, headers=headers, json=payload, timeout=30)
+        response = requests.post(endpoint, headers=headers, json=payload, timeout=30)
         
         if response.status_code == 429:
             return None, "Rate limit exceeded"
@@ -1215,45 +1204,25 @@ def run_crawler(
         stats['successful_calls'] += 1
         raw_profiles.append(response)
         
-        # Debug: show API response keys for company crawls
-        if crawl_type == 'company':
-            status_container.write(f"   └─ API keys: {list(response.keys())[:15]}...")
-        
-        # Get identifier - v2 company API uses universal_name_id
-        if crawl_type == 'company':
-            enriched_id = response.get('universal_name_id') or response.get('public_identifier', current_id)
-        else:
-            enriched_id = response.get('public_identifier', current_id)
-        
-        # Update node with response data
-        current_node['headline'] = response.get('headline') or response.get('industry', '')
+        enriched_id = response.get('public_identifier', current_id)
+        current_node['headline'] = response.get('headline', '')
         current_node['location'] = response.get('location_str') or response.get('location', '')
         
-        # Store company-specific fields if present (v2 API structure)
-        if response.get('is_company') or crawl_type == 'company':
+        # Store company-specific fields if present
+        if response.get('is_company'):
             current_node['is_company'] = True
-            current_node['name'] = response.get('name', current_node.get('name', ''))
             current_node['website'] = response.get('website', '')
             current_node['industry'] = response.get('industry', '')
             current_node['company_size'] = response.get('company_size')
             current_node['founded_year'] = response.get('founded_year')
             current_node['company_type'] = response.get('company_type', '')
-            current_node['description'] = response.get('description', '')
-            current_node['follower_count'] = response.get('follower_count')
-            
-            # Extract HQ location from v2 API
-            hq = response.get('hq', {})
-            if hq:
-                current_node['city'] = hq.get('city', '')
-                current_node['state'] = hq.get('state', '')
-                current_node['country'] = hq.get('country', '')
         
-        # Store location components if available (flat structure)
-        if response.get('city') and not current_node.get('city'):
+        # Store location components if available
+        if response.get('city'):
             current_node['city'] = response.get('city', '')
-        if response.get('state') and not current_node.get('state'):
+        if response.get('state'):
             current_node['state'] = response.get('state', '')
-        if response.get('country') and not current_node.get('country'):
+        if response.get('country'):
             current_node['country'] = response.get('country', '')
         
         if advanced_mode:
@@ -1269,17 +1238,7 @@ def run_crawler(
             current_id = enriched_id
             current_node = seen_profiles[current_id]
         
-        # Get neighbors - check multiple field names for compatibility
-        if crawl_type == 'company':
-            similar = response.get('similar_companies', [])
-            affiliated = response.get('affiliated_companies', [])
-            # Combine both lists for maximum coverage
-            neighbors = similar + affiliated
-            # Debug: show what we found
-            status_container.write(f"   └─ similar_companies: {len(similar)}, affiliated_companies: {len(affiliated)}")
-        else:
-            neighbors = response.get('people_also_viewed', []) or response.get('similar_companies', [])
-        
+        neighbors = response.get('people_also_viewed', [])
         if not neighbors:
             stats['profiles_with_no_neighbors'] += 1
         else:
@@ -1291,11 +1250,7 @@ def run_crawler(
             
             neighbor_url = neighbor.get('link') or neighbor.get('profile_url', '')
             neighbor_name = neighbor.get('name') or neighbor.get('full_name', '')
-            # For companies, use industry as headline
-            if crawl_type == 'company':
-                neighbor_headline = neighbor.get('industry') or neighbor.get('summary', '')
-            else:
-                neighbor_headline = neighbor.get('summary') or neighbor.get('headline', '')
+            neighbor_headline = neighbor.get('summary') or neighbor.get('headline', '')
             
             if not neighbor_url:
                 continue
@@ -1326,7 +1281,7 @@ def run_crawler(
             
             if crawl_type == 'company':
                 neighbor_node['is_company'] = True
-                neighbor_node['industry'] = neighbor.get('industry') or neighbor.get('summary', '')
+                neighbor_node['industry'] = neighbor.get('summary') or neighbor.get('industry', '')
             
             if advanced_mode:
                 extracted_org = extract_org_from_summary(neighbor_headline)
@@ -1885,8 +1840,6 @@ def main():
                     # Show preview
                     if seeds:
                         st.success(f"✅ Loaded {len(seeds)} seed profile(s) from CSV")
-                        # Store CSV filename for default project name
-                        st.session_state.uploaded_csv_name = uploaded_file.name
                         with st.expander("Preview seeds", expanded=False):
                             preview_df = pd.DataFrame(seeds)
                             st.dataframe(preview_df, use_container_width=True)
@@ -2121,44 +2074,23 @@ def main():
         )
         
         # Cloud save and clear buttons
-        client = get_project_store_authenticated()
-        cloud_enabled = client is not None
-        
-        # Generate default project name
-        first_seed_name = list(seen_profiles.values())[0].get('name', 'Network') if seen_profiles else 'Network'
-        default_name = f"{first_seed_name} Network"
-        
-        # Check if we have a CSV filename to use
-        if st.session_state.get('uploaded_csv_name'):
-            # Use CSV filename (without extension) as default
-            csv_name = st.session_state.uploaded_csv_name
-            if csv_name.endswith('.csv'):
-                csv_name = csv_name[:-4]
-            default_name = csv_name
-        
-        # Project name input
-        st.markdown("**☁️ Save to Cloud**")
-        col_name, col_save = st.columns([3, 1])
-        
-        with col_name:
-            project_name = st.text_input(
-                "Project name",
-                value=default_name,
-                key="cloud_project_name",
-                label_visibility="collapsed",
-                placeholder="Enter project name..."
-            )
-        
-        with col_save:
-            save_disabled = not cloud_enabled or not project_name.strip()
-            if st.button("☁️ Save", 
-                        disabled=save_disabled,
+        col1, col2, col3 = st.columns([2, 2, 1])
+        with col1:
+            client = get_project_store_authenticated()
+            cloud_enabled = client is not None
+            
+            # Get project name from first seed profile
+            first_seed_name = list(seen_profiles.values())[0].get('name', 'Network') if seen_profiles else 'Network'
+            project_name = f"{first_seed_name} Network"
+            
+            if st.button("☁️ Save to Cloud", 
+                        disabled=not cloud_enabled,
                         use_container_width=True,
                         help="Login to enable cloud save" if not cloud_enabled else "Save bundle to Project Store"):
                 
                 with st.spinner("☁️ Uploading bundle..."):
                     success, message, slug = save_bundle_to_cloud(
-                        project_name=project_name.strip(),
+                        project_name=project_name,
                         zip_data=zip_data,
                         node_count=len(seen_profiles),
                         edge_count=len(edges),
@@ -2170,14 +2102,14 @@ def main():
                     else:
                         st.error(f"❌ {message}")
         
-        if not cloud_enabled:
-            st.caption("🔒 Login to enable cloud save")
-        
-        col1, col2 = st.columns(2)
-        with col1:
+        with col2:
             if st.button("🗑️ Clear Results", use_container_width=True):
                 st.session_state.crawl_results = None
                 st.rerun()
+        
+        with col3:
+            if not cloud_enabled:
+                st.caption("☁️ Login to enable")
         
         # CoreGraph Schema Downloads
         with st.expander("📄 CoreGraph Schema Files"):
