@@ -6,6 +6,7 @@ from pyvis.network import Network
 
 st.set_page_config(page_title="Mini Network Mapper", layout="wide")
 
+
 # ----------------------------
 # Helpers
 # ----------------------------
@@ -14,46 +15,14 @@ def read_csv(uploaded_file) -> pd.DataFrame:
         return pd.DataFrame()
     return pd.read_csv(uploaded_file)
 
-def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
+
+def strip_and_drop_unnamed(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
-    df.columns = [c.strip() for c in df.columns]
+    df.columns = [str(c).strip() for c in df.columns]
+    # Drop Unnamed: X columns from CSV exports
+    df = df.loc[:, ~df.columns.str.contains(r"^Unnamed", na=False)]
     return df
 
-def build_graph(nodes_df: pd.DataFrame, edges_df: pd.DataFrame, directed: bool) -> nx.Graph:
-    G = nx.DiGraph() if directed else nx.Graph()
-
-    # Add nodes (optional)
-    if not nodes_df.empty:
-        if "id" not in nodes_df.columns:
-            raise ValueError("nodes.csv must contain an 'id' column.")
-        for _, row in nodes_df.iterrows():
-            node_id = row["id"]
-            attrs = row.to_dict()
-            G.add_node(node_id, **attrs)
-
-    # Add edges (required)
-    required = {"source", "target"}
-    if not required.issubset(set(edges_df.columns)):
-        raise ValueError("edges.csv must contain columns: source, target (plus optional weight/type/label).")
-
-    for _, row in edges_df.iterrows():
-        s = row["source"]
-        t = row["target"]
-        attrs = row.to_dict()
-
-        # Ensure nodes exist even if nodes.csv not provided
-        if not G.has_node(s):
-            G.add_node(s, id=s)
-        if not G.has_node(t):
-            G.add_node(t, id=t)
-
-        # Optional weight
-        w = row["weight"] if "weight" in row and not pd.isna(row["weight"]) else 1.0
-        attrs["weight"] = float(w)
-
-        G.add_edge(s, t, **attrs)
-
-    return G
 
 def detect_communities(G: nx.Graph) -> dict:
     """
@@ -74,6 +43,79 @@ def detect_communities(G: nx.Graph) -> dict:
         for n in comm:
             node_to_comm[n] = i
     return node_to_comm
+
+
+def safe_float(x, default=1.0) -> float:
+    try:
+        if pd.isna(x):
+            return float(default)
+        return float(x)
+    except Exception:
+        return float(default)
+
+
+def build_graph(
+    nodes_df: pd.DataFrame,
+    edges_df: pd.DataFrame,
+    directed: bool,
+    node_id_col: str | None,
+    edge_source_col: str,
+    edge_target_col: str,
+    edge_type_col: str | None,
+    edge_weight_col: str | None,
+    edge_label_col: str | None,
+) -> nx.Graph:
+    G = nx.DiGraph() if directed else nx.Graph()
+
+    # Add nodes (optional)
+    if not nodes_df.empty and node_id_col:
+        for _, row in nodes_df.iterrows():
+            node_id = row.get(node_id_col)
+            if pd.isna(node_id):
+                continue
+            node_id = str(node_id)
+            attrs = row.to_dict()
+            # normalize to have an "id" attribute
+            attrs["id"] = node_id
+            G.add_node(node_id, **attrs)
+
+    # Add edges (required)
+    if edge_source_col not in edges_df.columns or edge_target_col not in edges_df.columns:
+        raise ValueError("Edges mapping invalid: source/target columns not found in edges.csv.")
+
+    for _, row in edges_df.iterrows():
+        s = row.get(edge_source_col)
+        t = row.get(edge_target_col)
+        if pd.isna(s) or pd.isna(t):
+            continue
+
+        s = str(s)
+        t = str(t)
+
+        if not G.has_node(s):
+            G.add_node(s, id=s)
+        if not G.has_node(t):
+            G.add_node(t, id=t)
+
+        attrs = row.to_dict()
+
+        # Optional type/label/weight normalized
+        if edge_type_col and edge_type_col in edges_df.columns:
+            attrs["type"] = "" if pd.isna(row.get(edge_type_col)) else str(row.get(edge_type_col))
+
+        if edge_label_col and edge_label_col in edges_df.columns:
+            attrs["label"] = "" if pd.isna(row.get(edge_label_col)) else str(row.get(edge_label_col))
+
+        if edge_weight_col and edge_weight_col in edges_df.columns:
+            attrs["weight"] = safe_float(row.get(edge_weight_col), default=1.0)
+        else:
+            # If user has a 'weight' column already, try to honor it; else default
+            attrs["weight"] = safe_float(row.get("weight", 1.0), default=1.0)
+
+        G.add_edge(s, t, **attrs)
+
+    return G
+
 
 def to_pyvis(
     G: nx.Graph,
@@ -99,13 +141,12 @@ def to_pyvis(
     degree = dict(G.degree())
     betweenness = nx.betweenness_centrality(G) if node_size_mode == "betweenness" else {}
 
-    # Simple categorical palette (cycled)
     palette = [
         "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd",
         "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22", "#17becf"
     ]
 
-    # Optionally downsample for large graphs
+    # Downsample if needed
     nodes = list(G.nodes())
     if len(nodes) > max_nodes:
         nodes = nodes[:max_nodes]
@@ -113,7 +154,6 @@ def to_pyvis(
     else:
         H = G
 
-    # Map categories to colors
     category_to_color = {}
     color_idx = 0
 
@@ -156,7 +196,7 @@ def to_pyvis(
         if edge_label_attr and edge_label_attr in attrs and pd.notna(attrs.get(edge_label_attr)):
             e_label = str(attrs.get(edge_label_attr))
 
-        # Edge color (optional categorical)
+        # Edge color
         e_color = "#999999"
         if edge_color_attr and edge_color_attr in attrs and pd.notna(attrs.get(edge_color_attr)):
             e_cat = str(attrs.get(edge_color_attr))
@@ -167,10 +207,11 @@ def to_pyvis(
 
         # Edge width by weight
         w = attrs.get("weight", 1.0)
+        width = 2
         try:
             width = 1 + 2 * math.log1p(float(w))
         except Exception:
-            width = 2
+            pass
 
         net.add_edge(u, v, label=e_label, color=e_color, width=width, title=str(attrs))
 
@@ -188,6 +229,7 @@ def to_pyvis(
 
     return net
 
+
 # ----------------------------
 # UI
 # ----------------------------
@@ -195,11 +237,10 @@ st.title("Mini Network Mapper (Polinode/Gephi-lite)")
 
 with st.sidebar:
     st.header("1) Upload data")
-
-    st.markdown("**edges.csv required** with columns: `source`, `target` (optional: `weight`, `type`, `label`).")
+    st.markdown("**edges.csv required**")
     edges_file = st.file_uploader("Upload edges.csv", type=["csv"], key="edges")
 
-    st.markdown("**nodes.csv optional** with column: `id` (optional: `label`, `group`, etc.).")
+    st.markdown("**nodes.csv optional**")
     nodes_file = st.file_uploader("Upload nodes.csv (optional)", type=["csv"], key="nodes")
 
     st.divider()
@@ -207,34 +248,111 @@ with st.sidebar:
     directed = st.checkbox("Directed graph", value=False)
     physics = st.checkbox("Physics layout", value=True)
     detect_comm = st.checkbox("Detect communities (Louvain)", value=False)
+
     height = st.selectbox("Canvas height", ["650px", "750px", "900px"], index=0)
-    max_nodes = st.slider("Max nodes to render (for performance)", 50, 5000, 1500, step=50)
+    max_nodes = st.slider("Max nodes to render (performance)", 50, 5000, 1500, step=50)
 
     st.divider()
     st.header("3) Styling")
     node_size_mode = st.selectbox("Node size by", ["degree", "betweenness", "fixed"], index=0)
 
-# Load data
-edges_df = normalize_columns(read_csv(edges_file))
-nodes_df = normalize_columns(read_csv(nodes_file)) if nodes_file else pd.DataFrame()
-
 if edges_file is None:
     st.info("Upload an edges.csv to begin.")
     st.stop()
 
+# Read & clean
+edges_df_raw = strip_and_drop_unnamed(read_csv(edges_file))
+nodes_df_raw = strip_and_drop_unnamed(read_csv(nodes_file)) if nodes_file else pd.DataFrame()
+
+# ----------------------------
+# Mapping UI (dropdowns)
+# ----------------------------
+st.subheader("Column Mapping")
+st.caption("Tell the app which columns to use. This is the quickest way to support any export format.")
+
+mcol1, mcol2 = st.columns([0.5, 0.5], gap="large")
+
+with mcol1:
+    st.markdown("### Edges mapping (required)")
+    e_cols = list(edges_df_raw.columns)
+
+    # Suggest defaults for source/target/type/weight/label
+    def pick_default(col_candidates):
+        for c in col_candidates:
+            if c in e_cols:
+                return c
+        return e_cols[0] if e_cols else None
+
+    default_source = pick_default(["source", "Source", "from", "From", "src", "Src"])
+    default_target = pick_default(["target", "Target", "to", "To", "dst", "Dst"])
+    default_type = pick_default(["type", "Type", "Edge Type", "edge_type", "relationship", "Relationship"])
+    default_weight = pick_default(["weight", "Weight", "value", "Value", "count", "Count"])
+    default_label = pick_default(["label", "Label", "edge_label", "Edge Label", "relationship_label"])
+
+    edge_source_col = st.selectbox("Edge source column", e_cols, index=e_cols.index(default_source) if default_source in e_cols else 0)
+    edge_target_col = st.selectbox("Edge target column", e_cols, index=e_cols.index(default_target) if default_target in e_cols else 0)
+
+    edge_type_col = st.selectbox(
+        "Edge type column (optional)",
+        ["(none)"] + e_cols,
+        index=(["(none)"] + e_cols).index(default_type) if default_type in (["(none)"] + e_cols) else 0,
+    )
+    edge_type_col = None if edge_type_col == "(none)" else edge_type_col
+
+    edge_weight_col = st.selectbox(
+        "Edge weight column (optional)",
+        ["(none)"] + e_cols,
+        index=(["(none)"] + e_cols).index(default_weight) if default_weight in (["(none)"] + e_cols) else 0,
+    )
+    edge_weight_col = None if edge_weight_col == "(none)" else edge_weight_col
+
+    edge_label_col = st.selectbox(
+        "Edge label column (optional)",
+        ["(none)"] + e_cols,
+        index=(["(none)"] + e_cols).index(default_label) if default_label in (["(none)"] + e_cols) else 0,
+    )
+    edge_label_col = None if edge_label_col == "(none)" else edge_label_col
+
+with mcol2:
+    st.markdown("### Nodes mapping (optional)")
+    if nodes_df_raw.empty:
+        st.info("No nodes.csv uploaded — nodes will be created from edge endpoints.")
+        node_id_col = None
+    else:
+        n_cols = list(nodes_df_raw.columns)
+
+        def pick_default_node_id():
+            for c in ["id", "ID", "Id", "name", "Name", "node", "Node", "node_id", "Node ID"]:
+                if c in n_cols:
+                    return c
+            return n_cols[0]
+
+        default_node_id = pick_default_node_id()
+        node_id_col = st.selectbox("Which column is the node id?", n_cols, index=n_cols.index(default_node_id) if default_node_id in n_cols else 0)
+
 # Build graph
 try:
-    G = build_graph(nodes_df, edges_df, directed=directed)
+    G = build_graph(
+        nodes_df=nodes_df_raw,
+        edges_df=edges_df_raw,
+        directed=directed,
+        node_id_col=node_id_col,
+        edge_source_col=edge_source_col,
+        edge_target_col=edge_target_col,
+        edge_type_col=edge_type_col,
+        edge_weight_col=edge_weight_col,
+        edge_label_col=edge_label_col,
+    )
 except Exception as e:
     st.error(f"Could not build graph: {e}")
     st.stop()
 
-# Community detection (adds node attribute: _community)
+# Community detection (adds _community)
 if detect_comm and G.number_of_nodes() > 0 and G.number_of_edges() > 0:
     node_to_comm = detect_communities(G)
     nx.set_node_attributes(G, node_to_comm, "_community")
 
-# Gather attrs
+# Collect attrs
 all_node_attrs = set()
 for _, attrs in G.nodes(data=True):
     all_node_attrs.update(attrs.keys())
@@ -249,9 +367,8 @@ col1, col2 = st.columns([0.35, 0.65], gap="large")
 
 with col1:
     st.subheader("Filters")
-    st.caption("Lightweight filters so you can explore without re-exporting data.")
 
-    # Color nodes by attribute (including computed community)
+    # Node coloring options
     color_options = ["(none)"] + [("(community)" if a == "_community" else a) for a in all_node_attrs]
     node_color_choice = st.selectbox("Color nodes by attribute", color_options, index=0)
 
@@ -271,16 +388,17 @@ with col1:
     edge_color_attr = st.selectbox("Color edges by attribute", ["(none)"] + all_edge_attrs, index=0)
     edge_color_attr = None if edge_color_attr == "(none)" else edge_color_attr
 
-    # Filter by minimum degree
     degrees = dict(G.degree())
     max_deg = max(degrees.values()) if degrees else 0
     min_deg = st.slider("Minimum degree", 0, max_deg, 0)
 
-    # Optional edge-type filter if present
-    edge_type_values = []
-    if "type" in edges_df.columns:
-        edge_type_values = sorted([str(x) for x in edges_df["type"].dropna().unique()])
-    selected_types = st.multiselect("Edge type filter (if `type` exists)", edge_type_values, default=edge_type_values)
+    # Edge type filter if "type" exists (from mapping)
+    type_values = []
+    if "type" in edges_df_raw.columns or (edge_type_col is not None):
+        # We normalized to attrs["type"], but edges_df_raw may not have "type".
+        # Pull unique from graph edges instead.
+        type_values = sorted({str(attrs.get("type")) for _, _, attrs in G.edges(data=True) if attrs.get("type") not in [None, ""]})
+    selected_types = st.multiselect("Edge type filter (if available)", type_values, default=type_values)
 
     search = st.text_input("Search node (by id or label text)", value="").strip().lower()
 
@@ -299,7 +417,7 @@ with col1:
 with col2:
     st.subheader("Network")
 
-    # Apply filters to create subgraph
+    # Node filtering
     keep_nodes = set()
     degrees = dict(G.degree())
 
@@ -318,12 +436,13 @@ with col2:
 
     H = G.subgraph(keep_nodes).copy()
 
-    # Edge type filter
-    if selected_types and "type" in edges_df.columns:
+    # Edge type filter (based on edge attrs["type"])
+    if selected_types:
         remove_edges = []
         for u, v, attrs in H.edges(data=True):
             t = attrs.get("type", None)
-            if t is None:
+            if t is None or t == "":
+                # Keep untyped edges (you can change this behavior if you want)
                 continue
             if str(t) not in selected_types:
                 remove_edges.append((u, v))
@@ -345,8 +464,7 @@ with col2:
         max_nodes=max_nodes,
     )
 
-    html = net.generate_html()
-    st.components.v1.html(html, height=int(height.replace("px", "")) + 30, scrolling=True)
+    st.components.v1.html(net.generate_html(), height=int(height.replace("px", "")) + 30, scrolling=True)
 
     with st.expander("Download filtered subgraph as CSV"):
         out_nodes = pd.DataFrame([{"id": n, **attrs} for n, attrs in H.nodes(data=True)])
