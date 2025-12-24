@@ -274,7 +274,7 @@ if "layout_seed" not in st.session_state:
 # ----------------------------
 # UI
 # ----------------------------
-st.title("Mini Network Mapper (Polinode/Gephi-lite)")
+st.title("Spider: A Mini Network Mapper")
 
 with st.sidebar:
     st.header("Upload")
