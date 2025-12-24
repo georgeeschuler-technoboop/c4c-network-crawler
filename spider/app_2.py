@@ -1,26 +1,25 @@
 # app.py
-import json
-import math
 import time
-from dataclasses import dataclass
-from typing import Optional, Dict, Any, Tuple, List
+import math
+from typing import Optional, Dict, Any, List
 
 import pandas as pd
 import networkx as nx
 import streamlit as st
-from pyvis.network import Network
+import plotly.graph_objects as go
 
 # =============================================================================
 # App Versioning
 # =============================================================================
-APP_VERSION = "0.2.4"
+APP_VERSION = "0.3.0"
 
 VERSION_HISTORY = [
-    ("0.2.4", "Fix PyVis rendering: ensure net.set_options gets JSON only (no JS). Add empty-graph guard + lightweight debug."),
-    ("0.2.3", "Keep layout modes + re-run layout + community legend + export node positions. (Polinode .xlsx supported)."),
-    ("0.2.2", "Add visible app version + version history section."),
-    ("0.2.1", "Add Louvain community detection and color-by-community."),
-    ("0.2.0", "Initial Polinode/CSV upload + column mapping + basic filters and visualization."),
+    ("0.3.0", "Switch renderer to Plotly (more reliable than PyVis in Streamlit). Keep Polinode xlsx/CSV, mapping UI, Louvain communities, legend, rerun layout, export positions."),
+    ("0.2.4", "Attempt PyVis JSON-only set_options + empty-graph guard + versioning."),
+    ("0.2.3", "Layout modes, rerun layout, legend, export positions."),
+    ("0.2.2", "Add visible app version + version history."),
+    ("0.2.1", "Add Louvain community detection."),
+    ("0.2.0", "Initial upload + mapping + basic filters."),
 ]
 
 st.set_page_config(page_title=f"Mini Network Mapper v{APP_VERSION}", layout="wide")
@@ -59,40 +58,16 @@ def detect_communities(G: nx.Graph) -> Dict[str, int]:
     H = G.to_undirected() if isinstance(G, nx.DiGraph) else G
     try:
         from networkx.algorithms.community import louvain_communities
-
-        communities = louvain_communities(H, seed=42)
+        comms = louvain_communities(H, seed=42)
     except Exception:
         from networkx.algorithms.community import greedy_modularity_communities
-
-        communities = list(greedy_modularity_communities(H))
+        comms = list(greedy_modularity_communities(H))
 
     node_to_comm: Dict[str, int] = {}
-    for i, comm in enumerate(communities):
-        for n in comm:
+    for i, cset in enumerate(comms):
+        for n in cset:
             node_to_comm[str(n)] = int(i)
     return node_to_comm
-
-
-def compute_layout_positions(G: nx.Graph, layout_algo: str, seed: int) -> Dict[str, Dict[str, float]]:
-    """
-    Returns dict[node] -> {"x": float, "y": float}
-    Positions are computed in Python and used to freeze nodes in PyVis.
-    """
-    H = G.to_undirected() if isinstance(G, nx.DiGraph) else G
-    if H.number_of_nodes() == 0:
-        return {}
-
-    if layout_algo == "spring":
-        pos = nx.spring_layout(H, seed=seed, iterations=120)
-    elif layout_algo == "kamada_kawai":
-        pos = nx.kamada_kawai_layout(H)
-    else:
-        pos = nx.spring_layout(H, seed=seed, iterations=120)
-
-    scaled: Dict[str, Dict[str, float]] = {}
-    for n, (x, y) in pos.items():
-        scaled[str(n)] = {"x": float(x) * 800.0, "y": float(y) * 800.0}
-    return scaled
 
 
 def build_graph(
@@ -138,7 +113,7 @@ def build_graph(
 
         attrs = row.to_dict()
 
-        # Normalize optionals to standard keys used by filters/legend.
+        # Normalize to standard keys
         if edge_type_col and edge_type_col in edges_df.columns:
             attrs["type"] = "" if pd.isna(row.get(edge_type_col)) else str(row.get(edge_type_col))
         if edge_label_col and edge_label_col in edges_df.columns:
@@ -153,148 +128,146 @@ def build_graph(
     return G
 
 
-def pyvis_options_json(physics_enabled: bool) -> str:
-    """
-    PyVis requires a JSON string here. DO NOT pass JavaScript (e.g., 'var options = ...').
-    """
-    options: Dict[str, Any] = {
-        "nodes": {"borderWidth": 0},
-        "edges": {"smooth": {"type": "dynamic"}},
-        "interaction": {"hover": True, "tooltipDelay": 100, "hideEdgesOnDrag": True},
-        "physics": {
-            "enabled": bool(physics_enabled),
-            "stabilization": {"enabled": True, "iterations": 200, "updateInterval": 25},
-        },
-    }
-    return json.dumps(options)
+def compute_positions(G: nx.Graph, algo: str, seed: int) -> Dict[str, Dict[str, float]]:
+    H = G.to_undirected() if isinstance(G, nx.DiGraph) else G
+    if H.number_of_nodes() == 0:
+        return {}
+
+    if algo == "spring":
+        pos = nx.spring_layout(H, seed=seed, iterations=150)
+    elif algo == "kamada_kawai":
+        pos = nx.kamada_kawai_layout(H)
+    else:
+        pos = nx.spring_layout(H, seed=seed, iterations=150)
+
+    out: Dict[str, Dict[str, float]] = {}
+    for n, (x, y) in pos.items():
+        out[str(n)] = {"x": float(x), "y": float(y)}
+    return out
 
 
-def to_pyvis(
-    G: nx.Graph,
-    height: str,
-    physics_enabled: bool,
+def pick_default(cols: List[str], candidates: List[str]) -> str:
+    for c in candidates:
+        if c in cols:
+            return c
+    return cols[0] if cols else ""
+
+
+def compute_node_sizes(G: nx.Graph, mode: str) -> Dict[str, float]:
+    if mode == "betweenness":
+        b = nx.betweenness_centrality(G)
+        return {str(k): 8 + 40 * float(v) for k, v in b.items()}
+    if mode == "degree":
+        deg = dict(G.degree())
+        return {str(k): 8 + 3 * math.log1p(float(v)) for k, v in deg.items()}
+    return {str(k): 10.0 for k in G.nodes()}
+
+
+def build_plotly_figure(
+    H: nx.Graph,
+    positions: Dict[str, Dict[str, float]],
     node_color_attr: Optional[str],
-    node_size_mode: str,
     label_attr: Optional[str],
-    edge_label_attr: Optional[str],
-    edge_color_attr: Optional[str],
-    max_nodes: int,
-    positions: Optional[Dict[str, Dict[str, float]]],
-) -> Network:
-    net = Network(
-        height=height,
-        width="100%",
-        bgcolor="#ffffff",
-        font_color="#111111",
-        directed=isinstance(G, nx.DiGraph),
+    node_sizes: Dict[str, float],
+):
+    # Edges as line segments
+    edge_x = []
+    edge_y = []
+    for u, v in H.edges():
+        u = str(u); v = str(v)
+        if u not in positions or v not in positions:
+            continue
+        edge_x += [positions[u]["x"], positions[v]["x"], None]
+        edge_y += [positions[u]["y"], positions[v]["y"], None]
+
+    edge_trace = go.Scatter(
+        x=edge_x, y=edge_y,
+        mode="lines",
+        line=dict(width=1),
+        hoverinfo="none",
+        name="edges",
     )
 
-    # If we're using fixed positions, we want physics off.
-    if positions:
-        physics_enabled = False
-
-    net.toggle_physics(physics_enabled)
-
-    degree = dict(G.degree())
-    betweenness = nx.betweenness_centrality(G) if node_size_mode == "betweenness" else {}
-
-    palette = [
-        "#1f77b4",
-        "#ff7f0e",
-        "#2ca02c",
-        "#d62728",
-        "#9467bd",
-        "#8c564b",
-        "#e377c2",
-        "#7f7f7f",
-        "#bcbd22",
-        "#17becf",
-    ]
-
-    nodes = list(G.nodes())
-    if len(nodes) > max_nodes:
-        nodes = nodes[:max_nodes]
-        H = G.subgraph(nodes).copy()
-    else:
-        H = G
-
-    category_to_color: Dict[str, str] = {}
-    color_idx = 0
-
     # Nodes
+    node_x, node_y, node_text, node_ids = [], [], [], []
+    color_vals = []
     for n, attrs in H.nodes(data=True):
-        n_str = str(n)
+        n = str(n)
+        if n not in positions:
+            continue
+        node_x.append(positions[n]["x"])
+        node_y.append(positions[n]["y"])
+        node_ids.append(n)
 
+        # label
         if label_attr and label_attr in attrs and pd.notna(attrs.get(label_attr)):
             label = str(attrs.get(label_attr))
         else:
-            label = n_str
+            label = n
 
-        color = "#4c78a8"
-        if node_color_attr and node_color_attr in attrs and pd.notna(attrs.get(node_color_attr)):
-            cat = str(attrs.get(node_color_attr))
-            if cat not in category_to_color:
-                category_to_color[cat] = palette[color_idx % len(palette)]
-                color_idx += 1
-            color = category_to_color[cat]
-
-        if node_size_mode == "degree":
-            size = 8 + 3 * math.log1p(degree.get(n, 0))
-        elif node_size_mode == "betweenness":
-            size = 8 + 40 * betweenness.get(n, 0)
-        else:
-            size = 10
-
-        title_lines = [f"<b>{label}</b>"]
+        # hover text
+        lines = [f"<b>{label}</b>"]
         for k, v in attrs.items():
             if k == "id":
                 continue
-            title_lines.append(f"{k}: {v}")
-        title = "<br/>".join(title_lines)
+            lines.append(f"{k}: {v}")
+        node_text.append("<br>".join(lines))
 
-        if positions and n_str in positions:
-            net.add_node(
-                n_str,
-                label=label,
-                color=color,
-                size=size,
-                title=title,
-                x=positions[n_str]["x"],
-                y=positions[n_str]["y"],
-                physics=False,
-            )
+        # color attribute
+        if node_color_attr and node_color_attr in attrs and pd.notna(attrs.get(node_color_attr)):
+            color_vals.append(str(attrs.get(node_color_attr)))
         else:
-            net.add_node(n_str, label=label, color=color, size=size, title=title)
+            color_vals.append("")
 
-    # Edges
-    for u, v, attrs in H.edges(data=True):
-        u_str = str(u)
-        v_str = str(v)
+    # Make colors categorical without hardcoding a palette:
+    # Plotly will assign colors across categories automatically in separate traces.
+    # We’ll split nodes by category into traces (better legend, better consistency).
+    df = pd.DataFrame({
+        "id": node_ids,
+        "x": node_x,
+        "y": node_y,
+        "hover": node_text,
+        "cat": color_vals,
+        "size": [node_sizes.get(i, 10.0) for i in node_ids],
+    })
 
-        e_label = ""
-        if edge_label_attr and edge_label_attr in attrs and pd.notna(attrs.get(edge_label_attr)):
-            e_label = str(attrs.get(edge_label_attr))
+    traces = [edge_trace]
 
-        e_color = "#999999"
-        if edge_color_attr and edge_color_attr in attrs and pd.notna(attrs.get(edge_color_attr)):
-            e_cat = str(attrs.get(edge_color_attr))
-            if e_cat not in category_to_color:
-                category_to_color[e_cat] = palette[color_idx % len(palette)]
-                color_idx += 1
-            e_color = category_to_color[e_cat]
+    if node_color_attr:
+        for cat, g in df.groupby("cat", dropna=False):
+            name = str(cat) if cat != "" else "(none)"
+            traces.append(
+                go.Scatter(
+                    x=g["x"], y=g["y"],
+                    mode="markers",
+                    marker=dict(size=g["size"]),
+                    text=g["hover"],
+                    hoverinfo="text",
+                    name=name,
+                )
+            )
+    else:
+        traces.append(
+            go.Scatter(
+                x=df["x"], y=df["y"],
+                mode="markers",
+                marker=dict(size=df["size"]),
+                text=df["hover"],
+                hoverinfo="text",
+                name="nodes",
+            )
+        )
 
-        w = attrs.get("weight", 1.0)
-        try:
-            width = 1 + 2 * math.log1p(float(w))
-        except Exception:
-            width = 2
-
-        net.add_edge(u_str, v_str, label=e_label, color=e_color, width=width, title=str(attrs))
-
-    # CRITICAL: JSON ONLY
-    net.set_options(pyvis_options_json(physics_enabled))
-
-    return net
+    fig = go.Figure(traces)
+    fig.update_layout(
+        showlegend=True,
+        margin=dict(l=10, r=10, t=10, b=10),
+        xaxis=dict(showgrid=False, zeroline=False, visible=False),
+        yaxis=dict(showgrid=False, zeroline=False, visible=False),
+        dragmode="pan",
+    )
+    fig.update_yaxes(scaleanchor="x", scaleratio=1)
+    return fig
 
 
 # =============================================================================
@@ -317,7 +290,7 @@ with st.expander("Version history", expanded=False):
 with st.sidebar:
     st.header("Upload")
 
-    st.markdown("**Option A (recommended):** Polinode-style workbook (`.xlsx`) with sheets `Nodes` and `Edges`.")
+    st.markdown("**Option A (recommended):** Polinode workbook (`.xlsx`) with sheets `Nodes` and `Edges`.")
     workbook = st.file_uploader("Upload workbook (.xlsx)", type=["xlsx", "xls"], key="workbook")
 
     st.markdown("---")
@@ -326,34 +299,23 @@ with st.sidebar:
     nodes_file = st.file_uploader("Upload nodes.csv (optional)", type=["csv"], key="nodes")
 
     st.divider()
-    st.header("Display settings")
+    st.header("Graph settings")
     directed = st.checkbox("Directed graph", value=False)
-
-    layout_mode = st.radio(
-        "Layout mode",
-        ["Auto (best)", "Physics (vis.js)", "Python layout (frozen)"],
-        index=0,
-        help="Auto uses Python frozen layout for big graphs (no drifting), physics for small graphs.",
-    )
-
-    physics_checkbox = st.checkbox("Physics layout (may animate)", value=True)
     detect_comm = st.checkbox("Detect communities (Louvain)", value=False)
 
-    height = st.selectbox("Canvas height", ["650px", "750px", "900px"], index=0)
-    max_nodes = st.slider("Max nodes to render (performance)", 50, 5000, 1500, step=50)
+    layout_algo = st.selectbox("Layout algorithm", ["spring", "kamada_kawai"], index=0)
 
-    st.divider()
-    st.header("Styling")
-    node_size_mode = st.selectbox("Node size by", ["degree", "betweenness", "fixed"], index=0)
-    python_layout_algo = st.selectbox("Python layout algorithm", ["spring", "kamada_kawai"], index=0)
-
-    st.divider()
-    st.header("Layout actions")
     if st.button("Re-run layout"):
         st.session_state.layout_seed = (st.session_state.layout_seed + 1) % 1_000_000
 
     st.divider()
-    debug_mode = st.checkbox("Debug mode (show tables + counts)", value=False)
+    st.header("Performance")
+    max_nodes = st.slider("Max nodes to render", 50, 5000, 1500, step=50)
+    debug_mode = st.checkbox("Debug mode", value=False)
+
+    st.divider()
+    st.header("Styling")
+    node_size_mode = st.selectbox("Node size by", ["degree", "betweenness", "fixed"], index=0)
 
 # Load data
 if workbook is not None:
@@ -368,6 +330,10 @@ else:
     nodes_df_raw = strip_and_drop_unnamed(read_table(nodes_file)) if nodes_file else pd.DataFrame()
     source_mode = "csv"
 
+if edges_df_raw.empty:
+    st.error("Edges table is empty.")
+    st.stop()
+
 if debug_mode:
     st.subheader("Debug: Raw tables")
     st.write(f"Source mode: **{source_mode}**")
@@ -379,51 +345,33 @@ if debug_mode:
 
 # Column Mapping
 st.subheader("Column Mapping")
-st.caption("Pick which columns to use (supports Polinode exports and most other formats).")
+st.caption("Pick which columns to use (works with Polinode exports and most other formats).")
 
 mcol1, mcol2 = st.columns([0.5, 0.5], gap="large")
 
 with mcol1:
     st.markdown("### Edges (required)")
     e_cols = list(edges_df_raw.columns)
-    if not e_cols:
-        st.error("Edges table has no columns. Check your file.")
-        st.stop()
-
-    def pick_default(cols: List[str], candidates: List[str]) -> str:
-        for c in candidates:
-            if c in cols:
-                return c
-        return cols[0]
 
     default_source = pick_default(e_cols, ["Source", "source", "From", "from", "src", "Src"])
     default_target = pick_default(e_cols, ["Target", "target", "To", "to", "dst", "Dst"])
     default_type = pick_default(e_cols, ["Type", "type", "Edge Type", "edge_type", "relationship", "Relationship"])
-    default_weight = pick_default(e_cols, ["Amount", "amount", "Weight", "weight", "Value", "value", "count", "Count"])
+    default_weight = pick_default(e_cols, ["Amount", "amount", "Weight", "weight", "Value", "value"])
     default_label = pick_default(e_cols, ["label", "Label", "Purpose", "purpose", "Description", "description"])
 
     edge_source_col = st.selectbox("Edge source column", e_cols, index=e_cols.index(default_source))
     edge_target_col = st.selectbox("Edge target column", e_cols, index=e_cols.index(default_target))
 
-    edge_type_col_sel = st.selectbox(
-        "Edge type column (optional)",
-        ["(none)"] + e_cols,
-        index=(["(none)"] + e_cols).index(default_type) if default_type in e_cols else 0,
-    )
+    edge_type_col_sel = st.selectbox("Edge type column (optional)", ["(none)"] + e_cols,
+                                     index=(["(none)"] + e_cols).index(default_type) if default_type in e_cols else 0)
     edge_type_col = None if edge_type_col_sel == "(none)" else edge_type_col_sel
 
-    edge_weight_col_sel = st.selectbox(
-        "Edge weight column (optional)",
-        ["(none)"] + e_cols,
-        index=(["(none)"] + e_cols).index(default_weight) if default_weight in e_cols else 0,
-    )
+    edge_weight_col_sel = st.selectbox("Edge weight column (optional)", ["(none)"] + e_cols,
+                                       index=(["(none)"] + e_cols).index(default_weight) if default_weight in e_cols else 0)
     edge_weight_col = None if edge_weight_col_sel == "(none)" else edge_weight_col_sel
 
-    edge_label_col_sel = st.selectbox(
-        "Edge label column (optional)",
-        ["(none)"] + e_cols,
-        index=(["(none)"] + e_cols).index(default_label) if default_label in e_cols else 0,
-    )
+    edge_label_col_sel = st.selectbox("Edge label column (optional)", ["(none)"] + e_cols,
+                                      index=(["(none)"] + e_cols).index(default_label) if default_label in e_cols else 0)
     edge_label_col = None if edge_label_col_sel == "(none)" else edge_label_col_sel
 
 with mcol2:
@@ -433,7 +381,7 @@ with mcol2:
         node_id_col = None
     else:
         n_cols = list(nodes_df_raw.columns)
-        default_node_id = "Name" if "Name" in n_cols else ("id" if "id" in n_cols else n_cols[0])
+        default_node_id = "Name" if "Name" in n_cols else (n_cols[0] if n_cols else None)
         node_id_col = st.selectbox("Which column is the node id?", n_cols, index=n_cols.index(default_node_id))
 
 # Build graph
@@ -453,16 +401,14 @@ except Exception as e:
     st.error(f"Could not build graph: {e}")
     st.stop()
 
-# Communities
+# Add communities
 if detect_comm and G.number_of_nodes() > 0 and G.number_of_edges() > 0:
     node_to_comm = detect_communities(G)
     nx.set_node_attributes(G, node_to_comm, "_community")
 
-# Collect attrs
 all_node_attrs = sorted({k for _, a in G.nodes(data=True) for k in a.keys()})
 all_edge_attrs = sorted({k for _, _, a in G.edges(data=True) for k in a.keys()})
 
-# Main columns
 col1, col2 = st.columns([0.35, 0.65], gap="large")
 
 with col1:
@@ -480,34 +426,25 @@ with col1:
     label_attr_sel = st.selectbox("Node label attribute", ["(id)"] + all_node_attrs, index=0)
     label_attr = None if label_attr_sel == "(id)" else label_attr_sel
 
-    edge_label_attr_sel = st.selectbox("Edge label attribute", ["(none)"] + all_edge_attrs, index=0)
-    edge_label_attr = None if edge_label_attr_sel == "(none)" else edge_label_attr_sel
-
-    edge_color_attr_sel = st.selectbox("Color edges by attribute", ["(none)"] + all_edge_attrs, index=0)
-    edge_color_attr = None if edge_color_attr_sel == "(none)" else edge_color_attr_sel
-
     degrees = dict(G.degree())
     max_deg = max(degrees.values()) if degrees else 0
     min_deg = st.slider("Minimum degree", 0, max_deg, 0)
 
-    # Edge type filter (based on normalized attrs["type"])
     type_values = sorted({str(a.get("type")) for _, _, a in G.edges(data=True) if a.get("type") not in [None, ""]})
     if type_values:
         selected_types = st.multiselect("Edge type filter", type_values, default=type_values)
     else:
         selected_types = []
 
-    search = st.text_input("Search node (by id or label text)", value="").strip().lower()
+    search = st.text_input("Search node (by id/label)", value="").strip().lower()
 
     st.divider()
     st.subheader("Stats")
-    st.write(f"**Source mode:** {source_mode}")
     st.write(f"**Nodes:** {G.number_of_nodes():,}")
     st.write(f"**Edges:** {G.number_of_edges():,}")
     if G.number_of_nodes() > 0:
         st.write(f"**Density:** {nx.density(G):.4f}")
 
-    # Community legend
     if "_community" in all_node_attrs:
         st.divider()
         st.subheader("Community legend")
@@ -522,7 +459,6 @@ with col1:
                 .reset_index(drop=True)
             )
             st.dataframe(legend, use_container_width=True, height=240)
-
             st.download_button(
                 "Download community_legend.csv",
                 data=legend.to_csv(index=False).encode("utf-8"),
@@ -535,21 +471,22 @@ with col2:
 
     # Filter nodes
     keep_nodes = set()
-    degrees = dict(G.degree())
+    deg = dict(G.degree())
     for n, attrs in G.nodes(data=True):
-        if degrees.get(n, 0) < min_deg:
+        n = str(n)
+        if deg.get(n, 0) < min_deg:
             continue
         if search:
-            hay = str(n).lower()
+            hay = n.lower()
             if label_attr and label_attr in attrs and pd.notna(attrs.get(label_attr)):
                 hay += " " + str(attrs.get(label_attr)).lower()
             if search not in hay:
                 continue
-        keep_nodes.add(str(n))
+        keep_nodes.add(n)
 
     H = G.subgraph(keep_nodes).copy()
 
-    # Filter edges by type
+    # Edge type filtering
     if selected_types:
         remove_edges = []
         for u, v, attrs in H.edges(data=True):
@@ -560,62 +497,33 @@ with col2:
                 remove_edges.append((u, v))
         H.remove_edges_from(remove_edges)
 
-        # Remove isolates created by edge filtering
         isolates = [n for n in H.nodes() if H.degree(n) == 0]
         H.remove_nodes_from(isolates)
 
-    # Guard: if filters remove everything, show why.
+    # Performance: node cap
+    if H.number_of_nodes() > max_nodes:
+        keep = list(H.nodes())[:max_nodes]
+        H = H.subgraph(keep).copy()
+
     if H.number_of_nodes() == 0 or H.number_of_edges() == 0:
-        st.warning(
-            "No graph to render (your current filters likely removed everything). "
-            "Try setting **Minimum degree** back to 0, clearing **Edge type filter**, and clearing **Search**."
-        )
+        st.warning("No graph to render after filters. Set Minimum degree to 0, clear Edge type filter, and clear Search.")
         if debug_mode:
-            st.write(
-                {
-                    "G_nodes": G.number_of_nodes(),
-                    "G_edges": G.number_of_edges(),
-                    "H_nodes": H.number_of_nodes(),
-                    "H_edges": H.number_of_edges(),
-                    "min_degree": min_deg,
-                    "selected_types_count": len(selected_types),
-                    "search": search,
-                }
-            )
+            st.write({"H_nodes": H.number_of_nodes(), "H_edges": H.number_of_edges(), "min_deg": min_deg, "search": search})
         st.stop()
 
-    # Layout behavior + physics fix
-    N = H.number_of_nodes()
-    positions = None
+    # Layout + positions (always compute so we can export)
+    positions = compute_positions(H, layout_algo, seed=st.session_state.layout_seed)
 
-    if layout_mode == "Physics (vis.js)":
-        physics_enabled = bool(physics_checkbox)
-        if N > 250 and physics_enabled:
-            st.warning("Physics on a large graph may drift. Consider **Python layout (frozen)** or Auto.")
-    elif layout_mode == "Python layout (frozen)":
-        physics_enabled = False
-        positions = compute_layout_positions(H, python_layout_algo, seed=st.session_state.layout_seed)
-    else:  # Auto (best)
-        if N > 250:
-            physics_enabled = False
-            positions = compute_layout_positions(H, python_layout_algo, seed=st.session_state.layout_seed)
-        else:
-            physics_enabled = bool(physics_checkbox)
+    node_sizes = compute_node_sizes(H, node_size_mode)
 
-    net = to_pyvis(
-        H,
-        height=height,
-        physics_enabled=physics_enabled,
-        node_color_attr=node_color_attr,
-        node_size_mode=node_size_mode,
-        label_attr=label_attr,
-        edge_label_attr=edge_label_attr,
-        edge_color_attr=edge_color_attr,
-        max_nodes=max_nodes,
+    fig = build_plotly_figure(
+        H=H,
         positions=positions,
+        node_color_attr=node_color_attr,
+        label_attr=label_attr,
+        node_sizes=node_sizes,
     )
-
-    st.components.v1.html(net.generate_html(), height=int(height.replace("px", "")) + 30, scrolling=True)
+    st.plotly_chart(fig, use_container_width=True)
 
     with st.expander("Downloads"):
         out_nodes = pd.DataFrame([{"id": str(n), **a} for n, a in H.nodes(data=True)])
@@ -634,14 +542,10 @@ with col2:
             mime="text/csv",
         )
 
-        # Positions export (only reliable in Python layout mode / Auto when it chooses Python)
-        if positions:
-            pos_df = pd.DataFrame([{"id": n, "x": positions[n]["x"], "y": positions[n]["y"]} for n in positions.keys()])
-            st.download_button(
-                "Download node_positions.csv",
-                data=pos_df.to_csv(index=False).encode("utf-8"),
-                file_name="node_positions.csv",
-                mime="text/csv",
-            )
-        else:
-            st.info("Node positions export is available when using **Python layout (frozen)** (or Auto on larger graphs).")
+        pos_df = pd.DataFrame([{"id": n, "x": positions[n]["x"], "y": positions[n]["y"]} for n in positions.keys()])
+        st.download_button(
+            "Download node_positions.csv",
+            data=pos_df.to_csv(index=False).encode("utf-8"),
+            file_name="node_positions.csv",
+            mime="text/csv",
+        )
