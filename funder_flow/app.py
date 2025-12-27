@@ -13,6 +13,11 @@ Outputs conform to C4C Network Schema v1 (MVP):
 
 VERSION HISTORY:
 ----------------
+UPDATED v0.23.1: iPad Safari XML download guardrail + clearer UX
+- Detect and block “fake XML” files saved from iPad Safari (rendered text view instead of raw XML)
+- Show actionable error message: long-press XML link → “Download Linked File”
+- Add UI caption reminding iPad users about the correct download method
+
 UPDATED v0.23.0: Phase 2 - Project Store cloud integration
 - Save bundles to cloud (Supabase Storage + projects table)
 - ZIP bundles uploaded with full metadata
@@ -781,6 +786,48 @@ def extract_board_with_fallback(file_bytes: bytes, filename: str, meta: dict) ->
         return pd.DataFrame()
 
 
+
+
+# -----------------------------------------------------------------------------
+# Upload validation helpers (pre-parse guardrails)
+# -----------------------------------------------------------------------------
+def _is_real_xml(data: bytes) -> bool:
+    """Return True if bytes look like actual XML markup."""
+    head = data.lstrip()[:200]
+    return head.startswith(b"<") or head.startswith(b"<?xml")
+
+def _looks_like_mobile_saved_text(data: bytes) -> bool:
+    """
+    Heuristic for the iPad Safari failure mode where the user saves the rendered
+    text view instead of the raw XML bytes from ProPublica.
+    """
+    if _is_real_xml(data):
+        return False
+
+    snippet = data[:6000].decode("utf-8", errors="ignore")
+    has_any_angle = ("<" in snippet) and (">" in snippet)
+    has_ts = bool(re.search(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}", snippet))
+    has_einish = bool(re.search(r"\b\d{8,9}\b", snippet))
+    return (not has_any_angle) and (has_ts or has_einish)
+
+def validate_uploaded_xml_or_raise(file_bytes: bytes, filename: str) -> None:
+    """Raise a ValueError with a friendly message if file isn't valid XML."""
+    if _is_real_xml(file_bytes):
+        return
+
+    if _looks_like_mobile_saved_text(file_bytes):
+        raise ValueError(
+            "This file is named .xml but it isn't XML markup (it looks like a rendered text view). "
+            "On iPad Safari, tapping the ProPublica 'XML' link and saving often produces this format. "
+            "Fix: long-press the XML link and choose “Download Linked File”, then upload the downloaded file."
+        )
+
+    start = file_bytes[:160].decode("utf-8", errors="replace")
+    raise ValueError(
+        "This file is named .xml but it doesn't appear to be valid XML (it doesn't start with '<'). "
+        f"File starts with: {start!r}"
+    )
+
 def process_uploaded_files(uploaded_files, tax_year_override: str = "", region_spec: dict = None) -> tuple:
     """
     Process uploaded 990-PF/990 files and return canonical outputs.
@@ -797,7 +844,11 @@ def process_uploaded_files(uploaded_files, tax_year_override: str = "", region_s
         try:
             file_bytes = uploaded_file.read()
             filename = uploaded_file.name.lower()
-            
+
+            # Guardrail: iPad Safari sometimes saves a rendered text view as “.xml” (not real XML)
+            if filename.endswith('.xml'):
+                validate_uploaded_xml_or_raise(file_bytes, uploaded_file.name)
+
             # Route via unified dispatcher (PDF/XML) with region tagging
             result = parse_irs_return(file_bytes, uploaded_file.name, tax_year_override, region_spec=region_spec)
             
@@ -2529,6 +2580,8 @@ def render_upload_interface(project_name: str):
             *PDF parsing is in beta. XML is preferred for production use.*
             """)
         
+        st.caption("📱 iPad tip: long-press the ProPublica 'XML' link → 'Download Linked File'. Tapping and saving may produce a non-XML text file.")
+
         uploaded_files = st.file_uploader(
             f"Upload 990 files (max {MAX_FILES})",
             type=["pdf", "xml"],
