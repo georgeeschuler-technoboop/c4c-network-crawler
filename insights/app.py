@@ -6,6 +6,12 @@ Reads exported data from OrgGraph US/CA projects.
 
 VERSION HISTORY:
 ----------------
+UPDATED v0.15.8: Immediate Save After Linking
+- NEW: "Save Linked Project to Cloud" dialog appears immediately after creating linked network
+- NEW: No need to run insights first before saving
+- Shows overlap % in the save dialog
+- Improved UX flow: Link → Save → Run Insights
+
 UPDATED v0.15.7: Overlap Analysis Diagnostics
 - NEW: Shows manifest status after loading linked project from cloud
 - NEW: Warning if linked project was saved without overlap_analysis
@@ -188,7 +194,7 @@ from c4c_utils.c4c_supabase import C4CSupabase
 # Config
 # =============================================================================
 
-APP_VERSION = "0.15.7"  # Phase 4: Overlap Analysis Diagnostics
+APP_VERSION = "0.15.8"  # Phase 4: Immediate Save After Linking
 C4C_LOGO_URL = "https://static.wixstatic.com/media/275a3f_9c48d5079fcf4b688606c81d8f34d5a5~mv2.jpg"
 INSIGHTGRAPH_ICON_URL = "https://static.wixstatic.com/media/275a3f_7736e28c9f5e40c1b2407e09dc5cb6e7~mv2.png"
 
@@ -674,6 +680,8 @@ def init_session_state():
         st.session_state.link_org_data = None
     if "linked_project_info" not in st.session_state:
         st.session_state.linked_project_info = None
+    if "show_linked_save_dialog" not in st.session_state:
+        st.session_state.show_linked_save_dialog = False
     
     # Initialize Supabase connection (legacy)
     init_supabase()
@@ -1418,6 +1426,8 @@ Influence and funding are decoupled. The coalition relies on under-resourced act
                 st.session_state.merged_projects = None
                 # Track linked project info for display
                 st.session_state.linked_project_info = linked_data.get("manifest", {}).get("match_stats", {})
+                # Set flag to show save dialog
+                st.session_state.show_linked_save_dialog = True
                 st.success(f"✅ Created linked network: {linked_data['node_count']} nodes, {linked_data['edge_count']} edges")
                 st.rerun()
             else:
@@ -3469,6 +3479,57 @@ def main():
                 st.rerun()
     else:
         # No precomputed - must run (or cloud project)
+        
+        # Show save option for newly created linked projects
+        if is_cloud_project and st.session_state.get("show_linked_save_dialog"):
+            client = get_project_store_authenticated()
+            if client:
+                st.markdown("### ☁️ Save Linked Project to Cloud")
+                st.caption("Save this linked network before running insights, so you can reload it later.")
+                
+                cloud_data = st.session_state.get("cloud_project_data", {})
+                source_manifest = cloud_data.get("manifest", {})
+                source_projects = source_manifest.get("source_projects", ["actorgraph", "orggraph"])
+                overlap = source_manifest.get("overlap_analysis", {})
+                overlap_pct = overlap.get("overlap_pct", 0)
+                
+                default_name = f"Linked: {' + '.join(source_projects[:2])}"
+                
+                col_name, col_btn = st.columns([3, 1])
+                
+                with col_name:
+                    linked_name = st.text_input(
+                        "Project name",
+                        value=default_name,
+                        key="linked_project_name_immediate",
+                        label_visibility="collapsed",
+                        placeholder="Enter name for linked project"
+                    )
+                
+                with col_btn:
+                    if st.button("☁️ Save", type="primary", use_container_width=True, key="save_linked_immediate"):
+                        if linked_name:
+                            with st.spinner("☁️ Saving linked project..."):
+                                success, message, slug = save_linked_to_cloud(
+                                    name=linked_name,
+                                    data=cloud_data
+                                )
+                                if success:
+                                    st.success(f"✅ {message}")
+                                    # Clear the dialog flag but keep linked_project_info
+                                    st.session_state.show_linked_save_dialog = False
+                                    st.rerun()
+                                else:
+                                    st.error(f"❌ {message}")
+                        else:
+                            st.warning("Enter a name for the linked project")
+                
+                # Show overlap info
+                if overlap_pct > 0:
+                    st.caption(f"🔗 Overlap: {overlap_pct:.1f}% | This will be included in reports.")
+                
+                st.divider()
+        
         compute_btn = st.button("🚀 Run Insights Engine", type="primary")
         
         if compute_btn:
