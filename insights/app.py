@@ -6,6 +6,11 @@ Reads exported data from OrgGraph US/CA projects.
 
 VERSION HISTORY:
 ----------------
+UPDATED v0.15.7: Overlap Analysis Diagnostics
+- NEW: Shows manifest status after loading linked project from cloud
+- NEW: Warning if linked project was saved without overlap_analysis
+- NEW: Debug logging for manifest in compute_insights_from_dataframes
+
 UPDATED v0.15.6: Save Linked Projects to Cloud
 - NEW: save_linked_to_cloud() function
 - NEW: "Save Linked Project to Cloud" button in Downloads section
@@ -183,7 +188,7 @@ from c4c_utils.c4c_supabase import C4CSupabase
 # Config
 # =============================================================================
 
-APP_VERSION = "0.15.6"  # Phase 4: Save Linked Projects to Cloud
+APP_VERSION = "0.15.7"  # Phase 4: Overlap Analysis Diagnostics
 C4C_LOGO_URL = "https://static.wixstatic.com/media/275a3f_9c48d5079fcf4b688606c81d8f34d5a5~mv2.jpg"
 INSIGHTGRAPH_ICON_URL = "https://static.wixstatic.com/media/275a3f_7736e28c9f5e40c1b2407e09dc5cb6e7~mv2.png"
 
@@ -2834,6 +2839,14 @@ def compute_insights_from_dataframes(nodes_df: pd.DataFrame, edges_df: pd.DataFr
             )
             
             # Add overlap analysis section if this is a linked project
+            # Debug: Log manifest status
+            print(f"DEBUG: manifest present: {manifest is not None}")
+            if manifest:
+                print(f"DEBUG: manifest keys: {list(manifest.keys())}")
+                print(f"DEBUG: overlap_analysis present: {'overlap_analysis' in manifest}")
+                if 'overlap_analysis' in manifest:
+                    print(f"DEBUG: overlap_analysis: {manifest['overlap_analysis']}")
+            
             if manifest and manifest.get("overlap_analysis"):
                 overlap = manifest["overlap_analysis"]
                 match_stats = manifest.get("match_stats", {})
@@ -3403,6 +3416,16 @@ def main():
         is_cloud_project = True
         
         st.success(f"☁️ **Loaded from cloud:** {cloud_data.get('name', cloud_data['project_id'])}")
+        
+        # Diagnostic: Show manifest status for linked projects
+        manifest = cloud_data.get("manifest", {})
+        if manifest.get("linked"):
+            has_overlap = "overlap_analysis" in manifest and bool(manifest.get("overlap_analysis"))
+            if has_overlap:
+                overlap_pct = manifest["overlap_analysis"].get("overlap_pct", "?")
+                st.caption(f"🔗 Linked project with overlap analysis ({overlap_pct}% overlap)")
+            else:
+                st.warning("⚠️ This linked project was saved without overlap analysis. Re-create the link to include it in reports.")
     
     # -------------------------------------------------------------------------
     # Stop if no project selected
