@@ -6,6 +6,12 @@ Reads exported data from OrgGraph US/CA projects.
 
 VERSION HISTORY:
 ----------------
+UPDATED v0.15.6: Save Linked Projects to Cloud
+- NEW: save_linked_to_cloud() function
+- NEW: "Save Linked Project to Cloud" button in Downloads section
+- Linked projects now persist with full manifest (match_stats, overlap_analysis)
+- Description includes source projects and overlap percentage
+
 UPDATED v0.15.5: Overlap Analysis in Reports
 - NEW: Overlap analysis now included in markdown report for linked projects
 - NEW: Overlap analysis stored in manifest for persistence
@@ -177,7 +183,7 @@ from c4c_utils.c4c_supabase import C4CSupabase
 # Config
 # =============================================================================
 
-APP_VERSION = "0.15.5"  # Phase 4: Overlap Analysis in Reports
+APP_VERSION = "0.15.6"  # Phase 4: Save Linked Projects to Cloud
 C4C_LOGO_URL = "https://static.wixstatic.com/media/275a3f_9c48d5079fcf4b688606c81d8f34d5a5~mv2.jpg"
 INSIGHTGRAPH_ICON_URL = "https://static.wixstatic.com/media/275a3f_7736e28c9f5e40c1b2407e09dc5cb6e7~mv2.png"
 
@@ -1635,6 +1641,105 @@ def save_merged_to_cloud(name: str, data: dict, source_projects: list) -> tuple:
         return False, f"Failed to create bundle: {str(e)}", None
 
 
+def save_linked_to_cloud(name: str, data: dict) -> tuple:
+    """
+    Save a linked project bundle to cloud storage.
+    
+    Args:
+        name: Project name
+        data: Dict with nodes_df, edges_df, grants_df, manifest, etc.
+    
+    Returns:
+        Tuple of (success: bool, message: str, slug: str or None)
+    """
+    client = get_project_store_authenticated()
+    if not client:
+        return False, "Not authenticated", None
+    
+    # Create ZIP bundle
+    zip_buffer = BytesIO()
+    
+    try:
+        from datetime import datetime, timezone
+        
+        # Get manifest from linked data
+        source_manifest = data.get("manifest", {})
+        
+        with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
+            # Create manifest including overlap analysis
+            manifest = {
+                "schema_version": "c4c_coregraph_v1",
+                "bundle_version": "1.0",
+                "source_app": "insightgraph_linked",
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "linked": True,
+                "source_projects": source_manifest.get("source_projects", []),
+                "node_count": len(data.get("nodes_df", [])) if data.get("nodes_df") is not None else 0,
+                "edge_count": len(data.get("edges_df", [])) if data.get("edges_df") is not None else 0,
+                "match_stats": source_manifest.get("match_stats", {}),
+                "overlap_analysis": source_manifest.get("overlap_analysis", {}),
+            }
+            zf.writestr("manifest.json", json.dumps(manifest, indent=2))
+            
+            # Write nodes.csv (with LinkedIn columns)
+            if data.get("nodes_df") is not None and not data["nodes_df"].empty:
+                zf.writestr("nodes.csv", data["nodes_df"].to_csv(index=False))
+            
+            # Write edges.csv
+            if data.get("edges_df") is not None and not data["edges_df"].empty:
+                zf.writestr("edges.csv", data["edges_df"].to_csv(index=False))
+            
+            # Write grants_detail.csv
+            if data.get("grants_df") is not None and not data["grants_df"].empty:
+                zf.writestr("grants_detail.csv", data["grants_df"].to_csv(index=False))
+            
+            # Write analysis artifacts if present
+            if data.get("insight_cards"):
+                zf.writestr("analysis/insight_cards.json", json.dumps(data["insight_cards"], indent=2))
+            if data.get("project_summary"):
+                zf.writestr("analysis/project_summary.json", json.dumps(data["project_summary"], indent=2))
+            if data.get("markdown_report"):
+                zf.writestr("analysis/insight_report.md", data["markdown_report"])
+            if data.get("metrics_df") is not None and not data["metrics_df"].empty:
+                zf.writestr("analysis/node_metrics.csv", data["metrics_df"].to_csv(index=False))
+        
+        zip_buffer.seek(0)
+        bundle_data = zip_buffer.getvalue()
+        
+        # Calculate counts
+        node_count = len(data.get("nodes_df", [])) if data.get("nodes_df") is not None else 0
+        edge_count = len(data.get("edges_df", [])) if data.get("edges_df") is not None else 0
+        
+        # Build description from source projects and overlap
+        source_projects = source_manifest.get("source_projects", [])
+        overlap = source_manifest.get("overlap_analysis", {})
+        overlap_pct = overlap.get("overlap_pct", 0)
+        description = f"Linked from: {', '.join(source_projects)} | Overlap: {overlap_pct}%"
+        
+        # Save to Project Store
+        project, error = client.save_project(
+            name=name,
+            bundle_data=bundle_data,
+            source_app="insightgraph",  # Use insightgraph as source for linked
+            node_count=node_count,
+            edge_count=edge_count,
+            jurisdiction=None,  # Linked projects may span jurisdictions
+            region_preset=None,
+            app_version=APP_VERSION,
+            schema_version="c4c_coregraph_v1",
+            bundle_version="1.0",
+            description=description
+        )
+        
+        if error:
+            return False, f"Upload failed: {error}", None
+        
+        return True, f"Saved as '{project.slug}'", project.slug
+        
+    except Exception as e:
+        return False, f"Failed to create bundle: {str(e)}", None
+
+
 def delete_cloud_project(project_id: str) -> tuple:
     """
     Delete a project from cloud storage.
@@ -2447,6 +2552,46 @@ def render_downloads(data: dict):
             st.caption(f"📊 {total_linked} of {total_nodes} organizations linked with LinkedIn data ({coverage_pct:.1f}% coverage)")
         
         st.caption("Linked organizations now have: `linkedin_url`, `linkedin_industry`, `linkedin_website` columns")
+        
+        # Save linked project to cloud
+        if cloud_enabled:
+            st.markdown("**☁️ Save Linked Project to Cloud**")
+            st.caption("Save this linked network to cloud for quick access later.")
+            
+            # Get default name from source projects
+            cloud_data = st.session_state.get("cloud_project_data", {})
+            source_manifest = cloud_data.get("manifest", {})
+            source_projects = source_manifest.get("source_projects", ["actorgraph", "orggraph"])
+            default_name = f"Linked: {' + '.join(source_projects[:2])}"
+            
+            col_name, col_btn = st.columns([3, 1])
+            
+            with col_name:
+                linked_name = st.text_input(
+                    "Project name",
+                    value=default_name,
+                    key="linked_project_name",
+                    label_visibility="collapsed",
+                    placeholder="Enter name for linked project"
+                )
+            
+            with col_btn:
+                if st.button("☁️ Save", type="primary", use_container_width=True, key="save_linked_btn"):
+                    if linked_name:
+                        with st.spinner("☁️ Saving linked project..."):
+                            success, message, slug = save_linked_to_cloud(
+                                name=linked_name,
+                                data=cloud_data
+                            )
+                            if success:
+                                st.success(f"✅ {message}")
+                                # Clear the linked state since it's now saved
+                                st.session_state.linked_project_info = None
+                                st.rerun()
+                            else:
+                                st.error(f"❌ {message}")
+                    else:
+                        st.warning("Enter a name for the linked project")
     
     if is_merged and cloud_enabled:
         st.divider()
@@ -2486,16 +2631,16 @@ def render_downloads(data: dict):
                 else:
                     st.warning("Enter a name for the merged project")
     
-    elif not is_merged:
-        # Not a merged project - show disabled button
+    elif not is_merged and not is_linked:
+        # Not a merged or linked project - show disabled button
         col_cloud1, col_cloud2 = st.columns([2, 1])
         with col_cloud1:
             st.button("☁️ Save to Cloud",
                       disabled=True,
                       use_container_width=True,
-                      help="Only available for merged projects")
+                      help="Only available for merged or linked projects")
         with col_cloud2:
-            st.caption("☁️ Merge projects first")
+            st.caption("☁️ Merge or link projects first")
     
     # Individual files
     st.caption("Individual data files:")
