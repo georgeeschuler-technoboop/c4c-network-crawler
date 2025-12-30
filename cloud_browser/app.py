@@ -1,11 +1,14 @@
 # =============================================================================
 # PAGE CONFIG - MUST BE FIRST (before any other st.* calls)
 # =============================================================================
+from pathlib import Path
 import streamlit as st
+
+ICON_PATH = Path(__file__).parent / "cloudprojects_icon.png"
 
 st.set_page_config(
     page_title="CloudProjects",
-    page_icon="☁️",
+    page_icon=str(ICON_PATH),
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -13,7 +16,6 @@ st.set_page_config(
 # =============================================================================
 # REST OF IMPORTS
 # =============================================================================
-from pathlib import Path
 import pandas as pd
 from datetime import datetime, timezone
 from io import BytesIO
@@ -42,7 +44,7 @@ from typing import Optional, Tuple, List
 # =============================================================================
 # Constants
 # =============================================================================
-APP_VERSION = "0.3.3"
+APP_VERSION = "0.3.4"
 
 # Get the directory where this script is located
 SCRIPT_DIR = Path(__file__).parent
