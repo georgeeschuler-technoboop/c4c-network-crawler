@@ -5,7 +5,8 @@
 # saved from OrgGraph, ActorGraph, and InsightGraph.
 #
 # VERSION HISTORY:
-# v0.3.5: Force favicon via base64 injection (bypasses Streamlit/CDN/favicon caching)
+# v0.3.6: Inject favicon via st.markdown (<link rel="icon"> data URL) to bypass Streamlit/CDN caching
+# v0.3.5: Attempted favicon via components.html() (iframe-limited; ineffective)
 # v0.3.4: Attempted local icon path resolution
 # v0.3.2: Use PIL Image object for icon (handles format conversion)
 # v0.3.1: Icon at very top per technical advisory
@@ -20,47 +21,34 @@
 # =============================================================================
 # PAGE CONFIG — MUST BE FIRST (before any other st.* calls)
 # =============================================================================
-from pathlib import Path
 import base64
-
+from pathlib import Path
 import streamlit as st
-import streamlit.components.v1 as components
 
 SCRIPT_DIR = Path(__file__).parent
 ICON_PATH = SCRIPT_DIR / "cloudprojects_icon.png"
 
 st.set_page_config(
     page_title="CloudProjects",
-    page_icon=str(ICON_PATH),  # keep this for Streamlit-native path if it works
+    page_icon="☁️",  # keep simple; we inject real favicon below
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
-def _force_favicon(png_path: Path) -> None:
-    """
-    Bypass Streamlit/favicon caching by injecting a data-URL favicon.
-    If this runs, the browser should show the icon even if Streamlit/CDN caches
-    the default favicon.
-    """
-    try:
-        b64 = base64.b64encode(png_path.read_bytes()).decode("utf-8")
-        components.html(
-            f"""
-            <script>
-              const link = document.querySelector("link[rel~='icon']") || document.createElement('link');
-              link.rel = 'icon';
-              link.href = "data:image/png;base64,{b64}";
-              document.head.appendChild(link);
-            </script>
-            """,
-            height=0,
-            width=0,
-        )
-    except Exception:
-        # Fail silently; app should still run even if favicon injection fails.
-        pass
-
-_force_favicon(ICON_PATH)
+# --- FAVICON INJECTION (main DOM, not iframe) ---
+# This attempts to set the favicon via data-URL <link> tags.
+# Note: Some Streamlit deployments may still override/pin favicon at host level.
+try:
+    b64 = base64.b64encode(ICON_PATH.read_bytes()).decode("utf-8")
+    st.markdown(
+        f"""
+        <link rel="icon" href="data:image/png;base64,{b64}">
+        <link rel="shortcut icon" href="data:image/png;base64,{b64}">
+        """,
+        unsafe_allow_html=True,
+    )
+except Exception:
+    pass
 
 # =============================================================================
 # REST OF IMPORTS
@@ -76,7 +64,7 @@ from typing import Optional, Tuple, List
 # =============================================================================
 # Constants
 # =============================================================================
-APP_VERSION = "0.3.5"
+APP_VERSION = "0.3.6"
 
 # Logo/icon files should be in same directory as this script
 C4C_LOGO_FILE = SCRIPT_DIR / "c4c_logo.png"
@@ -802,7 +790,11 @@ def render_data_preview(client, project):
                     if 'interlock_count' in board_df.columns:
                         interlocked = board_df[board_df['interlock_count'] > 1]
                         if not interlocked.empty:
-                            unique_people = interlocked['person_name_normalized'].nunique() if 'person_name_normalized' in interlocked.columns else len(interlocked)
+                            unique_people = (
+                                interlocked['person_name_normalized'].nunique()
+                                if 'person_name_normalized' in interlocked.columns
+                                else len(interlocked)
+                            )
                             st.info(f"🔗 **{unique_people} people** serve on multiple boards")
 
                     st.dataframe(board_df.head(100), use_container_width=True)
