@@ -9,9 +9,11 @@ so it can be deployed independently without c4c_utils.
 
 VERSION HISTORY:
 ----------------
+v0.2.5: Fixed app icon
+- Moved st.set_page_config to top of file (after constants, before classes)
+- This ensures icon URL is applied before any other Streamlit calls
+
 v0.2.4: Fixed storage bucket name
-- Correct bucket name: project_bundles (underscore, not hyphen)
-- Restored icon URL
 
 v0.2.2: Fixed storage bucket discovery
 
@@ -37,7 +39,7 @@ from typing import Optional, Tuple, List
 # =============================================================================
 # Constants
 # =============================================================================
-APP_VERSION = "0.2.4"
+APP_VERSION = "0.2.5"
 C4C_LOGO_URL = "https://static.wixstatic.com/media/275a3f_25063966d6cd496eb2fe3f6ee5cde0fa~mv2.png"
 APP_ICON_URL = "https://static.wixstatic.com/media/275a3f_ce58a832a0324637aed7603cec34900b~mv2.png"
 
@@ -57,6 +59,16 @@ APP_ICONS = {
     "actorgraph": "🔗",
     "insightgraph": "📊",
 }
+
+# =============================================================================
+# Page Configuration (must be first Streamlit command)
+# =============================================================================
+st.set_page_config(
+    page_title="CloudProjects",
+    page_icon=APP_ICON_URL,
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
 # =============================================================================
 # Embedded Project Store Client
@@ -338,16 +350,6 @@ class EmbeddedProjectStoreClient:
         except Exception as e:
             return None, str(e)
 
-
-# =============================================================================
-# Page Configuration
-# =============================================================================
-st.set_page_config(
-    page_title="CloudProjects",
-    page_icon=APP_ICON_URL,
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
 
 # =============================================================================
 # Session State
