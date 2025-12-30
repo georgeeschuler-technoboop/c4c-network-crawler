@@ -137,6 +137,7 @@ from c4c_utils.coregraph_schema import prepare_unified_nodes_csv, prepare_unifie
 APP_VERSION = "0.25.0"  # Board detail export with interlock detection
 MAX_FILES = 50
 C4C_LOGO_URL = "https://static.wixstatic.com/media/275a3f_25063966d6cd496eb2fe3f6ee5cde0fa~mv2.png"
+APP_ICON_URL = "https://static.wixstatic.com/media/275a3f_f8ac661446cc49788526af77befbf7b3~mv2.png"
 SOURCE_SYSTEM = "IRS_990"
 JURISDICTION = "US"
 SOURCE_APP = "orggraph_us"  # CoreGraph v1 source app identifier
@@ -167,7 +168,7 @@ GRANT_BUCKET_SCHEDULE_I = "schedule_i"  # Schedule I grants
 # =============================================================================
 st.set_page_config(
     page_title="OrgGraph (US)",
-    page_icon=C4C_LOGO_URL,
+    page_icon=APP_ICON_URL,
     layout="wide"
 )
 # =============================================================================
@@ -3253,7 +3254,7 @@ def main():
     # Header with logo, title, and help button
     col1, col2, col3 = st.columns([1, 8, 1])
     with col1:
-        st.image(C4C_LOGO_URL, width=80)
+        st.image(APP_ICON_URL, width=80)
     with col2:
         st.title("OrgGraph (US)")
     with col3:
