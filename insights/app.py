@@ -6,6 +6,12 @@ Reads exported data from OrgGraph US/CA projects.
 
 VERSION HISTORY:
 ----------------
+UPDATED v0.15.9: Download simplification
+- Collapsed individual file downloads into ZIP bundle
+- Added benefit-oriented tooltips to all buttons
+- Cleaner export UI with clear primary/secondary actions
+- README.md added to bundle with column definitions
+
 UPDATED v0.15.8: Immediate Save After Linking
 - NEW: "Save Linked Project to Cloud" dialog appears immediately after creating linked network
 - NEW: No need to run insights first before saving
@@ -194,7 +200,7 @@ from c4c_utils.c4c_supabase import C4CSupabase
 # Config
 # =============================================================================
 
-APP_VERSION = "0.15.8"  # Phase 4: Immediate Save After Linking
+APP_VERSION = "0.15.9"  # Download simplification
 C4C_LOGO_URL = "https://static.wixstatic.com/media/275a3f_9c48d5079fcf4b688606c81d8f34d5a5~mv2.jpg"
 INSIGHTGRAPH_ICON_URL = "https://static.wixstatic.com/media/275a3f_7736e28c9f5e40c1b2407e09dc5cb6e7~mv2.png"
 
@@ -2390,9 +2396,8 @@ def render_grant_purpose_explorer(grants_df: pd.DataFrame, project_id: str):
 
 
 def render_downloads(data: dict):
-    """Render download section (aligned with OrgGraph pattern)."""
-    st.subheader("📥 Downloads")
-    st.caption("These are the exact artifacts produced for this project export.")
+    """Render download section with simplified UI."""
+    st.subheader("📥 Export Data")
     
     # Check what's available
     has_report = data.get("markdown_report") is not None
@@ -2423,11 +2428,74 @@ def render_downloads(data: dict):
     elif has_report:
         html_error = "Could not load run.py module"
     
+    def generate_bundle_readme():
+        """Generate README.md for the bundle."""
+        project_id = data.get("project_id", "unknown")
+        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        
+        node_count = len(data.get("nodes_df", [])) if data.get("nodes_df") is not None else 0
+        edge_count = len(data.get("edges_df", [])) if data.get("edges_df") is not None else 0
+        
+        return f"""# {project_id} — InsightGraph Export
+
+**Generated:** {timestamp}  
+**Source App:** InsightGraph v{APP_VERSION}
+
+## Summary
+
+- **Nodes:** {node_count:,}
+- **Edges:** {edge_count:,}
+
+---
+
+## Files in This Bundle
+
+| File | Description |
+|------|-------------|
+| `index.html` | Interactive HTML report — open in any browser |
+| `report.md` | Markdown source for the report |
+| `manifest.json` | Bundle metadata and analysis parameters |
+| `analysis/node_metrics.csv` | Centrality scores and network metrics for each node |
+| `analysis/insight_cards.json` | Structured insight data (health scores, key findings) |
+| `analysis/project_summary.json` | Project-level summary statistics |
+| `data/nodes.csv` | Source node data |
+| `data/edges.csv` | Source edge data |
+| `data/grants_detail.csv` | Grant details (if available) |
+
+---
+
+## Using the HTML Report
+
+1. Open `index.html` in any web browser
+2. Use Ctrl/Cmd+P to print to PDF if needed
+3. Share the HTML file directly — it's self-contained
+
+---
+
+## Node Metrics Columns
+
+| Column | Description |
+|--------|-------------|
+| `node_id` | Unique identifier |
+| `label` | Display name |
+| `degree_centrality` | How connected (0-1) |
+| `betweenness_centrality` | How often on shortest paths (0-1) |
+| `eigenvector_centrality` | Connected to well-connected nodes (0-1) |
+| `community` | Community/cluster assignment |
+
+---
+
+For questions, contact: info@connectingforchangellc.com
+"""
+    
     def create_bundle_zip():
-        """Create structured bundle ZIP with manifest and HTML report."""
+        """Create structured bundle ZIP with manifest, README, and HTML report."""
         zip_buffer = BytesIO()
         
         with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
+            # README.md
+            zf.writestr("README.md", generate_bundle_readme())
+            
             # Analysis outputs
             if has_metrics:
                 zf.writestr("analysis/node_metrics.csv", data["metrics_df"].to_csv(index=False))
@@ -2473,23 +2541,11 @@ def render_downloads(data: dict):
         zip_buffer.seek(0)
         return zip_buffer.getvalue()
     
-    # Legacy flat ZIP for backward compatibility
-    def create_flat_zip():
-        zip_buffer = BytesIO()
-        with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
-            if has_metrics:
-                zf.writestr("node_metrics.csv", data["metrics_df"].to_csv(index=False))
-            if has_cards:
-                zf.writestr("insight_cards.json", json.dumps(data["insight_cards"], indent=2))
-            if has_summary:
-                zf.writestr("project_summary.json", json.dumps(data["project_summary"], indent=2))
-            if has_report:
-                zf.writestr("insight_report.md", data["markdown_report"])
-        zip_buffer.seek(0)
-        return zip_buffer.getvalue()
+    # ==========================================================================
+    # Two-button primary layout: HTML Report + ZIP Bundle
+    # ==========================================================================
     
-    # Primary downloads
-    col1, col2, col3 = st.columns([2, 1, 1])
+    col1, col2 = st.columns(2)
     
     with col1:
         if html_report:
@@ -2502,7 +2558,7 @@ def render_downloads(data: dict):
                 mime="text/html",
                 type="primary",
                 use_container_width=True,
-                help="Open in browser, print to PDF"
+                help="Open in any browser, print to PDF, or share directly"
             )
         elif has_report:
             if html_error:
@@ -2513,34 +2569,36 @@ def render_downloads(data: dict):
                 file_name="insight_report.md",
                 mime="text/markdown",
                 type="primary",
-                use_container_width=True
+                use_container_width=True,
+                help="Source markdown — convert to PDF with any markdown editor"
             )
         else:
-            st.info("No insight report available")
+            st.info("Run insights first to generate a report")
     
     with col2:
         if has_report or has_cards or has_summary or has_metrics:
             st.download_button(
-                "📦 Bundle (ZIP)",
+                "📦 Download ZIP",
                 data=create_bundle_zip(),
                 file_name=f"{data['project_id']}_insights.zip",
                 mime="application/zip",
                 use_container_width=True,
-                help="Full bundle with data, manifest, HTML & Markdown"
+                help="Everything in one bundle — report, data, metrics, ready for sharing or archiving"
             )
+        else:
+            st.button("📦 Download ZIP", disabled=True, use_container_width=True,
+                     help="Run insights first to generate exportable data")
     
-    with col3:
-        if has_report:
-            st.download_button(
-                "📝 Markdown",
-                data=data["markdown_report"],
-                file_name="insight_report.md",
-                mime="text/markdown",
-                use_container_width=True,
-                help="Source markdown file"
-            )
+    # Help text
+    st.caption("""
+    **ZIP contains:** README.md · index.html · report.md · manifest.json · 
+    analysis/ folder with metrics · data/ folder with source files
+    """)
     
-    # Cloud save option for merged projects
+    # ==========================================================================
+    # Cloud save options (for merged/linked projects)
+    # ==========================================================================
+    
     is_merged = st.session_state.get("merged_projects") is not None
     is_linked = st.session_state.get("linked_project_info") is not None
     client = get_project_store_authenticated()
@@ -2571,7 +2629,7 @@ def render_downloads(data: dict):
         # Save linked project to cloud
         if cloud_enabled:
             st.markdown("**☁️ Save Linked Project to Cloud**")
-            st.caption("Save this linked network to cloud for quick access later.")
+            st.caption("Save so you can reload this linked network later without re-linking.")
             
             # Get default name from source projects
             cloud_data = st.session_state.get("cloud_project_data", {})
@@ -2611,7 +2669,7 @@ def render_downloads(data: dict):
     if is_merged and cloud_enabled:
         st.divider()
         st.markdown("**☁️ Save Merged Project to Cloud**")
-        st.caption("Save this merged dataset to cloud for quick access later.")
+        st.caption("Save so you can reload this merged dataset later without re-merging.")
         
         # Get default name from merged sources
         merged_slugs = st.session_state.get("merged_projects", [])
@@ -2645,51 +2703,6 @@ def render_downloads(data: dict):
                             st.error(f"❌ {message}")
                 else:
                     st.warning("Enter a name for the merged project")
-    
-    elif not is_merged and not is_linked:
-        # Not a merged or linked project - show disabled button
-        col_cloud1, col_cloud2 = st.columns([2, 1])
-        with col_cloud1:
-            st.button("☁️ Save to Cloud",
-                      disabled=True,
-                      use_container_width=True,
-                      help="Only available for merged or linked projects")
-        with col_cloud2:
-            st.caption("☁️ Merge or link projects first")
-    
-    # Individual files
-    st.caption("Individual data files:")
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        if has_metrics:
-            st.download_button(
-                "📄 node_metrics.csv",
-                data=data["metrics_df"].to_csv(index=False),
-                file_name="node_metrics.csv",
-                mime="text/csv",
-                use_container_width=True
-            )
-    
-    with col2:
-        if has_cards:
-            st.download_button(
-                "📄 insight_cards.json",
-                data=json.dumps(data["insight_cards"], indent=2),
-                file_name="insight_cards.json",
-                mime="application/json",
-                use_container_width=True
-            )
-    
-    with col3:
-        if has_summary:
-            st.download_button(
-                "📄 project_summary.json",
-                data=json.dumps(data["project_summary"], indent=2),
-                file_name="project_summary.json",
-                mime="application/json",
-                use_container_width=True
-            )
 
 
 def render_technical_details(data: dict):
