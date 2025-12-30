@@ -5,16 +5,14 @@
 # saved from OrgGraph, ActorGraph, and InsightGraph.
 #
 # VERSION HISTORY:
+# v0.4.0: Stable release with data URL favicon injection
 # v0.3.6: Inject favicon via st.markdown (<link rel="icon"> data URL) to bypass Streamlit/CDN caching
 # v0.3.5: Attempted favicon via components.html() (iframe-limited; ineffective)
 # v0.3.4: Attempted local icon path resolution
-# v0.3.2: Use PIL Image object for icon (handles format conversion)
-# v0.3.1: Icon at very top per technical advisory
-# v0.3.0: Fixed icon using PIL Image
-# v0.2.9: Fixed icon file path resolution
-# v0.2.4: Fixed storage bucket name
+# v0.3.x: Various favicon fix attempts (PIL, path resolution, etc.)
+# v0.2.4: Fixed storage bucket name (project_bundles)
 # v0.2.1: Renamed to CloudProjects
-# v0.2.0: Self-contained version
+# v0.2.0: Self-contained version with embedded Supabase client
 # v0.1.0: Initial release
 # =============================================================================
 
@@ -36,7 +34,7 @@ st.set_page_config(
 )
 
 # --- FAVICON INJECTION (main DOM, not iframe) ---
-# This attempts to set the favicon via data-URL <link> tags.
+# Injects favicon via data-URL <link> tags to bypass Streamlit/CDN caching.
 # Note: Some Streamlit deployments may still override/pin favicon at host level.
 try:
     b64 = base64.b64encode(ICON_PATH.read_bytes()).decode("utf-8")
@@ -64,7 +62,7 @@ from typing import Optional, Tuple, List
 # =============================================================================
 # Constants
 # =============================================================================
-APP_VERSION = "0.3.6"
+APP_VERSION = "0.4.0"
 
 # Logo/icon files should be in same directory as this script
 C4C_LOGO_FILE = SCRIPT_DIR / "c4c_logo.png"
