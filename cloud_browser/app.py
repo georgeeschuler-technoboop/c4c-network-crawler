@@ -1,3 +1,15 @@
+import streamlit as st
+
+st.set_page_config(
+    page_title="CloudProjects",
+    page_icon="☁️",   # keep it simple for the test
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
+
+# ONLY AFTER THIS: other imports
+from pathlib import Path
+# ...all other imports...
 # =============================================================================
 # PAGE CONFIG - MUST BE FIRST (before any other st.* calls)
 # =============================================================================
