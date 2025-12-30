@@ -2418,7 +2418,7 @@ def render_downloads(nodes_df: pd.DataFrame, edges_df: pd.DataFrame,
     with col1:
         if project_name and project_name != DEMO_PROJECT_NAME:
             if st.button("💾 Save to Project", use_container_width=True, 
-                        help="Save to local project folder"):
+                        help="Save here so you can add more foundations to this project later"):
                 project_path = get_project_path(project_name)
                 try:
                     export_nodes.to_csv(project_path / "nodes.csv", index=False)
@@ -2430,7 +2430,7 @@ def render_downloads(nodes_df: pd.DataFrame, edges_df: pd.DataFrame,
                     st.error(f"Error: {e}")
         else:
             st.button("💾 Save to Project", use_container_width=True, disabled=True,
-                     help="Create a project first")
+                     help="Create a project first to enable local saves")
     
     # --- Save to Cloud ---
     with col2:
@@ -2440,7 +2440,7 @@ def render_downloads(nodes_df: pd.DataFrame, edges_df: pd.DataFrame,
         if st.button("☁️ Save to Cloud", 
                     disabled=not cloud_enabled,
                     use_container_width=True,
-                    help="Login to enable cloud save" if not cloud_enabled else "Upload to Supabase"):
+                    help="Login to enable cloud saves" if not cloud_enabled else "Save to cloud so you can analyze in InsightGraph or share with teammates"):
             
             with st.spinner("☁️ Uploading..."):
                 success, message, slug = save_bundle_to_cloud(
@@ -2513,7 +2513,8 @@ def render_downloads(nodes_df: pd.DataFrame, edges_df: pd.DataFrame,
             file_name=f"{safe_project_name}_export.zip",
             mime="application/zip",
             type="primary",
-            use_container_width=True
+            use_container_width=True,
+            help="Download everything in one bundle — ready for Polinode, sharing, or offline use"
         )
     
     # Help text
