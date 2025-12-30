@@ -13,11 +13,12 @@ Outputs conform to C4C Network Schema v1 (MVP):
 
 VERSION HISTORY:
 ----------------
-UPDATED v0.24.0: Download simplification
+UPDATED v0.24.0: Download simplification + BOM fix
 - Collapsed 8 download buttons to 3 (Save to Project, Save to Cloud, Download ZIP)
 - Added README.md to ZIP bundle with column definitions and usage guide
 - Project-prefixed filenames in ZIP (e.g., great_lakes_nodes.csv)
 - Cleaner export UI with single primary action
+- Fixed: UTF-8 BOM handling in XML validation (was rejecting valid XML files)
 
 UPDATED v0.23.1: iPad Safari XML download guardrail + clearer UX
 - Detect and block "fake XML" files saved from iPad Safari (rendered text view instead of raw XML)
@@ -799,6 +800,9 @@ def extract_board_with_fallback(file_bytes: bytes, filename: str, meta: dict) ->
 # -----------------------------------------------------------------------------
 def _is_real_xml(data: bytes) -> bool:
     """Return True if bytes look like actual XML markup."""
+    # Strip UTF-8 BOM if present, then whitespace
+    if data.startswith(b'\xef\xbb\xbf'):
+        data = data[3:]
     head = data.lstrip()[:200]
     return head.startswith(b"<") or head.startswith(b"<?xml")
 
@@ -1016,6 +1020,19 @@ def render_single_file_diagnostics(result: dict, expanded: bool = False):
     meta = result.get("foundation_meta", {})
     grants_df = result.get("grants_df", pd.DataFrame())
     
+    # Handle error case first
+    if result.get("status") == "error":
+        error_msg = result.get("message", "Unknown error")
+        filename = result.get("file", "Unknown file")
+        # Truncate long error messages for title
+        short_error = error_msg[:80] + "..." if len(error_msg) > 80 else error_msg
+        with st.expander(f"❌ {filename}: {short_error}", expanded=True):
+            st.error(f"**Error:** {error_msg}")
+            if diag.get("errors"):
+                for err in diag["errors"]:
+                    st.write(f"• {err}")
+        return
+    
     # Add form_type for confidence scoring (990-PF is our current parser)
     if "form_type_detected" not in diag:
         diag["form_type_detected"] = "990-PF"
@@ -1037,7 +1054,7 @@ def render_single_file_diagnostics(result: dict, expanded: bool = False):
         status_icon = "❌"
     
     # Foundation name for display
-    foundation_name = result.get("org_name", "Unknown")
+    foundation_name = result.get("org_name") or "Unknown"
     if len(foundation_name) > 45:
         foundation_name = foundation_name[:42] + "..."
     
