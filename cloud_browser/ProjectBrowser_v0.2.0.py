@@ -1,5 +1,5 @@
 """
-C4C Project Browser — Cloud Project Management
+CloudProjects — Cloud Project Management
 
 Standalone Streamlit app for browsing and managing cloud projects
 saved from OrgGraph, ActorGraph, and InsightGraph.
@@ -9,6 +9,7 @@ so it can be deployed independently without c4c_utils.
 
 VERSION HISTORY:
 ----------------
+v0.2.1: Renamed to CloudProjects, new app icon
 v0.2.0: Self-contained version
 - Embedded ProjectStoreClient (no c4c_utils dependency)
 - Only requires: streamlit, pandas, supabase
@@ -30,9 +31,9 @@ from typing import Optional, Tuple, List
 # =============================================================================
 # Constants
 # =============================================================================
-APP_VERSION = "0.2.0"
+APP_VERSION = "0.2.1"
 C4C_LOGO_URL = "https://static.wixstatic.com/media/275a3f_25063966d6cd496eb2fe3f6ee5cde0fa~mv2.png"
-APP_ICON_URL = "https://static.wixstatic.com/media/275a3f_25063966d6cd496eb2fe3f6ee5cde0fa~mv2.png"
+APP_ICON_URL = "https://static.wixstatic.com/media/275a3f_ce58a832a0324637aed7603cec34900b~mv2.png"
 
 # Source app display names
 SOURCE_APPS = {
@@ -309,7 +310,7 @@ class EmbeddedProjectStoreClient:
 # Page Configuration
 # =============================================================================
 st.set_page_config(
-    page_title="C4C Project Browser",
+    page_title="CloudProjects",
     page_icon=APP_ICON_URL,
     layout="wide",
     initial_sidebar_state="expanded"
@@ -765,7 +766,7 @@ def main():
     init_session_state()
     
     # Header
-    st.title("📂 C4C Project Browser")
+    st.title("☁️ CloudProjects")
     st.caption(f"Manage cloud projects from OrgGraph, ActorGraph, and InsightGraph • v{APP_VERSION}")
     
     # Sidebar: Auth
@@ -776,9 +777,9 @@ def main():
         # Not logged in - show landing
         st.divider()
         st.markdown("""
-        ### Welcome to the Project Browser
+        ### Welcome to CloudProjects
         
-        This tool lets you browse and manage all your cloud-saved projects from:
+        Browse and manage all your cloud-saved projects from:
         
         - 🏛️ **OrgGraph US** — US nonprofit network data
         - 🍁 **OrgGraph CA** — Canadian nonprofit network data
