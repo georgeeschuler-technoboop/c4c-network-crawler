@@ -825,7 +825,7 @@ def validate_uploaded_xml_or_raise(file_bytes: bytes, filename: str) -> None:
         raise ValueError(
             "This file is named .xml but it isn't XML markup (it looks like a rendered text view). "
             "On iPad Safari, tapping the ProPublica 'XML' link and saving often produces this format. "
-            "Fix: long-press the XML link and choose "Download Linked File", then upload the downloaded file."
+            "Fix: long-press the XML link and choose 'Download Linked File', then upload the downloaded file."
         )
 
     start = file_bytes[:160].decode("utf-8", errors="replace")
