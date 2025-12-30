@@ -1,3 +1,29 @@
+# =============================================================================
+# ICON AND PAGE CONFIG - MUST BE FIRST (before any other st.* calls)
+# =============================================================================
+from pathlib import Path
+import streamlit as st
+
+ICON_PATH = Path(__file__).parent / "cloudprojects_icon.png"
+
+st.set_page_config(
+    page_title="CloudProjects",
+    page_icon=str(ICON_PATH),
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
+
+# =============================================================================
+# REST OF IMPORTS
+# =============================================================================
+import pandas as pd
+from datetime import datetime, timezone
+from io import BytesIO
+import zipfile
+import json
+from dataclasses import dataclass
+from typing import Optional, Tuple, List
+
 """
 CloudProjects — Cloud Project Management
 
@@ -9,54 +35,32 @@ so it can be deployed independently without c4c_utils.
 
 VERSION HISTORY:
 ----------------
+v0.3.1: Icon at very top per technical advisory
+- set_page_config MUST be first st.* call
+- Use Path(__file__).parent for icon path
+- Convert to str() for Streamlit compatibility
+- Added debug info in sidebar
+
 v0.3.0: Fixed icon using PIL Image
-- Load icon file as PIL Image object (most reliable method)
-- Fallback to emoji if file not found
-
 v0.2.9: Fixed icon file path resolution
-
 v0.2.4: Fixed storage bucket name
-
 v0.2.2: Fixed storage bucket discovery
-
 v0.2.1: Renamed to CloudProjects, new app icon
 v0.2.0: Self-contained version
-- Embedded ProjectStoreClient (no c4c_utils dependency)
-- Only requires: streamlit, pandas, supabase
-
 v0.1.1: Added diagnostic error messages
 v0.1.0: Initial release
-
 """
-
-import streamlit as st
-import pandas as pd
-from datetime import datetime, timezone
-from io import BytesIO
-import zipfile
-import json
-from dataclasses import dataclass
-from typing import Optional, Tuple, List
-from pathlib import Path
-from PIL import Image
 
 # =============================================================================
 # Constants
 # =============================================================================
-APP_VERSION = "0.3.0"
+APP_VERSION = "0.3.1"
 
 # Get the directory where this script is located
 SCRIPT_DIR = Path(__file__).parent
 
 # Logo/icon files should be in same directory as this script
 C4C_LOGO_FILE = SCRIPT_DIR / "c4c_logo.png"
-APP_ICON_FILE = SCRIPT_DIR / "cloudprojects_icon.png"
-
-# Load icon as PIL Image for reliable favicon display
-try:
-    APP_ICON = Image.open(APP_ICON_FILE)
-except Exception:
-    APP_ICON = "☁️"  # Fallback to emoji if file not found
 
 # Source app display names
 SOURCE_APPS = {
@@ -74,16 +78,6 @@ APP_ICONS = {
     "actorgraph": "🔗",
     "insightgraph": "📊",
 }
-
-# =============================================================================
-# Page Configuration (must be first Streamlit command)
-# =============================================================================
-st.set_page_config(
-    page_title="CloudProjects",
-    page_icon=APP_ICON,
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
 
 # =============================================================================
 # Embedded Project Store Client
@@ -147,7 +141,7 @@ class EmbeddedProjectStoreClient:
             pass
         return None
     
-    def login(self, email: str, password: str) -> Tuple[bool, Optional[str]]:
+    def login(self, email: str, password: str) -> tuple:
         """Login with email/password."""
         try:
             response = self.client.auth.sign_in_with_password({
@@ -169,7 +163,7 @@ class EmbeddedProjectStoreClient:
         except Exception:
             pass
     
-    def signup(self, email: str, password: str) -> Tuple[bool, Optional[str]]:
+    def signup(self, email: str, password: str) -> tuple:
         """Create new account."""
         try:
             response = self.client.auth.sign_up({
@@ -182,7 +176,7 @@ class EmbeddedProjectStoreClient:
         except Exception as e:
             return False, str(e)
     
-    def list_projects(self, source_app: str = None, include_public: bool = True) -> Tuple[List[Project], Optional[str]]:
+    def list_projects(self, source_app: str = None, include_public: bool = True) -> tuple:
         """List projects accessible to current user."""
         try:
             user = self.get_current_user()
@@ -233,7 +227,7 @@ class EmbeddedProjectStoreClient:
         except Exception as e:
             return [], str(e)
     
-    def load_project(self, project_id: str = None, slug: str = None) -> Tuple[Optional[bytes], Optional[str]]:
+    def load_project(self, project_id: str = None, slug: str = None) -> tuple:
         """Download project bundle from storage."""
         try:
             # First get project metadata to find bundle path
@@ -278,7 +272,7 @@ class EmbeddedProjectStoreClient:
         except Exception as e:
             return None, str(e)
     
-    def delete_project(self, project_id: str = None, slug: str = None) -> Tuple[bool, Optional[str]]:
+    def delete_project(self, project_id: str = None, slug: str = None) -> tuple:
         """Delete a project and its bundle."""
         try:
             user = self.get_current_user()
@@ -328,7 +322,7 @@ class EmbeddedProjectStoreClient:
         except Exception as e:
             return False, str(e)
     
-    def get_project(self, project_id: str = None, slug: str = None) -> Tuple[Optional[Project], Optional[str]]:
+    def get_project(self, project_id: str = None, slug: str = None) -> tuple:
         """Get project metadata."""
         try:
             if project_id:
@@ -818,6 +812,10 @@ def main():
     # Header
     st.title("☁️ CloudProjects")
     st.caption(f"Manage cloud projects from OrgGraph, ActorGraph, and InsightGraph • v{APP_VERSION}")
+    
+    # DEBUG: Icon sanity check (remove after confirming it works)
+    st.sidebar.caption(f"Icon exists: {ICON_PATH.exists()}")
+    st.sidebar.caption(f"Path: {ICON_PATH}")
     
     # Sidebar: Auth
     st.sidebar.title("☁️ Cloud")
