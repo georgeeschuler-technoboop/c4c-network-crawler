@@ -3,12 +3,19 @@
 # =============================================================================
 from pathlib import Path
 import streamlit as st
+from PIL import Image
 
 ICON_PATH = Path(__file__).parent / "cloudprojects_icon.png"
 
+# Load icon as PIL Image (handles format conversion)
+try:
+    ICON_IMAGE = Image.open(ICON_PATH)
+except Exception as e:
+    ICON_IMAGE = "☁️"  # Fallback to emoji
+
 st.set_page_config(
     page_title="CloudProjects",
-    page_icon=str(ICON_PATH),
+    page_icon=ICON_IMAGE,
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -24,37 +31,27 @@ import json
 from dataclasses import dataclass
 from typing import Optional, Tuple, List
 
-"""
-CloudProjects — Cloud Project Management
-
-Standalone Streamlit app for browsing and managing cloud projects
-saved from OrgGraph, ActorGraph, and InsightGraph.
-
-This version is SELF-CONTAINED with an embedded Supabase client,
-so it can be deployed independently without c4c_utils.
-
-VERSION HISTORY:
-----------------
-v0.3.1: Icon at very top per technical advisory
-- set_page_config MUST be first st.* call
-- Use Path(__file__).parent for icon path
-- Convert to str() for Streamlit compatibility
-- Added debug info in sidebar
-
-v0.3.0: Fixed icon using PIL Image
-v0.2.9: Fixed icon file path resolution
-v0.2.4: Fixed storage bucket name
-v0.2.2: Fixed storage bucket discovery
-v0.2.1: Renamed to CloudProjects, new app icon
-v0.2.0: Self-contained version
-v0.1.1: Added diagnostic error messages
-v0.1.0: Initial release
-"""
+# =============================================================================
+# CloudProjects — Cloud Project Management
+#
+# Standalone Streamlit app for browsing and managing cloud projects
+# saved from OrgGraph, ActorGraph, and InsightGraph.
+#
+# VERSION HISTORY:
+# v0.3.2: Use PIL Image object for icon (handles format conversion)
+# v0.3.1: Icon at very top per technical advisory
+# v0.3.0: Fixed icon using PIL Image
+# v0.2.9: Fixed icon file path resolution
+# v0.2.4: Fixed storage bucket name
+# v0.2.1: Renamed to CloudProjects
+# v0.2.0: Self-contained version
+# v0.1.0: Initial release
+# =============================================================================
 
 # =============================================================================
 # Constants
 # =============================================================================
-APP_VERSION = "0.3.1"
+APP_VERSION = "0.3.2"
 
 # Get the directory where this script is located
 SCRIPT_DIR = Path(__file__).parent
@@ -812,10 +809,6 @@ def main():
     # Header
     st.title("☁️ CloudProjects")
     st.caption(f"Manage cloud projects from OrgGraph, ActorGraph, and InsightGraph • v{APP_VERSION}")
-    
-    # DEBUG: Icon sanity check (remove after confirming it works)
-    st.sidebar.caption(f"Icon exists: {ICON_PATH.exists()}")
-    st.sidebar.caption(f"Path: {ICON_PATH}")
     
     # Sidebar: Auth
     st.sidebar.title("☁️ Cloud")
