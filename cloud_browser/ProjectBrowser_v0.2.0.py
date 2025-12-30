@@ -9,11 +9,12 @@ so it can be deployed independently without c4c_utils.
 
 VERSION HISTORY:
 ----------------
-v0.2.6: Testing icon with known-working URL
-- Using OrgGraph US icon temporarily to verify code is correct
-- Replace APP_ICON_URL once CloudProjects icon URL is confirmed
+v0.2.7: Fixed app icon (local file)
+- Streamlit page_icon doesn't reliably support remote URLs
+- Now uses local file: cloudprojects_icon.png
+- Add icon file to same folder as app.py
 
-v0.2.5: Fixed app icon
+v0.2.6: Testing icon with known-working URL
 
 v0.2.4: Fixed storage bucket name
 
@@ -41,10 +42,10 @@ from typing import Optional, Tuple, List
 # =============================================================================
 # Constants
 # =============================================================================
-APP_VERSION = "0.2.6"
-C4C_LOGO_URL = "https://static.wixstatic.com/media/275a3f_ceeb2fbbf2304287b9c19983fffde8c4~mv2.jpg"
-# Using OrgGraph US icon temporarily to test - replace with CloudProjects icon once URL is confirmed
-APP_ICON_URL = "https://static.wixstatic.com/media/275a3f_ce58a832a0324637aed7603cec34900b~mv2.png"
+APP_VERSION = "0.2.7"
+C4C_LOGO_URL = "https://static.wixstatic.com/media/275a3f_25063966d6cd496eb2fe3f6ee5cde0fa~mv2.png"
+# Icon file should be in same directory as this script
+APP_ICON_FILE = "cloudprojects_icon.png"
 
 # Source app display names
 SOURCE_APPS = {
@@ -68,7 +69,7 @@ APP_ICONS = {
 # =============================================================================
 st.set_page_config(
     page_title="CloudProjects",
-    page_icon=APP_ICON_URL,
+    page_icon=APP_ICON_FILE,
     layout="wide",
     initial_sidebar_state="expanded"
 )
