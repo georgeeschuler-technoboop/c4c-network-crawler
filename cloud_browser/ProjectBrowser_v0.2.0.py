@@ -9,9 +9,11 @@ so it can be deployed independently without c4c_utils.
 
 VERSION HISTORY:
 ----------------
+v0.2.4: Fixed storage bucket name
+- Correct bucket name: project_bundles (underscore, not hyphen)
+- Restored icon URL
+
 v0.2.2: Fixed storage bucket discovery
-- Tries multiple bucket names (configurable via secrets.supabase.bucket)
-- Falls back to common names: project-bundles, bundles, projects, files
 
 v0.2.1: Renamed to CloudProjects, new app icon
 v0.2.0: Self-contained version
@@ -35,7 +37,7 @@ from typing import Optional, Tuple, List
 # =============================================================================
 # Constants
 # =============================================================================
-APP_VERSION = "0.2.2"
+APP_VERSION = "0.2.4"
 C4C_LOGO_URL = "https://static.wixstatic.com/media/275a3f_25063966d6cd496eb2fe3f6ee5cde0fa~mv2.png"
 APP_ICON_URL = "https://static.wixstatic.com/media/275a3f_ce58a832a0324637aed7603cec34900b~mv2.png"
 
@@ -222,7 +224,7 @@ class EmbeddedProjectStoreClient:
             if not bundle_path:
                 return None, "No bundle path found"
             
-            # Try bucket name from secrets, then common fallbacks
+            # Try bucket name from secrets, then the correct name
             bucket_names = []
             try:
                 # Check if bucket name is in secrets
@@ -230,8 +232,8 @@ class EmbeddedProjectStoreClient:
             except:
                 pass
             
-            # Add common bucket name patterns to try
-            bucket_names.extend(["project-bundles", "bundles", "projects", "files"])
+            # The actual bucket name (underscore, not hyphen)
+            bucket_names.append("project_bundles")
             bucket_names = [b for b in bucket_names if b]  # Remove None values
             
             # Try each bucket name
@@ -276,8 +278,8 @@ class EmbeddedProjectStoreClient:
             # Delete bundle from storage if exists
             bundle_path = project.get('bundle_path')
             if bundle_path:
-                # Try common bucket names
-                bucket_names = ["project-bundles", "bundles", "projects", "files"]
+                # Use correct bucket name (underscore)
+                bucket_names = ["project_bundles"]
                 try:
                     bucket_names.insert(0, st.secrets["supabase"].get("bucket"))
                 except:
