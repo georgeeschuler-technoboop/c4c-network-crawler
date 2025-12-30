@@ -1,21 +1,11 @@
 # =============================================================================
-# ICON AND PAGE CONFIG - MUST BE FIRST (before any other st.* calls)
+# PAGE CONFIG - MUST BE FIRST (before any other st.* calls)
 # =============================================================================
-from pathlib import Path
 import streamlit as st
-from PIL import Image
-
-ICON_PATH = Path(__file__).parent / "cloudprojects_icon.png"
-
-# Load icon as PIL Image (handles format conversion)
-try:
-    ICON_IMAGE = Image.open(ICON_PATH)
-except Exception as e:
-    ICON_IMAGE = "☁️"  # Fallback to emoji
 
 st.set_page_config(
     page_title="CloudProjects",
-    page_icon=ICON_IMAGE,
+    page_icon="☁️",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -23,6 +13,7 @@ st.set_page_config(
 # =============================================================================
 # REST OF IMPORTS
 # =============================================================================
+from pathlib import Path
 import pandas as pd
 from datetime import datetime, timezone
 from io import BytesIO
@@ -51,7 +42,7 @@ from typing import Optional, Tuple, List
 # =============================================================================
 # Constants
 # =============================================================================
-APP_VERSION = "0.3.2"
+APP_VERSION = "0.3.3"
 
 # Get the directory where this script is located
 SCRIPT_DIR = Path(__file__).parent
