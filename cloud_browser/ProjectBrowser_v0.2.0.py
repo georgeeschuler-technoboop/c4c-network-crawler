@@ -9,6 +9,10 @@ so it can be deployed independently without c4c_utils.
 
 VERSION HISTORY:
 ----------------
+v0.2.2: Fixed storage bucket discovery
+- Tries multiple bucket names (configurable via secrets.supabase.bucket)
+- Falls back to common names: project-bundles, bundles, projects, files
+
 v0.2.1: Renamed to CloudProjects, new app icon
 v0.2.0: Self-contained version
 - Embedded ProjectStoreClient (no c4c_utils dependency)
@@ -31,7 +35,7 @@ from typing import Optional, Tuple, List
 # =============================================================================
 # Constants
 # =============================================================================
-APP_VERSION = "0.2.1"
+APP_VERSION = "0.2.2"
 C4C_LOGO_URL = "https://static.wixstatic.com/media/275a3f_25063966d6cd496eb2fe3f6ee5cde0fa~mv2.png"
 APP_ICON_URL = "https://static.wixstatic.com/media/275a3f_ce58a832a0324637aed7603cec34900b~mv2.png"
 
@@ -218,12 +222,29 @@ class EmbeddedProjectStoreClient:
             if not bundle_path:
                 return None, "No bundle path found"
             
-            # Download from storage
-            # Bundle path format: "{user_id}/{slug}.zip"
-            bucket_name = "project-bundles"
+            # Try bucket name from secrets, then common fallbacks
+            bucket_names = []
+            try:
+                # Check if bucket name is in secrets
+                bucket_names.append(st.secrets["supabase"].get("bucket", None))
+            except:
+                pass
             
-            data = self.client.storage.from_(bucket_name).download(bundle_path)
-            return data, None
+            # Add common bucket name patterns to try
+            bucket_names.extend(["project-bundles", "bundles", "projects", "files"])
+            bucket_names = [b for b in bucket_names if b]  # Remove None values
+            
+            # Try each bucket name
+            last_error = None
+            for bucket_name in bucket_names:
+                try:
+                    data = self.client.storage.from_(bucket_name).download(bundle_path)
+                    return data, None
+                except Exception as e:
+                    last_error = str(e)
+                    continue
+            
+            return None, f"Could not download from any bucket. Last error: {last_error}. Tried: {bucket_names}"
         
         except Exception as e:
             return None, str(e)
@@ -255,10 +276,20 @@ class EmbeddedProjectStoreClient:
             # Delete bundle from storage if exists
             bundle_path = project.get('bundle_path')
             if bundle_path:
+                # Try common bucket names
+                bucket_names = ["project-bundles", "bundles", "projects", "files"]
                 try:
-                    self.client.storage.from_("project-bundles").remove([bundle_path])
-                except Exception:
-                    pass  # Continue even if storage delete fails
+                    bucket_names.insert(0, st.secrets["supabase"].get("bucket"))
+                except:
+                    pass
+                bucket_names = [b for b in bucket_names if b]
+                
+                for bucket_name in bucket_names:
+                    try:
+                        self.client.storage.from_(bucket_name).remove([bundle_path])
+                        break
+                    except:
+                        continue
             
             # Delete from database
             self.client.table('projects').delete().eq('id', project['id']).execute()
