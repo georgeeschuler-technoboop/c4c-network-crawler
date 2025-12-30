@@ -13,9 +13,15 @@ Outputs conform to C4C Network Schema v1 (MVP):
 
 VERSION HISTORY:
 ----------------
+UPDATED v0.24.0: Download simplification
+- Collapsed 8 download buttons to 3 (Save to Project, Save to Cloud, Download ZIP)
+- Added README.md to ZIP bundle with column definitions and usage guide
+- Project-prefixed filenames in ZIP (e.g., great_lakes_nodes.csv)
+- Cleaner export UI with single primary action
+
 UPDATED v0.23.1: iPad Safari XML download guardrail + clearer UX
-- Detect and block “fake XML” files saved from iPad Safari (rendered text view instead of raw XML)
-- Show actionable error message: long-press XML link → “Download Linked File”
+- Detect and block "fake XML" files saved from iPad Safari (rendered text view instead of raw XML)
+- Show actionable error message: long-press XML link → "Download Linked File"
 - Add UI caption reminding iPad users about the correct download method
 
 UPDATED v0.23.0: Phase 2 - Project Store cloud integration
@@ -95,7 +101,7 @@ import os
 import re
 import tempfile
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 
 # Add the project root to path for imports (MUST be before c4c_utils imports)
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -117,7 +123,7 @@ from c4c_utils.coregraph_schema import prepare_unified_nodes_csv, prepare_unifie
 # =============================================================================
 # Constants
 # =============================================================================
-APP_VERSION = "0.23.0"  # Phase 2: Project Store cloud integration
+APP_VERSION = "0.24.0"  # Download simplification
 MAX_FILES = 50
 C4C_LOGO_URL = "https://static.wixstatic.com/media/275a3f_25063966d6cd496eb2fe3f6ee5cde0fa~mv2.png"
 SOURCE_SYSTEM = "IRS_990"
@@ -819,7 +825,7 @@ def validate_uploaded_xml_or_raise(file_bytes: bytes, filename: str) -> None:
         raise ValueError(
             "This file is named .xml but it isn't XML markup (it looks like a rendered text view). "
             "On iPad Safari, tapping the ProPublica 'XML' link and saving often produces this format. "
-            "Fix: long-press the XML link and choose “Download Linked File”, then upload the downloaded file."
+            "Fix: long-press the XML link and choose "Download Linked File", then upload the downloaded file."
         )
 
     start = file_bytes[:160].decode("utf-8", errors="replace")
@@ -845,7 +851,7 @@ def process_uploaded_files(uploaded_files, tax_year_override: str = "", region_s
             file_bytes = uploaded_file.read()
             filename = uploaded_file.name.lower()
 
-            # Guardrail: iPad Safari sometimes saves a rendered text view as “.xml” (not real XML)
+            # Guardrail: iPad Safari sometimes saves a rendered text view as ".xml" (not real XML)
             if filename.endswith('.xml'):
                 validate_uploaded_xml_or_raise(file_bytes, uploaded_file.name)
 
@@ -1324,9 +1330,7 @@ QUICK_START_GUIDE = """
 - Choose a preset (Great Lakes, New England, etc.) or build a custom region
 
 ### 4. Download Results
-- **nodes.csv** — Organizations and people
-- **edges.csv** — Grant and board relationships
-- **ZIP** — Complete export with grant details and diagnostics
+- **ZIP** — Complete export with all files, README, and Polinode-ready data
 
 ### Data Source Tips
 
@@ -1836,8 +1840,6 @@ def generate_bundle_manifest(
     Returns:
         Dictionary to be serialized as manifest.json
     """
-    from datetime import datetime, timezone
-    
     # Count node types
     node_counts = {}
     if nodes_df is not None and not nodes_df.empty and 'node_type' in nodes_df.columns:
@@ -2182,13 +2184,174 @@ def filter_data_to_region(nodes_df: pd.DataFrame, edges_df: pd.DataFrame,
     return filtered_nodes, filtered_edges, filtered_grants
 
 
+# =============================================================================
+# README Generator for ZIP Bundle
+# =============================================================================
+
+def generate_readme(project_name: str, nodes_df: pd.DataFrame, edges_df: pd.DataFrame,
+                   grants_df: pd.DataFrame = None, region_def: dict = None) -> str:
+    """
+    Generate README.md content for the ZIP bundle.
+    
+    Includes:
+    - Project metadata
+    - File descriptions
+    - Column definitions
+    - Data provenance
+    """
+    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    
+    # Sanitize project name for filenames
+    safe_project_name = project_name.replace(" ", "_").lower() if project_name else "orggraph_export"
+    
+    # Count stats
+    node_count = len(nodes_df) if nodes_df is not None and not nodes_df.empty else 0
+    edge_count = len(edges_df) if edges_df is not None and not edges_df.empty else 0
+    grant_count = len(grants_df) if grants_df is not None and not grants_df.empty else 0
+    
+    # Region info
+    region_info = ""
+    if region_def and region_def.get("id") != "none":
+        region_name = region_def.get("name", "Custom Region")
+        region_info = f"- **Region Filter:** {region_name}\n"
+    
+    readme = f"""# {project_name} — OrgGraph Export
+
+**Generated:** {timestamp}  
+**Source App:** OrgGraph US v{APP_VERSION}  
+**Schema Version:** CoreGraph v{COREGRAPH_VERSION}
+
+## Summary
+
+- **Nodes:** {node_count:,}
+- **Edges:** {edge_count:,}
+- **Grant Details:** {grant_count:,}
+{region_info}
+---
+
+## Files in This Bundle
+
+### Core Data Files (C4C Schema)
+
+| File | Description |
+|------|-------------|
+| `{safe_project_name}_nodes.csv` | All organizations and people in the network |
+| `{safe_project_name}_edges.csv` | Grant and board membership relationships |
+| `{safe_project_name}_grants_detail.csv` | Detailed grant records with amounts, purposes, locations |
+| `manifest.json` | Bundle metadata (schema version, timestamps, counts) |
+
+### Polinode Import Files
+
+| File | Description |
+|------|-------------|
+| `polinode/{safe_project_name}_polinode.xlsx` | Excel workbook with Nodes + Edges tabs for direct Polinode import |
+| `polinode/{safe_project_name}_polinode_nodes.csv` | Polinode-compatible nodes (Name as primary key) |
+| `polinode/{safe_project_name}_polinode_edges.csv` | Polinode-compatible edges (Source/Target reference Name) |
+
+---
+
+## Column Definitions
+
+### nodes.csv
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `node_id` | string | Unique identifier (namespaced: `orggraph_us:org-123456789`) |
+| `node_type` | string | `organization` or `person` |
+| `label` | string | Display name |
+| `org_type` | string | `funder`, `grantee`, or `funder_grantee` (orgs only) |
+| `tax_id` | string | EIN for US organizations |
+| `city` | string | City location |
+| `region` | string | State/province code |
+| `jurisdiction` | string | Country code (US, CA) |
+| `source_system` | string | Data source (e.g., `IRS_990`) |
+| `source_app` | string | App that created this record (`orggraph_us`) |
+
+### edges.csv
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `edge_id` | string | Unique identifier |
+| `edge_type` | string | `grant` or `board` |
+| `from_id` | string | Source node_id (funder or board member) |
+| `to_id` | string | Target node_id (grantee or organization) |
+| `amount` | number | Grant amount in USD (grant edges only) |
+| `fiscal_year` | string | Tax year of the grant |
+| `purpose` | string | Grant purpose description |
+| `directed` | boolean | Always `true` for grants |
+| `weight` | number | Edge weight (defaults to 1) |
+| `source_app` | string | App that created this record |
+
+### grants_detail.csv
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `foundation_name` | string | Funder organization name |
+| `foundation_ein` | string | Funder EIN |
+| `tax_year` | string | Tax year of filing |
+| `grantee_name` | string | Recipient organization name |
+| `grantee_city` | string | Recipient city |
+| `grantee_state` | string | Recipient state code |
+| `grantee_country` | string | Recipient country code |
+| `grant_amount` | number | Grant amount in USD |
+| `grant_purpose_raw` | string | Purpose as stated in filing |
+| `grant_bucket` | string | `3a` (paid), `3b` (future), or `schedule_i` |
+| `region_relevant` | boolean | Whether grant matches region filter |
+| `source_file` | string | Original filing filename |
+
+---
+
+## Using with Polinode
+
+1. Open Polinode (https://app.polinode.com)
+2. Create new network → Import from Excel
+3. Upload `polinode/{safe_project_name}_polinode.xlsx`
+4. Map columns:
+   - Nodes tab: `Name` as identifier
+   - Edges tab: `Source` and `Target` as endpoints
+5. Click Import
+
+The `network_role_label` column can be used for node coloring:
+- **Funder** — Organizations that give grants
+- **Grantee** — Organizations that receive grants  
+- **Funder + Grantee** — Organizations that do both
+- **Board Member** — Individuals serving on boards
+
+---
+
+## Data Provenance
+
+- **Source:** IRS Form 990-PF and 990 Schedule I filings
+- **Parser:** OrgGraph US v{APP_VERSION}
+- **Processing:** Grants extracted, board members identified, network built
+- **Schema:** CoreGraph v{COREGRAPH_VERSION} (normalized node/edge types, namespaced IDs)
+
+For questions about this data, contact: info@connectingforchangellc.com
+"""
+    return readme
+
+
+# =============================================================================
+# Simplified Download UI (v0.24.0)
+# =============================================================================
+
 def render_downloads(nodes_df: pd.DataFrame, edges_df: pd.DataFrame, 
                     grants_df: pd.DataFrame = None, parse_results: list = None,
                     project_name: str = None, region_def: dict = None):
-    """Render download buttons with region filtering option."""
-    st.subheader("📥 Download Data")
+    """
+    Simplified download UI with 3 actions:
+    - 💾 Save to Project (local folder)
+    - ☁️ Save to Cloud (Supabase)
+    - 📦 Download ZIP (single bundle with everything)
     
-    # Region filtering option
+    v0.24.0: Collapsed from 8 buttons to 3
+    """
+    st.subheader("📥 Export Data")
+    
+    # Sanitize project name for filenames
+    safe_project_name = project_name.replace(" ", "_").lower() if project_name else "orggraph_export"
+    
+    # Region filtering option (keep this - it's useful)
     if region_def and region_def.get("id") != "none" and grants_df is not None and "region_relevant" in grants_df.columns:
         filter_to_region = st.checkbox(
             f"🗺️ Export only {region_def.get('name', 'region')}-relevant grants",
@@ -2202,7 +2365,6 @@ def render_downloads(nodes_df: pd.DataFrame, edges_df: pd.DataFrame,
             )
             
             # Show filtering stats
-            # CoreGraph v1: Accept both old and new formats
             original_grants = len(edges_df[edges_df["edge_type"].str.lower().isin(["grant"])]) if not edges_df.empty and "edge_type" in edges_df.columns else 0
             filtered_grants = len(export_edges[export_edges["edge_type"].str.lower().isin(["grant"])]) if not export_edges.empty and "edge_type" in export_edges.columns else 0
             
@@ -2212,169 +2374,92 @@ def render_downloads(nodes_df: pd.DataFrame, edges_df: pd.DataFrame,
     else:
         export_nodes, export_edges, export_grants = nodes_df, edges_df, grants_df
     
-    # ==========================================================================
-    # Phase 1b: Apply unified schema column ordering
-    # ==========================================================================
-    # Normalize node_type, edge_type, namespace IDs, add source_app, and
-    # standardize column order for cross-app compatibility
+    # Apply unified schema
     export_nodes = prepare_unified_nodes_csv(export_nodes, SOURCE_APP)
     export_edges = prepare_unified_edges_csv(export_edges, SOURCE_APP)
     
-    # Save options (Local + Cloud)
-    if project_name and project_name != DEMO_PROJECT_NAME:
-        # DEBUG: Show what data we have
-        st.caption(f"🔍 Debug: nodes={len(export_nodes) if export_nodes is not None else 'None'}, edges={len(export_edges) if export_edges is not None else 'None'}, grants={len(export_grants) if export_grants is not None and not export_grants.empty else 'None/Empty'}")
-        
-        st.markdown("**💾 Save Project**")
-        
-        save_col1, save_col2, save_col3 = st.columns([2, 2, 1])
-        
-        # Local save
-        with save_col1:
-            if st.button("💾 Save to Local", type="primary", use_container_width=True):
-                project_path = get_project_path(project_name)
-                try:
-                    export_nodes.to_csv(project_path / "nodes.csv", index=False)
-                    export_edges.to_csv(project_path / "edges.csv", index=False)
-                    # Save grants_detail.csv (append behavior handled by merge earlier)
-                    if export_grants is not None and not export_grants.empty:
-                        grants_detail = ensure_grants_detail_columns(export_grants)
-                        grants_detail.to_csv(project_path / "grants_detail.csv", index=False)
-                    st.success(f"✅ Saved to `{project_path}/`")
-                except Exception as e:
-                    st.error(f"Error saving: {e}")
-        
-        # Cloud save (Project Store - ZIP bundle)
-        with save_col2:
-            client = get_project_store_authenticated()
-            cloud_enabled = client is not None
-            
-            if st.button("☁️ Save to Cloud", 
-                        disabled=not cloud_enabled,
-                        use_container_width=True,
-                        help="Login to enable cloud save" if not cloud_enabled else "Save bundle to Project Store"):
-                
-                # Generate Polinode data for bundle
-                poli_nodes_bundle, poli_edges_bundle = convert_to_polinode_format(export_nodes, export_edges)
-                polinode_excel_bundle = None
-                if not poli_nodes_bundle.empty:
-                    polinode_excel_bundle = generate_polinode_excel(poli_nodes_bundle, poli_edges_bundle if not poli_edges_bundle.empty else pd.DataFrame())
-                
-                with st.spinner("☁️ Uploading bundle..."):
-                    success, message, slug = save_bundle_to_cloud(
-                        project_name=project_name,
-                        nodes_df=export_nodes,
-                        edges_df=export_edges,
-                        grants_df=export_grants,
-                        region_def=region_def,
-                        poli_nodes=poli_nodes_bundle,
-                        poli_edges=poli_edges_bundle,
-                        polinode_excel=polinode_excel_bundle,
-                        parse_results=parse_results
-                    )
-                    
-                    if success:
-                        st.success(f"☁️ {message}")
-                    else:
-                        st.error(f"❌ {message}")
-        
-        with save_col3:
-            if not cloud_enabled:
-                st.caption("☁️ Login to enable")
-            else:
-                st.caption("☁️ Ready")
-    
-    st.divider()
-    
-    # Convert to Polinode format
+    # Prepare Polinode files
     poli_nodes, poli_edges = convert_to_polinode_format(export_nodes, export_edges)
-    
-    # Validate Polinode export
-    is_valid, validation_errors = validate_polinode_export(poli_nodes, poli_edges)
-    if not is_valid:
-        st.error("⚠️ **Polinode Export Validation Failed**")
-        for err in validation_errors:
-            st.warning(f"• {err}")
-    
-    # Generate Polinode Excel
     polinode_excel = None
     if not poli_nodes.empty:
         polinode_excel = generate_polinode_excel(poli_nodes, poli_edges if not poli_edges.empty else pd.DataFrame())
     
-    # Download buttons - C4C schema
-    st.markdown("**C4C Schema**")
-    col1, col2 = st.columns(2)
+    # Prepare grants detail
+    grants_detail = None
+    if export_grants is not None and not export_grants.empty:
+        grants_detail = ensure_grants_detail_columns(export_grants)
     
+    st.divider()
+    
+    # ==========================================================================
+    # Three-button layout
+    # ==========================================================================
+    
+    col1, col2, col3 = st.columns(3)
+    
+    # --- Save to Project (Local) ---
     with col1:
-        if not export_nodes.empty:
-            st.download_button(
-                "📥 nodes.csv",
-                data=export_nodes.to_csv(index=False),
-                file_name="nodes.csv",
-                mime="text/csv",
-                use_container_width=True,
-                help="C4C schema format"
-            )
+        if project_name and project_name != DEMO_PROJECT_NAME:
+            if st.button("💾 Save to Project", use_container_width=True, 
+                        help="Save to local project folder"):
+                project_path = get_project_path(project_name)
+                try:
+                    export_nodes.to_csv(project_path / "nodes.csv", index=False)
+                    export_edges.to_csv(project_path / "edges.csv", index=False)
+                    if grants_detail is not None and not grants_detail.empty:
+                        grants_detail.to_csv(project_path / "grants_detail.csv", index=False)
+                    st.success(f"✅ Saved to project folder")
+                except Exception as e:
+                    st.error(f"Error: {e}")
+        else:
+            st.button("💾 Save to Project", use_container_width=True, disabled=True,
+                     help="Create a project first")
     
+    # --- Save to Cloud ---
     with col2:
-        if not export_edges.empty:
-            st.download_button(
-                "📥 edges.csv",
-                data=export_edges.to_csv(index=False),
-                file_name="edges.csv",
-                mime="text/csv",
-                use_container_width=True,
-                help="C4C schema format"
-            )
-    
-    # Download buttons - Polinode
-    st.markdown("**Polinode Import**")
-    
-    if polinode_excel:
-        st.download_button(
-            "📊 Download Polinode Excel (Nodes + Edges tabs)",
-            data=polinode_excel,
-            file_name="orggraph_polinode.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True
-        )
-    
-    poli_col1, poli_col2 = st.columns(2)
-    with poli_col1:
-        if not poli_nodes.empty:
-            st.download_button(
-                "📥 nodes_polinode.csv",
-                data=poli_nodes.to_csv(index=False),
-                file_name="nodes_polinode.csv",
-                mime="text/csv",
-                use_container_width=True,
-                help="Polinode-compatible format"
-            )
-    
-    with poli_col2:
-        if not poli_edges.empty:
-            st.download_button(
-                "📥 edges_polinode.csv",
-                data=poli_edges.to_csv(index=False),
-                file_name="edges_polinode.csv",
-                mime="text/csv",
-                use_container_width=True,
-                help="Polinode-compatible format"
-            )
-    
-    # ZIP download with everything (Phase 1c bundle format)
-    if not export_nodes.empty or not export_edges.empty:
-        zip_buffer = BytesIO()
-        with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
-            # =================================================================
-            # Phase 1c: Unified bundle structure
-            # =================================================================
-            # Prepare grants_detail for manifest
-            grants_detail = None
-            if export_grants is not None and not export_grants.empty:
-                grants_detail = ensure_grants_detail_columns(export_grants)
+        client = get_project_store_authenticated()
+        cloud_enabled = client is not None
+        
+        if st.button("☁️ Save to Cloud", 
+                    disabled=not cloud_enabled,
+                    use_container_width=True,
+                    help="Login to enable cloud save" if not cloud_enabled else "Upload to Supabase"):
             
-            # manifest.json at root
+            with st.spinner("☁️ Uploading..."):
+                success, message, slug = save_bundle_to_cloud(
+                    project_name=project_name,
+                    nodes_df=export_nodes,
+                    edges_df=export_edges,
+                    grants_df=export_grants,
+                    region_def=region_def,
+                    poli_nodes=poli_nodes,
+                    poli_edges=poli_edges,
+                    polinode_excel=polinode_excel,
+                    parse_results=parse_results
+                )
+                
+                if success:
+                    st.success(f"☁️ {message}")
+                else:
+                    st.error(f"❌ {message}")
+    
+    # --- Download ZIP (Primary Action) ---
+    with col3:
+        # Build ZIP bundle
+        zip_buffer = BytesIO()
+        
+        with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+            # README.md
+            readme_content = generate_readme(
+                project_name=project_name or "OrgGraph Export",
+                nodes_df=export_nodes,
+                edges_df=export_edges,
+                grants_df=grants_detail,
+                region_def=region_def
+            )
+            zip_file.writestr('README.md', readme_content)
+            
+            # manifest.json
             manifest = generate_bundle_manifest(
                 nodes_df=export_nodes,
                 edges_df=export_edges,
@@ -2383,43 +2468,44 @@ def render_downloads(nodes_df: pd.DataFrame, edges_df: pd.DataFrame,
             )
             zip_file.writestr('manifest.json', json.dumps(manifest, indent=2))
             
-            # Core data files at root (unified schema applied earlier)
+            # Core data files (with project prefix)
             if not export_nodes.empty:
-                zip_file.writestr('nodes.csv', export_nodes.to_csv(index=False))
+                zip_file.writestr(f'{safe_project_name}_nodes.csv', export_nodes.to_csv(index=False))
             if not export_edges.empty:
-                zip_file.writestr('edges.csv', export_edges.to_csv(index=False))
+                zip_file.writestr(f'{safe_project_name}_edges.csv', export_edges.to_csv(index=False))
             if grants_detail is not None and not grants_detail.empty:
-                zip_file.writestr('grants_detail.csv', grants_detail.to_csv(index=False))
+                zip_file.writestr(f'{safe_project_name}_grants_detail.csv', grants_detail.to_csv(index=False))
             
-            # Polinode-compatible files (in polinode/ folder)
+            # Polinode files
             if not poli_nodes.empty:
-                zip_file.writestr('polinode/nodes_polinode.csv', poli_nodes.to_csv(index=False))
+                zip_file.writestr(f'polinode/{safe_project_name}_polinode_nodes.csv', poli_nodes.to_csv(index=False))
             if not poli_edges.empty:
-                zip_file.writestr('polinode/edges_polinode.csv', poli_edges.to_csv(index=False))
+                zip_file.writestr(f'polinode/{safe_project_name}_polinode_edges.csv', poli_edges.to_csv(index=False))
             if polinode_excel:
-                zip_file.writestr('polinode/polinode_import.xlsx', polinode_excel)
+                zip_file.writestr(f'polinode/{safe_project_name}_polinode.xlsx', polinode_excel)
             
-            # Diagnostics
+            # Parse log (diagnostics)
             if parse_results:
                 zip_file.writestr('parse_log.json', json.dumps(parse_results, indent=2, default=str))
         
         zip_buffer.seek(0)
         
-        file_prefix = project_name if project_name else "orggraph"
-        
-        st.caption("""
-        **Bundle contents:** manifest.json • nodes.csv • edges.csv • grants_detail.csv • 
-        `polinode/` — nodes_polinode.csv, edges_polinode.csv, polinode_import.xlsx • parse_log.json
-        """)
-        
         st.download_button(
-            "📦 Download All (ZIP)",
+            "📦 Download ZIP",
             data=zip_buffer.getvalue(),
-            file_name=f"{file_prefix}_export.zip",
+            file_name=f"{safe_project_name}_export.zip",
             mime="application/zip",
             type="primary",
             use_container_width=True
         )
+    
+    # Help text
+    st.caption("""
+    **ZIP contains:** README.md · nodes.csv · edges.csv · grants_detail.csv · 
+    manifest.json · polinode/ folder with Excel + CSVs
+    """)
+
+
 # =============================================================================
 # Upload Interface
 # =============================================================================
