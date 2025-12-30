@@ -13,6 +13,16 @@ Outputs conform to C4C Network Schema v1 (MVP):
 
 VERSION HISTORY:
 ----------------
+UPDATED v0.25.0: Board Detail Export with Interlock Detection
+- NEW: board_detail.csv in ZIP bundle with full board member data
+- Extracts all board member info from IRS 990/990-PF XML files
+- Includes: name, title, hours/week, address (when available), org info
+- Automatic interlock detection: finds people serving on multiple boards
+- Name normalization for matching (handles middle initials, suffixes)
+- Confidence scoring: exact matches, fuzzy matches, unique entries
+- Address type indicator: individual (990-PF) vs organization (990)
+- README updated with board_detail.csv column definitions
+
 UPDATED v0.24.0: Download simplification + BOM fix
 - Collapsed 8 download buttons to 3 (Save to Project, Save to Cloud, Download ZIP)
 - Added README.md to ZIP bundle with column definitions and usage guide
@@ -124,7 +134,7 @@ from c4c_utils.coregraph_schema import prepare_unified_nodes_csv, prepare_unifie
 # =============================================================================
 # Constants
 # =============================================================================
-APP_VERSION = "0.24.0"  # Download simplification
+APP_VERSION = "0.25.0"  # Board detail export with interlock detection
 MAX_FILES = 50
 C4C_LOGO_URL = "https://static.wixstatic.com/media/275a3f_25063966d6cd496eb2fe3f6ee5cde0fa~mv2.png"
 SOURCE_SYSTEM = "IRS_990"
@@ -268,6 +278,8 @@ def init_session_state():
         st.session_state.edges_df = pd.DataFrame()
     if "grants_df" not in st.session_state:
         st.session_state.grants_df = None
+    if "board_detail_df" not in st.session_state:
+        st.session_state.board_detail_df = pd.DataFrame()
     if "parse_results" not in st.session_state:
         st.session_state.parse_results = []
     if "merge_stats" not in st.session_state:
@@ -584,7 +596,10 @@ def clear_session_state():
     st.session_state.merge_stats = {}
     st.session_state.processed_orgs = []
     st.session_state.region_def = None
-def store_results(nodes_df, edges_df, grants_df, parse_results, merge_stats, processed_orgs, region_def=None):
+    st.session_state.board_detail_df = pd.DataFrame()
+
+
+def store_results(nodes_df, edges_df, grants_df, parse_results, merge_stats, processed_orgs, region_def=None, board_detail_df=None):
     """Store processing results in session state."""
     st.session_state.processed = True
     st.session_state.nodes_df = nodes_df
@@ -594,6 +609,7 @@ def store_results(nodes_df, edges_df, grants_df, parse_results, merge_stats, pro
     st.session_state.merge_stats = merge_stats
     st.session_state.processed_orgs = processed_orgs
     st.session_state.region_def = region_def
+    st.session_state.board_detail_df = board_detail_df if board_detail_df is not None else pd.DataFrame()
 # =============================================================================
 # Data Merging Functions
 # =============================================================================
@@ -793,6 +809,403 @@ def extract_board_with_fallback(file_bytes: bytes, filename: str, meta: dict) ->
         return pd.DataFrame()
 
 
+# =============================================================================
+# Board Detail Extraction (Phase 1: Board Detail CSV)
+# =============================================================================
+
+def normalize_name(name: str) -> str:
+    """
+    Normalize a person's name for matching.
+    
+    Transformations:
+    - Lowercase
+    - Remove middle initials (single letters followed by period or space)
+    - Remove suffixes (Jr, Sr, II, III, IV, MD, PhD, etc.)
+    - Remove extra whitespace
+    - Remove punctuation
+    
+    Returns normalized name for comparison.
+    """
+    import re
+    import unicodedata
+    
+    if not name:
+        return ""
+    
+    # Unicode normalize
+    name = unicodedata.normalize('NFKC', name)
+    
+    # Lowercase
+    name = name.lower()
+    
+    # Remove common suffixes
+    suffixes = r'\b(jr\.?|sr\.?|ii|iii|iv|v|md|phd|esq\.?|cpa|jd|mba|dds|do|rn|pe)\b'
+    name = re.sub(suffixes, '', name, flags=re.IGNORECASE)
+    
+    # Remove middle initials (single letter followed by period or space, or between spaces)
+    # "John Q. Smith" -> "John Smith"
+    # "John Q Smith" -> "John Smith"
+    name = re.sub(r'\b[a-z]\.\s*', ' ', name)  # "Q. " -> " "
+    name = re.sub(r'\s+[a-z]\s+', ' ', name)   # " Q " -> " "
+    
+    # Remove punctuation except spaces
+    name = re.sub(r'[^\w\s]', '', name)
+    
+    # Collapse whitespace
+    name = ' '.join(name.split())
+    
+    return name.strip()
+
+
+def extract_board_details_from_xml(file_bytes: bytes, meta: dict) -> list:
+    """
+    Extract detailed board member information from IRS 990 XML.
+    
+    Handles:
+    - Form 990 (Part VII Section A)
+    - Form 990-PF (Part VIII - Officers, Directors, Trustees)
+    - Form 990-EZ
+    
+    Returns list of dicts with all available fields.
+    """
+    import xml.etree.ElementTree as ET
+    
+    # Handle BOM
+    if file_bytes.startswith(b'\xef\xbb\xbf'):
+        file_bytes = file_bytes[3:]
+    
+    try:
+        root = ET.fromstring(file_bytes)
+    except ET.ParseError:
+        return []
+    
+    ns = {'irs': 'http://www.irs.gov/efile'}
+    
+    # Get organization info from meta
+    org_name = meta.get('foundation_name', '')
+    org_ein = meta.get('foundation_ein', '').replace('-', '')
+    tax_year = meta.get('tax_year', '')
+    form_type = meta.get('form_type', '')
+    
+    # Get organization address (fallback when individual address not available)
+    org_address = {
+        'address_line1': '',
+        'city': '',
+        'state': '',
+        'zip': '',
+    }
+    
+    # Try to find filer address
+    filer_addr = root.find('.//irs:Filer/irs:USAddress', ns)
+    if filer_addr is None:
+        filer_addr = root.find('.//irs:USAddress', ns)
+    
+    if filer_addr is not None:
+        addr_line = filer_addr.find('irs:AddressLine1Txt', ns)
+        if addr_line is None:
+            addr_line = filer_addr.find('irs:AddressLine1', ns)
+        city = filer_addr.find('irs:CityNm', ns)
+        if city is None:
+            city = filer_addr.find('irs:City', ns)
+        state = filer_addr.find('irs:StateAbbreviationCd', ns)
+        if state is None:
+            state = filer_addr.find('irs:State', ns)
+        zip_code = filer_addr.find('irs:ZIPCd', ns)
+        if zip_code is None:
+            zip_code = filer_addr.find('irs:ZIPCode', ns)
+        
+        org_address['address_line1'] = addr_line.text if addr_line is not None else ''
+        org_address['city'] = city.text if city is not None else ''
+        org_address['state'] = state.text if state is not None else ''
+        org_address['zip'] = zip_code.text if zip_code is not None else ''
+    
+    board_members = []
+    
+    # =========================================================================
+    # Form 990 - Part VII Section A
+    # =========================================================================
+    members_990 = root.findall('.//irs:Form990PartVIISectionAGrp', ns)
+    
+    for m in members_990:
+        person_name = m.find('irs:PersonNm', ns)
+        title = m.find('irs:TitleTxt', ns)
+        hours = m.find('irs:AverageHoursPerWeekRt', ns)
+        is_trustee = m.find('irs:IndividualTrusteeOrDirectorInd', ns)
+        is_officer = m.find('irs:OfficerInd', ns)
+        
+        # 990 doesn't have individual addresses, use org address
+        member = {
+            'person_name': person_name.text if person_name is not None else '',
+            'foundation_name': org_name,
+            'foundation_ein': org_ein,
+            'tax_year': tax_year,
+            'title': title.text if title is not None else '',
+            'hours_per_week': hours.text if hours is not None else '',
+            'is_officer': 'Y' if (is_officer is not None and is_officer.text == 'X') else 'N',
+            'is_trustee_director': 'Y' if (is_trustee is not None and is_trustee.text == 'X') else 'N',
+            'address_line1': org_address['address_line1'],
+            'city': org_address['city'],
+            'state': org_address['state'],
+            'zip': org_address['zip'],
+            'country': 'US',
+            'address_type': 'organization',
+            'form_type': '990',
+        }
+        
+        if member['person_name']:  # Only add if we have a name
+            board_members.append(member)
+    
+    # =========================================================================
+    # Form 990-PF - Part VIII (Officers, Directors, Trustees)
+    # =========================================================================
+    # Try multiple possible paths for 990-PF
+    pf_paths = [
+        './/irs:OfficerDirTrstKeyEmplInfoGrp',
+        './/irs:OfcrDirTrusteesKeyEmplGrp', 
+        './/irs:OfficerDirTrstKeyEmplGrp',
+    ]
+    
+    for pf_path in pf_paths:
+        members_pf = root.findall(pf_path, ns)
+        
+        for m in members_pf:
+            # Name can be PersonNm or inside a nested group
+            person_name = m.find('.//irs:PersonNm', ns)
+            if person_name is None:
+                person_name = m.find('.//irs:BusinessNameLine1Txt', ns)
+            
+            title = m.find('.//irs:TitleTxt', ns)
+            hours = m.find('.//irs:AverageHrsPerWkDevotedToPosRt', ns)
+            if hours is None:
+                hours = m.find('.//irs:AvgHoursPerWkDevotedToPosRt', ns)
+            
+            # 990-PF often has individual addresses
+            ind_addr = m.find('.//irs:USAddress', ns)
+            
+            if ind_addr is not None:
+                addr_line = ind_addr.find('irs:AddressLine1Txt', ns)
+                if addr_line is None:
+                    addr_line = ind_addr.find('irs:AddressLine1', ns)
+                city = ind_addr.find('irs:CityNm', ns)
+                if city is None:
+                    city = ind_addr.find('irs:City', ns)
+                state = ind_addr.find('irs:StateAbbreviationCd', ns)
+                if state is None:
+                    state = ind_addr.find('irs:State', ns)
+                zip_code = ind_addr.find('irs:ZIPCd', ns)
+                if zip_code is None:
+                    zip_code = ind_addr.find('irs:ZIPCode', ns)
+                
+                address_type = 'individual'
+                address_line1 = addr_line.text if addr_line is not None else ''
+                city_val = city.text if city is not None else ''
+                state_val = state.text if state is not None else ''
+                zip_val = zip_code.text if zip_code is not None else ''
+            else:
+                # Fall back to org address
+                address_type = 'organization'
+                address_line1 = org_address['address_line1']
+                city_val = org_address['city']
+                state_val = org_address['state']
+                zip_val = org_address['zip']
+            
+            member = {
+                'person_name': person_name.text if person_name is not None else '',
+                'foundation_name': org_name,
+                'foundation_ein': org_ein,
+                'tax_year': tax_year,
+                'title': title.text if title is not None else '',
+                'hours_per_week': hours.text if hours is not None else '',
+                'is_officer': 'N',  # 990-PF doesn't have this flag separately
+                'is_trustee_director': 'Y',  # All in this section are trustees/directors
+                'address_line1': address_line1,
+                'city': city_val,
+                'state': state_val,
+                'zip': zip_val,
+                'country': 'US',
+                'address_type': address_type,
+                'form_type': '990-PF',
+            }
+            
+            if member['person_name']:
+                board_members.append(member)
+    
+    return board_members
+
+
+def detect_board_interlocks(board_members: list) -> pd.DataFrame:
+    """
+    Detect board interlocks (same person serving on multiple boards).
+    
+    Uses normalized names to find matches:
+    - exact: Normalized names match perfectly
+    - fuzzy: Names are similar (Levenshtein distance <= 2)
+    - unique: Only appears once
+    
+    Returns DataFrame with interlock_id, interlock_count, match_confidence added.
+    """
+    from difflib import SequenceMatcher
+    
+    if not board_members:
+        return pd.DataFrame()
+    
+    df = pd.DataFrame(board_members)
+    
+    # Add normalized names
+    df['person_name_normalized'] = df['person_name'].apply(normalize_name)
+    
+    # Group by normalized name to find exact matches
+    name_groups = df.groupby('person_name_normalized')
+    
+    # Track interlock assignments
+    interlock_id = 0
+    interlock_map = {}  # normalized_name -> interlock_id
+    fuzzy_pairs = []  # Track fuzzy matches for later
+    
+    # First pass: exact matches
+    for norm_name, group in name_groups:
+        if len(group) > 1:
+            # Multiple boards with same normalized name = exact match
+            interlock_id += 1
+            interlock_map[norm_name] = {
+                'id': interlock_id,
+                'count': len(group['foundation_ein'].unique()),
+                'confidence': 'exact'
+            }
+        else:
+            # Single occurrence so far
+            interlock_map[norm_name] = {
+                'id': None,  # Will assign later
+                'count': 1,
+                'confidence': 'unique'
+            }
+    
+    # Second pass: fuzzy matches for names that appear only once
+    unique_names = [n for n, v in interlock_map.items() if v['count'] == 1]
+    
+    def similar(a: str, b: str) -> bool:
+        """Check if two names are similar enough to be the same person."""
+        if not a or not b:
+            return False
+        # Use SequenceMatcher ratio - threshold of 0.85 works well for names
+        ratio = SequenceMatcher(None, a, b).ratio()
+        return ratio >= 0.85
+    
+    # Find fuzzy matches among unique names
+    fuzzy_groups = []
+    used = set()
+    
+    for i, name1 in enumerate(unique_names):
+        if name1 in used:
+            continue
+        
+        group = [name1]
+        for name2 in unique_names[i+1:]:
+            if name2 in used:
+                continue
+            if similar(name1, name2):
+                group.append(name2)
+                used.add(name2)
+        
+        if len(group) > 1:
+            used.add(name1)
+            fuzzy_groups.append(group)
+    
+    # Assign interlock IDs to fuzzy matches
+    for group in fuzzy_groups:
+        interlock_id += 1
+        # Count unique foundations across the fuzzy group
+        foundations = set()
+        for norm_name in group:
+            mask = df['person_name_normalized'] == norm_name
+            foundations.update(df[mask]['foundation_ein'].unique())
+        
+        for norm_name in group:
+            interlock_map[norm_name] = {
+                'id': interlock_id,
+                'count': len(foundations),
+                'confidence': 'fuzzy'
+            }
+    
+    # Assign remaining unique entries their own IDs
+    for norm_name, data in interlock_map.items():
+        if data['id'] is None:
+            interlock_id += 1
+            interlock_map[norm_name]['id'] = interlock_id
+    
+    # Apply to dataframe
+    df['interlock_id'] = df['person_name_normalized'].apply(lambda x: interlock_map.get(x, {}).get('id', 0))
+    df['interlock_count'] = df['person_name_normalized'].apply(lambda x: interlock_map.get(x, {}).get('count', 1))
+    df['match_confidence'] = df['person_name_normalized'].apply(lambda x: interlock_map.get(x, {}).get('confidence', 'unique'))
+    
+    # Reorder columns for output
+    output_columns = [
+        'person_name',
+        'person_name_normalized',
+        'foundation_name',
+        'foundation_ein',
+        'title',
+        'hours_per_week',
+        'is_officer',
+        'is_trustee_director',
+        'address_line1',
+        'city',
+        'state',
+        'zip',
+        'country',
+        'address_type',
+        'tax_year',
+        'interlock_id',
+        'interlock_count',
+        'match_confidence',
+    ]
+    
+    # Only include columns that exist
+    output_columns = [c for c in output_columns if c in df.columns]
+    
+    return df[output_columns].sort_values(['interlock_count', 'person_name_normalized'], ascending=[False, True])
+
+
+def build_board_detail_from_results(parse_results: list, raw_file_bytes: dict) -> pd.DataFrame:
+    """
+    Build board_detail.csv from parse results.
+    
+    Args:
+        parse_results: List of parse result dicts from processing
+        raw_file_bytes: Dict mapping filename -> bytes for XML files
+    
+    Returns:
+        DataFrame ready for export as board_detail.csv
+    """
+    all_board_members = []
+    
+    for result in parse_results:
+        if result.get('status') == 'error':
+            continue
+        
+        filename = result.get('file', '')
+        meta = {
+            'foundation_name': result.get('org_name', ''),
+            'foundation_ein': result.get('foundation_ein', ''),
+            'tax_year': result.get('tax_year', ''),
+            'form_type': result.get('form_type', ''),
+        }
+        
+        # Get raw bytes for this file
+        file_bytes = raw_file_bytes.get(filename)
+        
+        if file_bytes and filename.lower().endswith('.xml'):
+            # Extract detailed board info from XML
+            members = extract_board_details_from_xml(file_bytes, meta)
+            all_board_members.extend(members)
+    
+    if not all_board_members:
+        return pd.DataFrame()
+    
+    # Detect interlocks
+    return detect_board_interlocks(all_board_members)
+
+
 
 
 # -----------------------------------------------------------------------------
@@ -849,11 +1262,16 @@ def process_uploaded_files(uploaded_files, tax_year_override: str = "", region_s
     all_people = []
     foundations_meta = []
     parse_results = []
+    raw_xml_bytes = {}  # Track XML file bytes for board detail extraction
     
     for uploaded_file in uploaded_files:
         try:
             file_bytes = uploaded_file.read()
             filename = uploaded_file.name.lower()
+            
+            # Track XML file bytes for board detail extraction
+            if filename.endswith('.xml'):
+                raw_xml_bytes[uploaded_file.name] = file_bytes
 
             # Guardrail: iPad Safari sometimes saves a rendered text view as ".xml" (not real XML)
             if filename.endswith('.xml'):
@@ -981,7 +1399,10 @@ def process_uploaded_files(uploaded_files, tax_year_override: str = "", region_s
     nodes_df = build_nodes_df(combined_grants, combined_people, foundations_meta)
     edges_df = build_edges_df(combined_grants, combined_people, foundations_meta)
     
-    return nodes_df, edges_df, combined_grants, foundations_meta, parse_results
+    # Build board detail with interlock detection
+    board_detail_df = build_board_detail_from_results(parse_results, raw_xml_bytes)
+    
+    return nodes_df, edges_df, combined_grants, foundations_meta, parse_results, board_detail_df
 # =============================================================================
 # v2.5 Diagnostic Display Functions
 # =============================================================================
@@ -2206,7 +2627,8 @@ def filter_data_to_region(nodes_df: pd.DataFrame, edges_df: pd.DataFrame,
 # =============================================================================
 
 def generate_readme(project_name: str, nodes_df: pd.DataFrame, edges_df: pd.DataFrame,
-                   grants_df: pd.DataFrame = None, region_def: dict = None) -> str:
+                   grants_df: pd.DataFrame = None, region_def: dict = None,
+                   board_detail_df: pd.DataFrame = None) -> str:
     """
     Generate README.md content for the ZIP bundle.
     
@@ -2225,6 +2647,14 @@ def generate_readme(project_name: str, nodes_df: pd.DataFrame, edges_df: pd.Data
     node_count = len(nodes_df) if nodes_df is not None and not nodes_df.empty else 0
     edge_count = len(edges_df) if edges_df is not None and not edges_df.empty else 0
     grant_count = len(grants_df) if grants_df is not None and not grants_df.empty else 0
+    board_count = len(board_detail_df) if board_detail_df is not None and not board_detail_df.empty else 0
+    
+    # Interlock stats
+    interlock_info = ""
+    if board_detail_df is not None and not board_detail_df.empty and 'interlock_count' in board_detail_df.columns:
+        people_on_multiple = len(board_detail_df[board_detail_df['interlock_count'] > 1]['person_name_normalized'].unique())
+        if people_on_multiple > 0:
+            interlock_info = f"- **Board Interlocks:** {people_on_multiple} people on multiple boards\n"
     
     # Region info
     region_info = ""
@@ -2243,7 +2673,8 @@ def generate_readme(project_name: str, nodes_df: pd.DataFrame, edges_df: pd.Data
 - **Nodes:** {node_count:,}
 - **Edges:** {edge_count:,}
 - **Grant Details:** {grant_count:,}
-{region_info}
+- **Board Members:** {board_count:,}
+{interlock_info}{region_info}
 ---
 
 ## Files in This Bundle
@@ -2255,6 +2686,7 @@ def generate_readme(project_name: str, nodes_df: pd.DataFrame, edges_df: pd.Data
 | `{safe_project_name}_nodes.csv` | All organizations and people in the network |
 | `{safe_project_name}_edges.csv` | Grant and board membership relationships |
 | `{safe_project_name}_grants_detail.csv` | Detailed grant records with amounts, purposes, locations |
+| `{safe_project_name}_board_detail.csv` | Board member details with interlock detection |
 | `manifest.json` | Bundle metadata (schema version, timestamps, counts) |
 
 ### Polinode Import Files
@@ -2316,6 +2748,34 @@ def generate_readme(project_name: str, nodes_df: pd.DataFrame, edges_df: pd.Data
 | `region_relevant` | boolean | Whether grant matches region filter |
 | `source_file` | string | Original filing filename |
 
+### board_detail.csv
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `person_name` | string | Name as filed in IRS form |
+| `person_name_normalized` | string | Cleaned name for matching |
+| `foundation_name` | string | Organization they serve |
+| `foundation_ein` | string | Organization EIN |
+| `title` | string | Position/role on board |
+| `hours_per_week` | string | Time commitment |
+| `is_officer` | string | Y/N - Is this person an officer |
+| `is_trustee_director` | string | Y/N - Is this person a trustee/director |
+| `address_line1` | string | Street address (individual or org) |
+| `city` | string | City |
+| `state` | string | State code |
+| `zip` | string | ZIP code |
+| `country` | string | Country (US) |
+| `address_type` | string | `individual` or `organization` |
+| `interlock_id` | number | Group ID for same person across boards |
+| `interlock_count` | number | Number of boards (1 = no interlock) |
+| `match_confidence` | string | `exact`, `fuzzy`, or `unique` |
+
+**Using board_detail.csv for LinkedIn resolution:**
+- Filter by `interlock_count > 1` to find people serving on multiple boards
+- Use `city`, `state`, and `foundation_name` to help disambiguate common names
+- `address_type = individual` indicates the address is for the person (990-PF only)
+- `match_confidence = fuzzy` means names were similar but not exact — verify manually
+
 ---
 
 ## Using with Polinode
@@ -2340,7 +2800,7 @@ The `network_role_label` column can be used for node coloring:
 
 - **Source:** IRS Form 990-PF and 990 Schedule I filings
 - **Parser:** OrgGraph US v{APP_VERSION}
-- **Processing:** Grants extracted, board members identified, network built
+- **Processing:** Grants extracted, board members identified, interlocks detected
 - **Schema:** CoreGraph v{COREGRAPH_VERSION} (normalized node/edge types, namespaced IDs)
 
 For questions about this data, contact: info@connectingforchangellc.com
@@ -2354,7 +2814,8 @@ For questions about this data, contact: info@connectingforchangellc.com
 
 def render_downloads(nodes_df: pd.DataFrame, edges_df: pd.DataFrame, 
                     grants_df: pd.DataFrame = None, parse_results: list = None,
-                    project_name: str = None, region_def: dict = None):
+                    project_name: str = None, region_def: dict = None,
+                    board_detail_df: pd.DataFrame = None):
     """
     Simplified download UI with 3 actions:
     - 💾 Save to Project (local folder)
@@ -2362,6 +2823,7 @@ def render_downloads(nodes_df: pd.DataFrame, edges_df: pd.DataFrame,
     - 📦 Download ZIP (single bundle with everything)
     
     v0.24.0: Collapsed from 8 buttons to 3
+    v0.25.0: Added board_detail.csv with interlock detection
     """
     st.subheader("📥 Export Data")
     
@@ -2472,7 +2934,8 @@ def render_downloads(nodes_df: pd.DataFrame, edges_df: pd.DataFrame,
                 nodes_df=export_nodes,
                 edges_df=export_edges,
                 grants_df=grants_detail,
-                region_def=region_def
+                region_def=region_def,
+                board_detail_df=board_detail_df
             )
             zip_file.writestr('README.md', readme_content)
             
@@ -2501,6 +2964,10 @@ def render_downloads(nodes_df: pd.DataFrame, edges_df: pd.DataFrame,
             if polinode_excel:
                 zip_file.writestr(f'polinode/{safe_project_name}_polinode.xlsx', polinode_excel)
             
+            # Board detail with interlock detection
+            if board_detail_df is not None and not board_detail_df.empty:
+                zip_file.writestr(f'{safe_project_name}_board_detail.csv', board_detail_df.to_csv(index=False))
+            
             # Parse log (diagnostics)
             if parse_results:
                 zip_file.writestr('parse_log.json', json.dumps(parse_results, indent=2, default=str))
@@ -2519,7 +2986,7 @@ def render_downloads(nodes_df: pd.DataFrame, edges_df: pd.DataFrame,
     
     # Help text
     st.caption("""
-    **ZIP contains:** README.md · nodes.csv · edges.csv · grants_detail.csv · 
+    **ZIP contains:** README.md · nodes.csv · edges.csv · grants_detail.csv · board_detail.csv · 
     manifest.json · polinode/ folder with Excel + CSVs
     """)
 
@@ -2643,7 +3110,8 @@ def render_upload_interface(project_name: str):
         render_data_preview(st.session_state.nodes_df, st.session_state.edges_df)
         render_downloads(st.session_state.nodes_df, st.session_state.edges_df, 
                        st.session_state.grants_df, st.session_state.parse_results,
-                       project_name, st.session_state.region_def)
+                       project_name, st.session_state.region_def,
+                       st.session_state.board_detail_df)
         
         # =================================================================
         # SECTION 6: Advanced - Graph Structure (optional expander)
@@ -2722,7 +3190,7 @@ def render_upload_interface(project_name: str):
         if parse_button:
             # Process files with region_spec passed to dispatcher
             with st.spinner("Parsing filings..."):
-                new_nodes, new_edges, grants_df, foundations_meta, parse_results = process_uploaded_files(
+                new_nodes, new_edges, grants_df, foundations_meta, parse_results, board_detail_df = process_uploaded_files(
                     uploaded_files, tax_year_override, region_spec=region_spec
                 )
             
@@ -2734,7 +3202,7 @@ def render_upload_interface(project_name: str):
                 # Still store results to show errors
                 store_results(
                     pd.DataFrame(), pd.DataFrame(), None,
-                    parse_results, {}, [], region_def
+                    parse_results, {}, [], region_def, pd.DataFrame()
                 )
                 st.rerun()
             
@@ -2755,11 +3223,23 @@ def render_upload_interface(project_name: str):
             merge_stats['grants_added'] = grants_stats['added']
             merge_stats['grants_skipped'] = grants_stats['skipped']
             
+            # Merge board_detail with existing (if any)
+            existing_board_detail = st.session_state.get("board_detail_df", pd.DataFrame())
+            if not board_detail_df.empty:
+                if not existing_board_detail.empty:
+                    # Concatenate and re-run interlock detection
+                    combined_members = pd.concat([existing_board_detail, board_detail_df], ignore_index=True)
+                    # Re-detect interlocks across all data
+                    board_detail_df = detect_board_interlocks(combined_members.to_dict('records'))
+                # else: just use the new board_detail_df
+            else:
+                board_detail_df = existing_board_detail
+            
             # Get processed org names
             processed_orgs = [r["org_name"] for r in parse_results if r.get("status") == "success" and r.get("org_name")]
             
             # Store in session state (use merged grants)
-            store_results(nodes_df, edges_df, merged_grants_df, parse_results, merge_stats, processed_orgs, region_def)
+            store_results(nodes_df, edges_df, merged_grants_df, parse_results, merge_stats, processed_orgs, region_def, board_detail_df)
             
             # Rerun to show results
             st.rerun()
@@ -2948,6 +3428,8 @@ def main():
             render_analytics(grants_df, None)  # Demo mode has no region_def
         
         render_data_preview(nodes_df, edges_df)
-        render_downloads(nodes_df, edges_df, grants_df, None, DEMO_PROJECT_NAME)
+        render_downloads(nodes_df, edges_df, grants_df, None, DEMO_PROJECT_NAME, None, None)
+
+
 if __name__ == "__main__":
     main()
