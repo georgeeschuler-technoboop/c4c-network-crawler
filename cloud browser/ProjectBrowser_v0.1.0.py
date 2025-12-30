@@ -33,7 +33,7 @@ import json
 # =============================================================================
 # Constants
 # =============================================================================
-APP_VERSION = "0.1.0"
+APP_VERSION = "0.1.1"  # Added diagnostic error messages
 C4C_LOGO_URL = "https://static.wixstatic.com/media/275a3f_25063966d6cd496eb2fe3f6ee5cde0fa~mv2.png"
 APP_ICON_URL = "https://static.wixstatic.com/media/275a3f_25063966d6cd496eb2fe3f6ee5cde0fa~mv2.png"
 
@@ -80,17 +80,31 @@ def init_project_store():
     if st.session_state.project_store is not None:
         return st.session_state.project_store
     
+    # Check if secrets exist
     try:
         url = st.secrets["supabase"]["url"]
         key = st.secrets["supabase"]["key"]
-        
+    except KeyError as e:
+        st.sidebar.error(f"❌ Missing secret: {e}")
+        st.sidebar.caption("Add [supabase] section to secrets.toml")
+        return None
+    except Exception as e:
+        st.sidebar.error(f"❌ Secrets error: {e}")
+        return None
+    
+    # Try to import and initialize client
+    try:
         from c4c_utils.c4c_project_store import ProjectStoreClient
         
         client = ProjectStoreClient(url, key)
         st.session_state.project_store = client
         return client
+    except ImportError as e:
+        st.sidebar.error(f"❌ Import error: {e}")
+        st.sidebar.caption("c4c_utils package not found")
+        return None
     except Exception as e:
-        st.session_state.project_store = None
+        st.sidebar.error(f"❌ Client init error: {e}")
         return None
 
 
@@ -110,8 +124,19 @@ def render_auth_sidebar():
     client = init_project_store()
     
     if not client:
-        st.sidebar.error("☁️ Cloud unavailable")
-        st.sidebar.caption("Check Supabase configuration")
+        # Error messages already shown by init_project_store
+        # Show debug info
+        st.sidebar.divider()
+        st.sidebar.caption("**Debug info:**")
+        try:
+            has_supabase = "supabase" in st.secrets
+            st.sidebar.caption(f"secrets.supabase exists: {has_supabase}")
+            if has_supabase:
+                has_url = "url" in st.secrets["supabase"]
+                has_key = "key" in st.secrets["supabase"]
+                st.sidebar.caption(f"has url: {has_url}, has key: {has_key}")
+        except Exception as e:
+            st.sidebar.caption(f"secrets check failed: {e}")
         return None
     
     if client.is_authenticated():
