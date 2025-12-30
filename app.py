@@ -45,9 +45,10 @@ import plotly.graph_objects as go
 # APP VERSION
 # ============================================================================
 
-APP_VERSION = "0.5.5"
+APP_VERSION = "0.5.6"
 
 VERSION_HISTORY = [
+    "UPDATED v0.5.6: Download simplification - collapsed to 2 buttons (Download ZIP, Save to Cloud); added README.md to bundle; project-prefixed filenames",
     "FIXED v0.5.5: Handle empty edges in validate_polinode_export and generate_polinode_excel",
     "FIXED v0.5.4: Enhanced path handling for c4c_utils; added logo via st.image; better error messages",
     "FIXED v0.5.3: Moved cloud login to top of sidebar for consistency with other apps",
@@ -1652,24 +1653,154 @@ def generate_crawl_log(stats: Dict, seen_profiles: Dict, edges: List, max_degree
     return json.dumps(log_data, indent=2)
 
 
+def generate_readme(project_name: str, node_count: int, edge_count: int, crawl_type: str = "seed") -> str:
+    """Generate README.md content for the ZIP bundle."""
+    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    safe_name = project_name.replace(" ", "_").lower() if project_name else "actorgraph_export"
+    
+    readme = f"""# {project_name} — ActorGraph Export
+
+**Generated:** {timestamp}  
+**Source App:** ActorGraph v{APP_VERSION}  
+**Schema Version:** {COREGRAPH_VERSION}
+
+## Summary
+
+- **Nodes:** {node_count:,} (people and organizations)
+- **Edges:** {edge_count:,} (connections)
+- **Crawl Type:** {crawl_type}
+
+---
+
+## Files in This Bundle
+
+### Core Data Files (C4C Schema)
+
+| File | Description |
+|------|-------------|
+| `{safe_name}_nodes.csv` | All people and organizations in the network |
+| `{safe_name}_edges.csv` | Connection relationships between nodes |
+| `manifest.json` | Bundle metadata (schema version, timestamps, counts) |
+
+### Polinode Import Files
+
+| File | Description |
+|------|-------------|
+| `polinode/{safe_name}_polinode.xlsx` | Excel workbook with Nodes + Edges tabs for direct Polinode import |
+| `polinode/{safe_name}_polinode_nodes.csv` | Polinode-compatible nodes (Name as primary key) |
+| `polinode/{safe_name}_polinode_edges.csv` | Polinode-compatible edges (Source/Target reference Name) |
+
+### Additional Files
+
+| File | Description |
+|------|-------------|
+| `raw_profiles.json` | Raw API response data for all profiles |
+| `network_analysis.json` | Network metrics and analysis results (if advanced mode) |
+| `crawl_log.json` | Crawl statistics and diagnostics |
+
+---
+
+## Column Definitions
+
+### nodes.csv
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `node_id` | string | Unique identifier (namespaced: `actorgraph:person-...`) |
+| `node_type` | string | `person`, `company`, or `organization` |
+| `label` | string | Display name |
+| `linkedin_url` | string | LinkedIn profile URL |
+| `headline` | string | Professional headline |
+| `city` | string | City location |
+| `region` | string | State/province |
+| `country` | string | Country |
+| `industry` | string | Industry category |
+| `source_app` | string | `actorgraph` |
+
+### edges.csv
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `edge_id` | string | Unique identifier |
+| `edge_type` | string | `connection` (LinkedIn connection) |
+| `from_id` | string | Source node_id |
+| `to_id` | string | Target node_id |
+| `directed` | boolean | `false` for connections |
+| `weight` | number | Edge weight (defaults to 1) |
+| `source_app` | string | `actorgraph` |
+
+---
+
+## Using with Polinode
+
+1. Open Polinode (https://app.polinode.com)
+2. Create new network → Import from Excel
+3. Upload `polinode/{safe_name}_polinode.xlsx`
+4. Map columns:
+   - Nodes tab: `Name` as identifier
+   - Edges tab: `Source` and `Target` as endpoints
+5. Click Import
+
+---
+
+## Using with InsightGraph
+
+1. Save this project to cloud (☁️ Save to Cloud button)
+2. Open InsightGraph
+3. Load from cloud → Select this project
+4. Run network analysis and generate insights
+
+---
+
+## Data Provenance
+
+- **Source:** LinkedIn profile data via EnrichLayer API
+- **Processing:** Network crawl from seed profiles, connection analysis
+- **Schema:** CoreGraph v1 (normalized node/edge types, namespaced IDs)
+
+For questions about this data, contact: info@connectingforchangellc.com
+"""
+    return readme
+
+
 def create_coregraph_bundle(nodes_csv: str, edges_csv: str, manifest_json: str,
                             nodes_polinode_csv: str, edges_polinode_csv: str,
                             polinode_excel: bytes,
                             raw_json: str, analysis_json: str = None,
-                            crawl_log: str = None) -> bytes:
-    """Create CoreGraph-compatible ZIP bundle."""
+                            crawl_log: str = None,
+                            project_name: str = None) -> bytes:
+    """Create CoreGraph-compatible ZIP bundle with README and project-prefixed filenames."""
+    # Generate safe filename prefix
+    safe_name = project_name.replace(" ", "_").lower() if project_name else "actorgraph_export"
+    
+    # Count nodes/edges for README
+    node_count = nodes_csv.count('\n') - 1 if nodes_csv else 0  # Subtract header
+    edge_count = edges_csv.count('\n') - 1 if edges_csv else 0
+    
+    # Parse manifest for crawl type
+    crawl_type = "seed"
+    try:
+        manifest_dict = json.loads(manifest_json)
+        crawl_type = manifest_dict.get("crawl_type", "seed")
+    except:
+        pass
+    
     zip_buffer = BytesIO()
     with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
-        # CoreGraph bundle structure (root level)
-        zip_file.writestr('manifest.json', manifest_json)
-        zip_file.writestr('nodes.csv', nodes_csv)
-        zip_file.writestr('edges.csv', edges_csv)
+        # README.md
+        readme = generate_readme(project_name or "ActorGraph Export", node_count, edge_count, crawl_type)
+        zip_file.writestr('README.md', readme)
         
-        # Polinode subfolder
-        zip_file.writestr('polinode/nodes.csv', nodes_polinode_csv)
-        zip_file.writestr('polinode/edges.csv', edges_polinode_csv)
+        # CoreGraph bundle structure (root level) with project prefix
+        zip_file.writestr('manifest.json', manifest_json)
+        zip_file.writestr(f'{safe_name}_nodes.csv', nodes_csv)
+        zip_file.writestr(f'{safe_name}_edges.csv', edges_csv)
+        
+        # Polinode subfolder with project prefix
+        zip_file.writestr(f'polinode/{safe_name}_polinode_nodes.csv', nodes_polinode_csv)
+        zip_file.writestr(f'polinode/{safe_name}_polinode_edges.csv', edges_polinode_csv)
         if polinode_excel:
-            zip_file.writestr('polinode/actorgraph_polinode.xlsx', polinode_excel)
+            zip_file.writestr(f'polinode/{safe_name}_polinode.xlsx', polinode_excel)
         
         # Raw data and logs
         zip_file.writestr('raw_profiles.json', raw_json)
@@ -2021,7 +2152,7 @@ def main():
             )
         
         # DOWNLOAD SECTION
-        st.header("💾 Download Results")
+        st.header("📥 Export Data")
         
         # Generate CoreGraph schema files
         nodes_csv = generate_nodes_csv(seen_profiles, max_degree=was_max_degree, max_edges=max_edges, max_nodes=max_nodes, network_metrics=network_metrics)
@@ -2055,38 +2186,46 @@ def main():
         # Generate Excel file for Polinode
         polinode_excel = generate_polinode_excel(nodes_polinode_csv, edges_polinode_csv)
         
-        # Create CoreGraph bundle
+        # Get project name from first seed profile
+        first_seed_name = list(seen_profiles.values())[0].get('name', 'Network') if seen_profiles else 'Network'
+        project_name = f"{first_seed_name} Network"
+        safe_project_name = project_name.replace(" ", "_").lower()
+        
+        # Create CoreGraph bundle with project name
         zip_data = create_coregraph_bundle(
             nodes_csv, edges_csv, manifest_json,
             nodes_polinode_csv, edges_polinode_csv, polinode_excel,
-            raw_json, analysis_json, crawl_log
+            raw_json, analysis_json, crawl_log,
+            project_name=project_name
         )
         
-        # Primary download
-        st.download_button(
-            "⬇️ Download CoreGraph Bundle (.zip)", 
-            data=zip_data, 
-            file_name="actorgraph_bundle.zip",
-            mime="application/zip", 
-            type="primary", 
-            use_container_width=True,
-            help="CoreGraph v1 compatible bundle for InsightGraph"
-        )
+        # ==========================================================================
+        # Two-button layout: Download ZIP + Save to Cloud
+        # ==========================================================================
         
-        # Cloud save and clear buttons
         col1, col2, col3 = st.columns([2, 2, 1])
+        
+        # Primary download - ZIP bundle
         with col1:
+            st.download_button(
+                "📦 Download ZIP", 
+                data=zip_data, 
+                file_name=f"{safe_project_name}_export.zip",
+                mime="application/zip", 
+                type="primary", 
+                use_container_width=True,
+                help="Download everything in one bundle — ready for Polinode, InsightGraph, or sharing"
+            )
+        
+        # Cloud save
+        with col2:
             client = get_project_store_authenticated()
             cloud_enabled = client is not None
-            
-            # Get project name from first seed profile
-            first_seed_name = list(seen_profiles.values())[0].get('name', 'Network') if seen_profiles else 'Network'
-            project_name = f"{first_seed_name} Network"
             
             if st.button("☁️ Save to Cloud", 
                         disabled=not cloud_enabled,
                         use_container_width=True,
-                        help="Login to enable cloud save" if not cloud_enabled else "Save bundle to Project Store"):
+                        help="Login to enable cloud saves" if not cloud_enabled else "Save to cloud so you can analyze in InsightGraph or share with teammates"):
                 
                 with st.spinner("☁️ Uploading bundle..."):
                     success, message, slug = save_bundle_to_cloud(
@@ -2102,42 +2241,19 @@ def main():
                     else:
                         st.error(f"❌ {message}")
         
-        with col2:
-            if st.button("🗑️ Clear Results", use_container_width=True):
+        # Clear results
+        with col3:
+            if st.button("🗑️ Clear", use_container_width=True):
                 st.session_state.crawl_results = None
                 st.rerun()
         
-        with col3:
-            if not cloud_enabled:
-                st.caption("☁️ Login to enable")
+        # Help text
+        st.caption("""
+        **ZIP contains:** README.md · nodes.csv · edges.csv · manifest.json · 
+        polinode/ folder with Excel + CSVs · raw_profiles.json · crawl_log.json
+        """)
         
-        # CoreGraph Schema Downloads
-        with st.expander("📄 CoreGraph Schema Files"):
-            st.markdown(f"**Schema:** `{COREGRAPH_VERSION}` | **Bundle:** `{BUNDLE_VERSION}`")
-            c4c_col1, c4c_col2, c4c_col3 = st.columns(3)
-            with c4c_col1:
-                st.download_button("📥 nodes.csv", data=nodes_csv, file_name="nodes.csv", mime="text/csv", use_container_width=True)
-            with c4c_col2:
-                st.download_button("📥 edges.csv", data=edges_csv, file_name="edges.csv", mime="text/csv", use_container_width=True)
-            with c4c_col3:
-                st.download_button("📥 manifest.json", data=manifest_json, file_name="manifest.json", mime="application/json", use_container_width=True)
-        
-        # Polinode Schema Downloads
-        with st.expander("🔗 Polinode Import Files"):
-            st.download_button(
-                "📊 Download Polinode Excel (Nodes + Edges tabs)", 
-                data=polinode_excel, 
-                file_name="actorgraph_polinode.xlsx", 
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True
-            )
-            
-            poli_col1, poli_col2 = st.columns(2)
-            with poli_col1:
-                st.download_button("📥 nodes_polinode.csv", data=nodes_polinode_csv, file_name="nodes_polinode.csv", mime="text/csv", use_container_width=True)
-            with poli_col2:
-                st.download_button("📥 edges_polinode.csv", data=edges_polinode_csv, file_name="edges_polinode.csv", mime="text/csv", use_container_width=True)
-        
+        # Data preview (keep these - useful for verification)
         with st.expander("👀 Preview Nodes"):
             preview_df = pd.read_csv(StringIO(nodes_csv))
             st.dataframe(preview_df)
