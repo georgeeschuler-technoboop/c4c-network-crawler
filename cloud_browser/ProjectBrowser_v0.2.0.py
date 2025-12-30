@@ -9,12 +9,12 @@ so it can be deployed independently without c4c_utils.
 
 VERSION HISTORY:
 ----------------
-v0.2.7: Fixed app icon (local file)
-- Streamlit page_icon doesn't reliably support remote URLs
-- Now uses local file: cloudprojects_icon.png
-- Add icon file to same folder as app.py
+v0.2.8: Local files for all logos/icons
+- cloudprojects_icon.png for app icon
+- c4c_logo.png for C4C branding
+- No more remote URLs for images
 
-v0.2.6: Testing icon with known-working URL
+v0.2.7: Fixed app icon (local file)
 
 v0.2.4: Fixed storage bucket name
 
@@ -42,9 +42,9 @@ from typing import Optional, Tuple, List
 # =============================================================================
 # Constants
 # =============================================================================
-APP_VERSION = "0.2.7"
-C4C_LOGO_URL = "https://static.wixstatic.com/media/275a3f_25063966d6cd496eb2fe3f6ee5cde0fa~mv2.png"
-# Icon file should be in same directory as this script
+APP_VERSION = "0.2.8"
+# Logo/icon files should be in same directory as this script
+C4C_LOGO_FILE = "c4c_logo.png"
 APP_ICON_FILE = "cloudprojects_icon.png"
 
 # Source app display names
