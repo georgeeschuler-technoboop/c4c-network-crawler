@@ -9,9 +9,11 @@ so it can be deployed independently without c4c_utils.
 
 VERSION HISTORY:
 ----------------
+v0.2.6: Testing icon with known-working URL
+- Using OrgGraph US icon temporarily to verify code is correct
+- Replace APP_ICON_URL once CloudProjects icon URL is confirmed
+
 v0.2.5: Fixed app icon
-- Moved st.set_page_config to top of file (after constants, before classes)
-- This ensures icon URL is applied before any other Streamlit calls
 
 v0.2.4: Fixed storage bucket name
 
@@ -39,9 +41,10 @@ from typing import Optional, Tuple, List
 # =============================================================================
 # Constants
 # =============================================================================
-APP_VERSION = "0.2.5"
+APP_VERSION = "0.2.6"
 C4C_LOGO_URL = "https://static.wixstatic.com/media/275a3f_25063966d6cd496eb2fe3f6ee5cde0fa~mv2.png"
-APP_ICON_URL = "https://static.wixstatic.com/media/275a3f_ce58a832a0324637aed7603cec34900b~mv2.png"
+# Using OrgGraph US icon temporarily to test - replace with CloudProjects icon once URL is confirmed
+APP_ICON_URL = "https://static.wixstatic.com/media/275a3f_f8ac661446cc49788526af77befbf7b3~mv2.png"
 
 # Source app display names
 SOURCE_APPS = {
