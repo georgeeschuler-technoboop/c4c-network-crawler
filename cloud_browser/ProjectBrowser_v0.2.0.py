@@ -42,9 +42,9 @@ from typing import Optional, Tuple, List
 # Constants
 # =============================================================================
 APP_VERSION = "0.2.6"
-C4C_LOGO_URL = "https://static.wixstatic.com/media/275a3f_25063966d6cd496eb2fe3f6ee5cde0fa~mv2.png"
+C4C_LOGO_URL = "https://static.wixstatic.com/media/275a3f_ceeb2fbbf2304287b9c19983fffde8c4~mv2.jpg"
 # Using OrgGraph US icon temporarily to test - replace with CloudProjects icon once URL is confirmed
-APP_ICON_URL = "https://static.wixstatic.com/media/275a3f_f8ac661446cc49788526af77befbf7b3~mv2.png"
+APP_ICON_URL = "https://static.wixstatic.com/media/275a3f_ce58a832a0324637aed7603cec34900b~mv2.png"
 
 # Source app display names
 SOURCE_APPS = {
