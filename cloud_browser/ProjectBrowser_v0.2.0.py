@@ -9,11 +9,11 @@ so it can be deployed independently without c4c_utils.
 
 VERSION HISTORY:
 ----------------
-v0.2.9: Fixed icon file path resolution
-- Use Path(__file__).parent for absolute path to icon files
-- This ensures icons are found regardless of working directory
+v0.3.0: Fixed icon using PIL Image
+- Load icon file as PIL Image object (most reliable method)
+- Fallback to emoji if file not found
 
-v0.2.8: Local files for all logos/icons
+v0.2.9: Fixed icon file path resolution
 
 v0.2.4: Fixed storage bucket name
 
@@ -38,11 +38,12 @@ import json
 from dataclasses import dataclass
 from typing import Optional, Tuple, List
 from pathlib import Path
+from PIL import Image
 
 # =============================================================================
 # Constants
 # =============================================================================
-APP_VERSION = "0.2.9"
+APP_VERSION = "0.3.0"
 
 # Get the directory where this script is located
 SCRIPT_DIR = Path(__file__).parent
@@ -50,6 +51,12 @@ SCRIPT_DIR = Path(__file__).parent
 # Logo/icon files should be in same directory as this script
 C4C_LOGO_FILE = SCRIPT_DIR / "c4c_logo.png"
 APP_ICON_FILE = SCRIPT_DIR / "cloudprojects_icon.png"
+
+# Load icon as PIL Image for reliable favicon display
+try:
+    APP_ICON = Image.open(APP_ICON_FILE)
+except Exception:
+    APP_ICON = "☁️"  # Fallback to emoji if file not found
 
 # Source app display names
 SOURCE_APPS = {
@@ -73,7 +80,7 @@ APP_ICONS = {
 # =============================================================================
 st.set_page_config(
     page_title="CloudProjects",
-    page_icon=str(APP_ICON_FILE),
+    page_icon=APP_ICON,
     layout="wide",
     initial_sidebar_state="expanded"
 )
