@@ -9,12 +9,11 @@ so it can be deployed independently without c4c_utils.
 
 VERSION HISTORY:
 ----------------
-v0.2.8: Local files for all logos/icons
-- cloudprojects_icon.png for app icon
-- c4c_logo.png for C4C branding
-- No more remote URLs for images
+v0.2.9: Fixed icon file path resolution
+- Use Path(__file__).parent for absolute path to icon files
+- This ensures icons are found regardless of working directory
 
-v0.2.7: Fixed app icon (local file)
+v0.2.8: Local files for all logos/icons
 
 v0.2.4: Fixed storage bucket name
 
@@ -38,14 +37,19 @@ import zipfile
 import json
 from dataclasses import dataclass
 from typing import Optional, Tuple, List
+from pathlib import Path
 
 # =============================================================================
 # Constants
 # =============================================================================
-APP_VERSION = "0.2.8"
+APP_VERSION = "0.2.9"
+
+# Get the directory where this script is located
+SCRIPT_DIR = Path(__file__).parent
+
 # Logo/icon files should be in same directory as this script
-C4C_LOGO_FILE = "c4c_logo.png"
-APP_ICON_FILE = "cloudprojects_icon.png"
+C4C_LOGO_FILE = SCRIPT_DIR / "c4c_logo.png"
+APP_ICON_FILE = SCRIPT_DIR / "cloudprojects_icon.png"
 
 # Source app display names
 SOURCE_APPS = {
@@ -69,7 +73,7 @@ APP_ICONS = {
 # =============================================================================
 st.set_page_config(
     page_title="CloudProjects",
-    page_icon=APP_ICON_FILE,
+    page_icon=str(APP_ICON_FILE),
     layout="wide",
     initial_sidebar_state="expanded"
 )
