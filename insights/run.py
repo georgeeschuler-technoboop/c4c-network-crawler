@@ -61,9 +61,9 @@ except ImportError:
 # Version
 # =============================================================================
 
-ENGINE_VERSION = "4.0.2"  # Updated: table rendering in HTML
+ENGINE_VERSION = "4.0.3"  # Fixed: Use amount column for funding totals
 BUNDLE_FORMAT_VERSION = "1.1"
-RUN_PY_VERSION = "4.0.2"  # For debugging - check this value in logs
+RUN_PY_VERSION = "4.0.3"  # For debugging - check this value in logs
 
 # Debug: Print version when module loads
 print(f"[InsightGraph] run.py v{RUN_PY_VERSION} loaded")
