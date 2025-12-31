@@ -195,6 +195,7 @@ import zipfile
 import sys
 import os
 import importlib.util
+import numpy as np
 
 # Get paths first (needed for sys.path)
 APP_DIR = Path(__file__).resolve().parent
@@ -204,6 +205,29 @@ REPO_ROOT = APP_DIR.parent
 sys.path.insert(0, str(REPO_ROOT))
 
 from c4c_utils.c4c_supabase import C4CSupabase
+
+
+# =============================================================================
+# JSON Serialization Helper (handles numpy types)
+# =============================================================================
+
+class NumpyJSONEncoder(json.JSONEncoder):
+    """JSON encoder that handles numpy types."""
+    def default(self, obj):
+        if isinstance(obj, np.integer):
+            return int(obj)
+        elif isinstance(obj, np.floating):
+            return float(obj)
+        elif isinstance(obj, np.ndarray):
+            return obj.tolist()
+        elif isinstance(obj, np.bool_):
+            return bool(obj)
+        return super().default(obj)
+
+def json_dumps_safe(obj, **kwargs):
+    """JSON dumps that handles numpy types."""
+    return json.dumps(obj, cls=NumpyJSONEncoder, **kwargs)
+
 
 # =============================================================================
 # Config
@@ -1632,9 +1656,9 @@ def save_merged_to_cloud(name: str, data: dict, source_projects: list) -> tuple:
             
             # Write analysis artifacts if present
             if data.get("insight_cards"):
-                zf.writestr("analysis/insight_cards.json", json.dumps(data["insight_cards"], indent=2))
+                zf.writestr("analysis/insight_cards.json", json_dumps_safe(data["insight_cards"], indent=2))
             if data.get("project_summary"):
-                zf.writestr("analysis/project_summary.json", json.dumps(data["project_summary"], indent=2))
+                zf.writestr("analysis/project_summary.json", json_dumps_safe(data["project_summary"], indent=2))
             if data.get("markdown_report"):
                 zf.writestr("analysis/insight_report.md", data["markdown_report"])
             if data.get("metrics_df") is not None and not data["metrics_df"].empty:
@@ -1725,9 +1749,9 @@ def save_linked_to_cloud(name: str, data: dict) -> tuple:
             
             # Write analysis artifacts if present
             if data.get("insight_cards"):
-                zf.writestr("analysis/insight_cards.json", json.dumps(data["insight_cards"], indent=2))
+                zf.writestr("analysis/insight_cards.json", json_dumps_safe(data["insight_cards"], indent=2))
             if data.get("project_summary"):
-                zf.writestr("analysis/project_summary.json", json.dumps(data["project_summary"], indent=2))
+                zf.writestr("analysis/project_summary.json", json_dumps_safe(data["project_summary"], indent=2))
             if data.get("markdown_report"):
                 zf.writestr("analysis/insight_report.md", data["markdown_report"])
             if data.get("metrics_df") is not None and not data["metrics_df"].empty:
@@ -2509,9 +2533,9 @@ For questions, contact: info@connectingforchangellc.com
             if has_metrics:
                 zf.writestr("analysis/node_metrics.csv", data["metrics_df"].to_csv(index=False))
             if has_cards:
-                zf.writestr("analysis/insight_cards.json", json.dumps(data["insight_cards"], indent=2))
+                zf.writestr("analysis/insight_cards.json", json_dumps_safe(data["insight_cards"], indent=2))
             if has_summary:
-                zf.writestr("analysis/project_summary.json", json.dumps(data["project_summary"], indent=2))
+                zf.writestr("analysis/project_summary.json", json_dumps_safe(data["project_summary"], indent=2))
             
             # Markdown report
             if has_report:
