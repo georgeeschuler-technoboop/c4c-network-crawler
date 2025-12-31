@@ -6,9 +6,13 @@ Reads exported data from OrgGraph US/CA projects.
 
 VERSION HISTORY:
 ----------------
-FIXED v0.15.10: Missing datetime import
-- FIX: Added `from datetime import datetime, timezone` import
-- Was causing NameError in generate_bundle_readme() when creating ZIP bundle
+UPDATED v0.15.10: Network-Type-Aware Analysis
+- NEW: Automatic detection of network type (funder vs social)
+- NEW: SocialAnalyzer for ActorGraph LinkedIn data
+- NEW: FunderAnalyzer for OrgGraph grant/board data
+- Uses analyzers/ module with standardized output schema
+- Brokerage ecosystem analysis for both network types
+- Backward compatible with existing projects
 
 UPDATED v0.15.9: Download simplification
 - Collapsed individual file downloads into ZIP bundle
@@ -186,7 +190,6 @@ import json
 import re
 from pathlib import Path
 from io import BytesIO
-from datetime import datetime, timezone
 import zipfile
 import sys
 import os
@@ -205,7 +208,7 @@ from c4c_utils.c4c_supabase import C4CSupabase
 # Config
 # =============================================================================
 
-APP_VERSION = "0.15.10"  # Fix datetime import for bundle README
+APP_VERSION = "0.15.10"  # Network-type-aware analysis
 C4C_LOGO_URL = "https://static.wixstatic.com/media/275a3f_9c48d5079fcf4b688606c81d8f34d5a5~mv2.jpg"
 INSIGHTGRAPH_ICON_URL = "https://static.wixstatic.com/media/275a3f_7736e28c9f5e40c1b2407e09dc5cb6e7~mv2.png"
 
@@ -2734,7 +2737,14 @@ def render_technical_details(data: dict):
 # =============================================================================
 
 def compute_insights(project: dict, project_id: str) -> dict:
-    """Compute insights from nodes/edges when pre-exports don't exist."""
+    """
+    Compute insights from nodes/edges when pre-exports don't exist.
+    
+    Uses network-type-aware analysis (v0.15.10+):
+    - Automatically detects funder vs social network
+    - Routes to appropriate analyzer
+    - Returns standardized result format
+    """
     run_module = load_run_module()
     if not run_module:
         st.error("Cannot compute insights: run.py not found")
@@ -2746,57 +2756,82 @@ def compute_insights(project: dict, project_id: str) -> dict:
     
     with st.spinner("Computing insights from network data..."):
         try:
-            # Load and validate
-            nodes_df, edges_df = run_module.load_and_validate(nodes_path, edges_path)
+            # Load data
+            nodes_df = pd.read_csv(nodes_path)
+            edges_df = pd.read_csv(edges_path)
             
-            # Build graphs
-            grant_graph = run_module.build_grant_graph(nodes_df, edges_df)
-            board_graph = run_module.build_board_graph(nodes_df, edges_df)
-            interlock_graph = run_module.build_interlock_graph(nodes_df, edges_df)
-            
-            # Compute metrics
-            metrics_df = run_module.compute_base_metrics(nodes_df, grant_graph, board_graph, interlock_graph)
-            metrics_df = run_module.compute_derived_signals(metrics_df)
-            
-            # Flow stats
-            flow_stats = run_module.compute_flow_stats(edges_df, metrics_df)
-            overlap_df = run_module.compute_portfolio_overlap(edges_df)
-            
-            # Roles × Region Lens (v3.0.5+)
-            lens_config = run_module.load_region_lens_config(path)
-            nodes_with_roles = run_module.derive_network_roles(nodes_df.copy(), edges_df)
-            nodes_with_lens = run_module.compute_region_lens_membership(nodes_with_roles, lens_config)
-            roles_region_summary = run_module.generate_roles_region_summary(nodes_with_lens, edges_df, lens_config)
-            
-            # Generate insights
-            insight_cards = run_module.generate_insight_cards(
-                nodes_df, edges_df, metrics_df,
-                interlock_graph, flow_stats, overlap_df,
-                project_id=project_id
-            )
-            
-            # Project summary
-            project_summary = run_module.generate_project_summary(nodes_df, edges_df, metrics_df, flow_stats)
-            project_summary['roles_region'] = roles_region_summary
-            
-            # Generate markdown report (with roles/region section)
-            markdown_report = run_module.generate_markdown_report(
-                insight_cards, project_summary, project_id, roles_region_summary
-            )
-            
-            return {
-                "project_id": project_id,
-                "nodes_df": nodes_df,
-                "edges_df": edges_df,
-                "metrics_df": metrics_df,
-                "insight_cards": insight_cards,
-                "project_summary": project_summary,
-                "markdown_report": markdown_report,
-                "roles_region_summary": roles_region_summary,
-            }
+            # Check if new analyzer system is available
+            if hasattr(run_module, 'analyze_network'):
+                # NEW: Use network-type-aware analyzer
+                result = run_module.analyze_network(nodes_df, edges_df, project_id)
+                
+                # Convert AnalysisResult to dict format expected by rest of app
+                return {
+                    "project_id": project_id,
+                    "network_type": result.network_type,
+                    "nodes_df": result.nodes_df if result.nodes_df is not None else nodes_df,
+                    "edges_df": result.edges_df if result.edges_df is not None else edges_df,
+                    "metrics_df": result.metrics_df,
+                    "insight_cards": result.to_insight_cards_dict(),
+                    "project_summary": result.to_project_summary_dict(),
+                    "markdown_report": result.markdown_report,
+                    "roles_region_summary": result.project_summary.roles_region if hasattr(result.project_summary, 'roles_region') else None,
+                    "brokerage": result.brokerage.to_dict() if result.brokerage else None,
+                }
+            else:
+                # LEGACY: Fall back to old method for backward compatibility
+                nodes_df, edges_df = run_module.load_and_validate(nodes_path, edges_path)
+                
+                # Build graphs
+                grant_graph = run_module.build_grant_graph(nodes_df, edges_df)
+                board_graph = run_module.build_board_graph(nodes_df, edges_df)
+                interlock_graph = run_module.build_interlock_graph(nodes_df, edges_df)
+                
+                # Compute metrics
+                metrics_df = run_module.compute_base_metrics(nodes_df, grant_graph, board_graph, interlock_graph)
+                metrics_df = run_module.compute_derived_signals(metrics_df)
+                
+                # Flow stats
+                flow_stats = run_module.compute_flow_stats(edges_df, metrics_df)
+                overlap_df = run_module.compute_portfolio_overlap(edges_df)
+                
+                # Roles × Region Lens (v3.0.5+)
+                lens_config = run_module.load_region_lens_config(path)
+                nodes_with_roles = run_module.derive_network_roles(nodes_df.copy(), edges_df)
+                nodes_with_lens = run_module.compute_region_lens_membership(nodes_with_roles, lens_config)
+                roles_region_summary = run_module.generate_roles_region_summary(nodes_with_lens, edges_df, lens_config)
+                
+                # Generate insights
+                insight_cards = run_module.generate_insight_cards(
+                    nodes_df, edges_df, metrics_df,
+                    interlock_graph, flow_stats, overlap_df,
+                    project_id=project_id
+                )
+                
+                # Project summary
+                project_summary = run_module.generate_project_summary(nodes_df, edges_df, metrics_df, flow_stats)
+                project_summary['roles_region'] = roles_region_summary
+                
+                # Generate markdown report (with roles/region section)
+                markdown_report = run_module.generate_markdown_report(
+                    insight_cards, project_summary, project_id, roles_region_summary
+                )
+                
+                return {
+                    "project_id": project_id,
+                    "nodes_df": nodes_df,
+                    "edges_df": edges_df,
+                    "metrics_df": metrics_df,
+                    "insight_cards": insight_cards,
+                    "project_summary": project_summary,
+                    "markdown_report": markdown_report,
+                    "roles_region_summary": roles_region_summary,
+                }
             
         except Exception as e:
             st.error(f"Error computing insights: {e}")
+            import traceback
+            traceback.print_exc()
             return None
 
 
@@ -2808,6 +2843,10 @@ def compute_insights_from_dataframes(nodes_df: pd.DataFrame, edges_df: pd.DataFr
     
     This is used when loading from cloud storage where we have dataframes
     but no file paths.
+    
+    Uses network-type-aware analysis (v0.15.10+):
+    - Automatically detects funder vs social network
+    - Routes to appropriate analyzer
     
     Args:
         manifest: Optional manifest dict that may contain overlap_analysis for linked projects
@@ -2823,50 +2862,84 @@ def compute_insights_from_dataframes(nodes_df: pd.DataFrame, edges_df: pd.DataFr
     
     with st.spinner("Computing insights from cloud data..."):
         try:
-            # Validate dataframes (run_module.load_and_validate expects paths, 
-            # so we do basic validation here)
+            # Validate dataframes
             if nodes_df.empty:
                 st.error("Nodes dataframe is empty")
                 return None
             if edges_df.empty:
                 st.warning("Edges dataframe is empty - some metrics may be limited")
             
-            # Build graphs
-            grant_graph = run_module.build_grant_graph(nodes_df, edges_df)
-            board_graph = run_module.build_board_graph(nodes_df, edges_df)
-            interlock_graph = run_module.build_interlock_graph(nodes_df, edges_df)
-            
-            # Compute metrics
-            metrics_df = run_module.compute_base_metrics(nodes_df, grant_graph, board_graph, interlock_graph)
-            metrics_df = run_module.compute_derived_signals(metrics_df)
-            
-            # Flow stats
-            flow_stats = run_module.compute_flow_stats(edges_df, metrics_df)
-            overlap_df = run_module.compute_portfolio_overlap(edges_df)
-            
-            # Roles × Region Lens - use disabled config for cloud projects
-            lens_config = {'enabled': False}
-            nodes_with_roles = run_module.derive_network_roles(nodes_df.copy(), edges_df)
-            nodes_with_lens = run_module.compute_region_lens_membership(nodes_with_roles, lens_config)
-            roles_region_summary = run_module.generate_roles_region_summary(nodes_with_lens, edges_df, lens_config)
-            
-            # Generate insights
-            insight_cards = run_module.generate_insight_cards(
-                nodes_df, edges_df, metrics_df,
-                interlock_graph, flow_stats, overlap_df,
-                project_id=project_id
-            )
-            
-            # Project summary
-            project_summary = run_module.generate_project_summary(nodes_df, edges_df, metrics_df, flow_stats)
-            project_summary['roles_region'] = roles_region_summary
-            
-            # Generate markdown report
-            markdown_report = run_module.generate_markdown_report(
-                insight_cards, project_summary, project_id, roles_region_summary
-            )
+            # Check if new analyzer system is available
+            if hasattr(run_module, 'analyze_network'):
+                # NEW: Use network-type-aware analyzer
+                result = run_module.analyze_network(nodes_df, edges_df, project_id)
+                
+                # Get markdown report
+                markdown_report = result.markdown_report
+                
+                # Convert AnalysisResult to dict format
+                output = {
+                    "project_id": project_id,
+                    "network_type": result.network_type,
+                    "nodes_df": result.nodes_df if result.nodes_df is not None else nodes_df,
+                    "edges_df": result.edges_df if result.edges_df is not None else edges_df,
+                    "metrics_df": result.metrics_df,
+                    "insight_cards": result.to_insight_cards_dict(),
+                    "project_summary": result.to_project_summary_dict(),
+                    "markdown_report": markdown_report,
+                    "roles_region_summary": result.project_summary.roles_region if hasattr(result.project_summary, 'roles_region') else None,
+                    "brokerage": result.brokerage.to_dict() if result.brokerage else None,
+                }
+            else:
+                # LEGACY: Fall back to old method for backward compatibility
+                # Build graphs
+                grant_graph = run_module.build_grant_graph(nodes_df, edges_df)
+                board_graph = run_module.build_board_graph(nodes_df, edges_df)
+                interlock_graph = run_module.build_interlock_graph(nodes_df, edges_df)
+                
+                # Compute metrics
+                metrics_df = run_module.compute_base_metrics(nodes_df, grant_graph, board_graph, interlock_graph)
+                metrics_df = run_module.compute_derived_signals(metrics_df)
+                
+                # Flow stats
+                flow_stats = run_module.compute_flow_stats(edges_df, metrics_df)
+                overlap_df = run_module.compute_portfolio_overlap(edges_df)
+                
+                # Roles × Region Lens - use disabled config for cloud projects
+                lens_config = {'enabled': False}
+                nodes_with_roles = run_module.derive_network_roles(nodes_df.copy(), edges_df)
+                nodes_with_lens = run_module.compute_region_lens_membership(nodes_with_roles, lens_config)
+                roles_region_summary = run_module.generate_roles_region_summary(nodes_with_lens, edges_df, lens_config)
+                
+                # Generate insights
+                insight_cards = run_module.generate_insight_cards(
+                    nodes_df, edges_df, metrics_df,
+                    interlock_graph, flow_stats, overlap_df,
+                    project_id=project_id
+                )
+                
+                # Project summary
+                project_summary = run_module.generate_project_summary(nodes_df, edges_df, metrics_df, flow_stats)
+                project_summary['roles_region'] = roles_region_summary
+                
+                # Generate markdown report
+                markdown_report = run_module.generate_markdown_report(
+                    insight_cards, project_summary, project_id, roles_region_summary
+                )
+                
+                output = {
+                    "project_id": project_id,
+                    "nodes_df": nodes_df,
+                    "edges_df": edges_df,
+                    "metrics_df": metrics_df,
+                    "insight_cards": insight_cards,
+                    "project_summary": project_summary,
+                    "markdown_report": markdown_report,
+                    "roles_region_summary": roles_region_summary,
+                }
             
             # Add overlap analysis section if this is a linked project
+            # (This applies to both new and legacy paths)
             # Debug: Log manifest status
             print(f"DEBUG: manifest present: {manifest is not None}")
             if manifest:
@@ -2954,18 +3027,9 @@ The coalition relies on under-resourced actors operating outside formal funding 
 
 *This analysis surfaces structural patterns, not recommendations. Interpretation requires context.*
 """
-                markdown_report += overlap_section
+                output["markdown_report"] += overlap_section
             
-            return {
-                "project_id": project_id,
-                "nodes_df": nodes_df,
-                "edges_df": edges_df,
-                "metrics_df": metrics_df,
-                "insight_cards": insight_cards,
-                "project_summary": project_summary,
-                "markdown_report": markdown_report,
-                "roles_region_summary": roles_region_summary,
-            }
+            return output
             
         except Exception as e:
             st.error(f"Error computing insights: {e}")
