@@ -6,6 +6,10 @@ Reads exported data from OrgGraph US/CA projects.
 
 VERSION HISTORY:
 ----------------
+FIXED v0.15.10: Missing datetime import
+- FIX: Added `from datetime import datetime, timezone` import
+- Was causing NameError in generate_bundle_readme() when creating ZIP bundle
+
 UPDATED v0.15.9: Download simplification
 - Collapsed individual file downloads into ZIP bundle
 - Added benefit-oriented tooltips to all buttons
@@ -182,6 +186,7 @@ import json
 import re
 from pathlib import Path
 from io import BytesIO
+from datetime import datetime, timezone
 import zipfile
 import sys
 import os
@@ -200,7 +205,7 @@ from c4c_utils.c4c_supabase import C4CSupabase
 # Config
 # =============================================================================
 
-APP_VERSION = "0.15.9"  # Download simplification
+APP_VERSION = "0.15.10"  # Fix datetime import for bundle README
 C4C_LOGO_URL = "https://static.wixstatic.com/media/275a3f_9c48d5079fcf4b688606c81d8f34d5a5~mv2.jpg"
 INSIGHTGRAPH_ICON_URL = "https://static.wixstatic.com/media/275a3f_7736e28c9f5e40c1b2407e09dc5cb6e7~mv2.png"
 
