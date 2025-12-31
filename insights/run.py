@@ -12,6 +12,15 @@ Usage:
 
 VERSION HISTORY:
 ----------------
+v3.0.25 (2025-12-31): Brokerage Ecosystem (Louvain community-based roles)
+- NEW: compute_brokerage_roles() using Louvain community detection
+- NEW: 6 brokerage roles: Liaison, Gatekeeper, Representative, Coordinator, Consultant, Peripheral
+- NEW: Brokerage Ecosystem section in reports with role distribution and interpretation
+- NEW: Brokerage badges integrated into funder/grantee narratives
+- NEW: build_combined_org_graph() merges grant + interlock edges for community detection
+- NEW: interpret_brokerage_ecosystem() generates strategic pattern analysis
+- REQUIRES: python-louvain>=0.16
+
 v3.0.24 (2025-12-22): CoreGraph v1 schema compatibility (Phase 1a)
 - FIX: Accept lowercase node_type values (organization, person)
 - FIX: Accept lowercase edge_type values (grant, board)
@@ -185,7 +194,7 @@ from collections import defaultdict
 # Version
 # =============================================================================
 
-ENGINE_VERSION = "3.0.24"
+ENGINE_VERSION = "3.0.25"
 BUNDLE_FORMAT_VERSION = "1.0"
 
 # C4C logo as base64 (80px, ~4KB) for self-contained HTML reports
@@ -297,6 +306,419 @@ def build_interlock_graph(nodes_df: pd.DataFrame, edges_df: pd.DataFrame) -> nx.
     
     print(f"✓ Interlock graph: {G.number_of_nodes()} nodes, {G.number_of_edges()} edges")
     return G
+
+
+# =============================================================================
+# Brokerage Ecosystem Constants
+# =============================================================================
+
+# Brokerage Role Configuration (Louvain community-based)
+BROKERAGE_ROLE_CONFIG = {
+    "liaison": {
+        "emoji": "🌉",
+        "label": "Liaison",
+        "color": "#D97706",
+        "description": "Bridges different communities",
+        "strategic_use": "Key for cross-sector coordination and information flow between clusters"
+    },
+    "gatekeeper": {
+        "emoji": "🚪",
+        "label": "Gatekeeper",
+        "color": "#F97316",
+        "description": "Controls access between groups",
+        "strategic_use": "Engage early in stakeholder processes; they filter what reaches their community"
+    },
+    "representative": {
+        "emoji": "📢",
+        "label": "Representative",
+        "color": "#10B981",
+        "description": "Speaks for their community externally",
+        "strategic_use": "Amplifies messages; good partners for communicating to their cluster"
+    },
+    "coordinator": {
+        "emoji": "🧩",
+        "label": "Coordinator",
+        "color": "#3B82F6",
+        "description": "Strengthens within-group connections",
+        "strategic_use": "Helps build cohesion; engage for internal community organizing"
+    },
+    "consultant": {
+        "emoji": "🧠",
+        "label": "Consultant",
+        "color": "#6366F1",
+        "description": "External advisor to multiple groups",
+        "strategic_use": "Brings outside perspective; useful for introducing new ideas"
+    },
+    "peripheral": {
+        "emoji": "⚪",
+        "label": "Peripheral",
+        "color": "#9CA3AF",
+        "description": "Edge of network",
+        "strategic_use": "Potential for outreach and network expansion"
+    },
+}
+
+# Minimum nodes for meaningful community detection
+MIN_NODES_FOR_BROKERAGE = 10
+
+
+# =============================================================================
+# Brokerage Ecosystem (Louvain community-based roles)
+# =============================================================================
+
+def build_combined_org_graph(grant_graph: nx.DiGraph, interlock_graph: nx.Graph) -> nx.Graph:
+    """
+    Build combined undirected org-to-org graph for brokerage analysis.
+    
+    Combines:
+    - Grant relationships (funder → grantee, converted to undirected)
+    - Interlock relationships (org ↔ org via shared board members)
+    
+    Returns undirected graph suitable for Louvain community detection.
+    """
+    combined = nx.Graph()
+    
+    # Add grant edges (as undirected)
+    for u, v, data in grant_graph.edges(data=True):
+        if combined.has_edge(u, v):
+            # Strengthen existing edge
+            combined[u][v]['weight'] = combined[u][v].get('weight', 1) + data.get('weight', 1)
+            combined[u][v]['sources'].add('grant')
+        else:
+            combined.add_edge(u, v, weight=data.get('weight', 1), sources={'grant'})
+    
+    # Add interlock edges
+    for u, v, data in interlock_graph.edges(data=True):
+        if combined.has_edge(u, v):
+            combined[u][v]['weight'] = combined[u][v].get('weight', 1) + data.get('weight', 1)
+            combined[u][v]['sources'].add('interlock')
+        else:
+            combined.add_edge(u, v, weight=data.get('weight', 1), sources={'interlock'})
+    
+    print(f"✓ Combined org graph: {combined.number_of_nodes()} nodes, {combined.number_of_edges()} edges")
+    return combined
+
+
+def compute_brokerage_roles(
+    G: nx.Graph,
+    node_metrics: pd.DataFrame = None
+) -> dict:
+    """
+    Classify nodes into brokerage roles based on Louvain community structure.
+    
+    Roles are determined by:
+    - Which community the node belongs to
+    - What proportion of neighbors are in same vs different communities
+    - Betweenness centrality (for liaison/gatekeeper distinction)
+    
+    Args:
+        G: Undirected graph (combined org graph or connection graph)
+        node_metrics: Optional DataFrame with betweenness scores
+        
+    Returns:
+        Dictionary with:
+        - 'roles': {node_id: role_name}
+        - 'communities': {node_id: community_id}
+        - 'role_counts': {role_name: count}
+        - 'community_count': number of communities detected
+        - 'enabled': bool
+    """
+    result = {
+        'roles': {},
+        'communities': {},
+        'role_counts': {role: 0 for role in BROKERAGE_ROLE_CONFIG.keys()},
+        'community_count': 0,
+        'enabled': False
+    }
+    
+    if G.number_of_nodes() < MIN_NODES_FOR_BROKERAGE:
+        print(f"  Skipping brokerage: {G.number_of_nodes()} nodes < {MIN_NODES_FOR_BROKERAGE} minimum")
+        return result
+    
+    # Try to import community detection
+    try:
+        import community as community_louvain
+    except ImportError:
+        print("  Warning: python-louvain not installed. Brokerage roles unavailable.")
+        return result
+    
+    # Run Louvain community detection
+    try:
+        partition = community_louvain.best_partition(G)
+    except Exception as e:
+        print(f"  Warning: Community detection failed: {e}")
+        return result
+    
+    result['communities'] = partition
+    result['community_count'] = len(set(partition.values()))
+    result['enabled'] = True
+    
+    # Get betweenness from metrics if available, otherwise compute
+    if node_metrics is not None and 'betweenness' in node_metrics.columns:
+        betweenness_map = dict(zip(node_metrics['node_id'], node_metrics['betweenness']))
+    else:
+        betweenness_map = nx.betweenness_centrality(G) if G.number_of_edges() > 0 else {}
+    
+    # Classify each node
+    for node in G.nodes():
+        node_community = partition.get(node)
+        if node_community is None:
+            result['roles'][node] = 'peripheral'
+            result['role_counts']['peripheral'] += 1
+            continue
+        
+        neighbors = list(G.neighbors(node))
+        if not neighbors:
+            result['roles'][node] = 'peripheral'
+            result['role_counts']['peripheral'] += 1
+            continue
+        
+        # Count neighbors in same vs different communities
+        neighbor_communities = [partition.get(n) for n in neighbors if partition.get(n) is not None]
+        if not neighbor_communities:
+            result['roles'][node] = 'peripheral'
+            result['role_counts']['peripheral'] += 1
+            continue
+        
+        same_community = sum(1 for c in neighbor_communities if c == node_community)
+        diff_community = len(neighbor_communities) - same_community
+        total = len(neighbor_communities)
+        
+        same_ratio = same_community / total if total > 0 else 0
+        diff_ratio = diff_community / total if total > 0 else 0
+        
+        betweenness = betweenness_map.get(node, 0)
+        
+        # Role classification logic (matches ActorGraph)
+        if betweenness > 0.1 and diff_ratio > 0.5:
+            role = 'liaison'
+        elif betweenness > 0.05 and diff_ratio > 0.3:
+            role = 'gatekeeper'
+        elif same_ratio > 0.7 and diff_ratio > 0.1:
+            role = 'representative'
+        elif same_ratio > 0.8:
+            role = 'coordinator'
+        elif diff_ratio > 0.5:
+            role = 'consultant'
+        else:
+            role = 'peripheral'
+        
+        result['roles'][node] = role
+        result['role_counts'][role] += 1
+    
+    print(f"✓ Brokerage roles: {result['community_count']} communities, {sum(result['role_counts'].values())} nodes classified")
+    return result
+
+
+def get_brokerage_badge(role: str) -> str:
+    """Get emoji + label for a brokerage role."""
+    config = BROKERAGE_ROLE_CONFIG.get(role, BROKERAGE_ROLE_CONFIG['peripheral'])
+    return f"{config['emoji']} {config['label']}"
+
+
+def interpret_brokerage_ecosystem(brokerage_data: dict, total_orgs: int) -> dict:
+    """
+    Generate strategic interpretation of brokerage role distribution.
+    
+    Returns dict with:
+    - pattern: str (e.g., "liaison-heavy", "gatekeeper-concentrated", "balanced")
+    - interpretation: str (what this means)
+    - strategic_implications: list of str
+    - community_count: int
+    """
+    if not brokerage_data.get('enabled'):
+        return {
+            'pattern': 'unavailable',
+            'interpretation': 'Brokerage analysis requires at least 10 organizations.',
+            'strategic_implications': [],
+            'community_count': 0
+        }
+    
+    counts = brokerage_data['role_counts']
+    total_classified = sum(counts.values())
+    if total_classified == 0:
+        return {
+            'pattern': 'unavailable',
+            'interpretation': 'No organizations could be classified.',
+            'strategic_implications': [],
+            'community_count': 0
+        }
+    
+    # Calculate percentages
+    liaison_pct = counts['liaison'] / total_classified * 100
+    gatekeeper_pct = counts['gatekeeper'] / total_classified * 100
+    coordinator_pct = counts['coordinator'] / total_classified * 100
+    peripheral_pct = counts['peripheral'] / total_classified * 100
+    
+    # Determine pattern
+    strategic_roles = counts['liaison'] + counts['gatekeeper'] + counts['representative']
+    strategic_pct = strategic_roles / total_classified * 100
+    
+    implications = []
+    
+    if liaison_pct > 15:
+        pattern = "liaison-rich"
+        interpretation = (
+            f"This network has strong cross-community connectivity ({counts['liaison']} liaisons). "
+            "Information flows relatively freely between clusters, creating opportunities for "
+            "coordination but also risk of message dilution."
+        )
+        implications.append("Liaisons are natural conveners for cross-sector initiatives")
+        implications.append("Consider whether key messages are reaching all communities consistently")
+    elif gatekeeper_pct > 15:
+        pattern = "gatekeeper-concentrated"
+        interpretation = (
+            f"A small number of gatekeepers ({counts['gatekeeper']}) control information flow between communities. "
+            "This creates efficiency but also bottleneck risk."
+        )
+        implications.append("Engage gatekeepers early — they determine what reaches their communities")
+        implications.append("Monitor for single points of failure if key gatekeepers disengage")
+    elif peripheral_pct > 60:
+        pattern = "periphery-heavy"
+        interpretation = (
+            f"Most organizations ({counts['peripheral']}) sit at the network edge with limited brokerage capacity. "
+            "The network may lack connective tissue for coordination."
+        )
+        implications.append("Consider capacity building to develop more connectors")
+        implications.append("Identify peripheral orgs with potential to bridge communities")
+    elif strategic_pct > 30:
+        pattern = "well-brokered"
+        interpretation = (
+            f"This network has healthy brokerage capacity ({strategic_roles} organizations in strategic roles). "
+            "Multiple pathways exist for information and coordination across communities."
+        )
+        implications.append("Leverage existing brokers for coordination initiatives")
+        implications.append("The network has built-in resilience if individual brokers disengage")
+    else:
+        pattern = "balanced"
+        interpretation = (
+            "Brokerage roles are distributed without strong concentration. "
+            "The network has moderate coordination capacity."
+        )
+        implications.append("No urgent structural interventions needed")
+        implications.append("Consider targeted investment in liaison development for strategic priorities")
+    
+    return {
+        'pattern': pattern,
+        'interpretation': interpretation,
+        'strategic_implications': implications,
+        'community_count': brokerage_data['community_count']
+    }
+
+
+def get_top_brokers(brokerage_data: dict, nodes_df: pd.DataFrame, n: int = 8) -> list:
+    """
+    Get top brokers (liaisons and gatekeepers prioritized) with their labels.
+    
+    Returns list of (node_id, label, role) tuples.
+    """
+    if not brokerage_data.get('enabled'):
+        return []
+    
+    roles = brokerage_data['roles']
+    node_labels = dict(zip(nodes_df['node_id'], nodes_df['label']))
+    
+    # Prioritize strategic roles
+    priority_order = ['liaison', 'gatekeeper', 'representative', 'coordinator', 'consultant']
+    
+    brokers = []
+    for role in priority_order:
+        for node_id, node_role in roles.items():
+            if node_role == role:
+                label = node_labels.get(node_id, node_id)
+                brokers.append((node_id, label, role))
+        if len(brokers) >= n:
+            break
+    
+    return brokers[:n]
+
+
+def format_brokerage_ecosystem_section(
+    brokerage_data: dict,
+    interpretation: dict,
+    top_brokers: list,
+    skip_header: bool = False
+) -> list:
+    """
+    Generate markdown lines for Brokerage Ecosystem section.
+    
+    Args:
+        brokerage_data: Output from compute_brokerage_roles()
+        interpretation: Output from interpret_brokerage_ecosystem()
+        top_brokers: List of (node_id, label, role) for key brokers
+        skip_header: If True, omit the ## header
+    """
+    lines = []
+    
+    if not skip_header:
+        lines.append("## 🎭 Brokerage Ecosystem")
+        lines.append("")
+    
+    lines.append("_How information and influence flow through the network_")
+    lines.append("")
+    
+    if not brokerage_data.get('enabled'):
+        lines.append("> Brokerage analysis requires at least 10 organizations in the network.")
+        lines.append("")
+        return lines
+    
+    # Pattern and interpretation
+    pattern_display = interpretation['pattern'].replace('-', ' ').title()
+    lines.append(f"**Pattern:** {pattern_display}")
+    lines.append("")
+    lines.append(interpretation['interpretation'])
+    lines.append("")
+    
+    # Community count
+    lines.append(f"The network contains **{interpretation['community_count']} distinct communities** detected via Louvain algorithm.")
+    lines.append("")
+    
+    # Role distribution table
+    lines.append("### Role Distribution")
+    lines.append("")
+    lines.append("| Role | Count | Description |")
+    lines.append("|------|-------|-------------|")
+    
+    # Sort by strategic importance
+    role_order = ['liaison', 'gatekeeper', 'representative', 'coordinator', 'consultant', 'peripheral']
+    counts = brokerage_data['role_counts']
+    
+    for role in role_order:
+        count = counts.get(role, 0)
+        if count > 0:
+            config = BROKERAGE_ROLE_CONFIG[role]
+            lines.append(f"| {config['emoji']} {config['label']} | {count} | {config['description']} |")
+    
+    lines.append("")
+    
+    # Key brokers (top liaisons and gatekeepers)
+    if top_brokers:
+        lines.append("### Key Brokers")
+        lines.append("")
+        for node_id, label, role in top_brokers:
+            config = BROKERAGE_ROLE_CONFIG.get(role, BROKERAGE_ROLE_CONFIG['peripheral'])
+            lines.append(f"- **{label}** — {config['emoji']} {config['label']}")
+        lines.append("")
+    
+    # Strategic implications
+    if interpretation['strategic_implications']:
+        lines.append("### Strategic Implications")
+        lines.append("")
+        for impl in interpretation['strategic_implications']:
+            lines.append(f"- {impl}")
+        lines.append("")
+    
+    # Decision Lens
+    lines.append(":::decision-lens")
+    lines.append("**What this tells you:** Which organizations bridge communities and how information flows across the network.")
+    lines.append("")
+    lines.append("**What this doesn't tell you:** Whether brokers are *effective* at coordination, or whether they *want* to play this role.")
+    lines.append("")
+    lines.append("**Common next steps:** Engage top liaisons/gatekeepers for coordination design; assess whether peripheral orgs could develop brokerage capacity.")
+    lines.append(":::")
+    lines.append("")
+    
+    return lines
 
 
 # =============================================================================
@@ -1914,7 +2336,8 @@ def format_roles_region_section(summary: dict, skip_header: bool = False) -> lis
 # Markdown Report Generator
 # =============================================================================
 
-def generate_markdown_report(insight_cards: dict, project_summary: dict, project_id: str = "glfn", roles_region_summary: dict = None) -> str:
+def generate_markdown_report(insight_cards: dict, project_summary: dict, project_id: str = "glfn", roles_region_summary: dict = None,
+                             brokerage_data: dict = None, brokerage_interpretation: dict = None, top_brokers: list = None) -> str:
     """
     Generate a complete markdown report from insight cards.
     
@@ -1922,6 +2345,7 @@ def generate_markdown_report(insight_cards: dict, project_summary: dict, project
     - Executive Summary after header
     - Human-readable section intros
     - Decision Lens blocks for each section
+    - Brokerage Ecosystem section (Louvain community-based roles)
     
     Returns formatted markdown string.
     """
@@ -2222,6 +2646,19 @@ def generate_markdown_report(insight_cards: dict, project_summary: dict, project
                     
                     lines.append("")
         
+        lines.append("---")
+        lines.append("")
+    
+    # ==========================================================================
+    # BROKERAGE ECOSYSTEM SECTION
+    # ==========================================================================
+    if brokerage_data and brokerage_data.get('enabled', False):
+        brokerage_lines = format_brokerage_ecosystem_section(
+            brokerage_data,
+            brokerage_interpretation or {},
+            top_brokers or []
+        )
+        lines.extend(brokerage_lines)
         lines.append("---")
         lines.append("")
     
@@ -3943,6 +4380,21 @@ def run(nodes_path, edges_path, output_dir, project_id="glfn"):
     flow_stats = compute_flow_stats(edges_df, metrics_df)
     overlap_df = compute_portfolio_overlap(edges_df)
     
+    # Compute Brokerage Ecosystem (Louvain community-based roles)
+    print("\nComputing Brokerage Ecosystem...")
+    combined_org_graph = build_combined_org_graph(grant_graph, interlock_graph)
+    brokerage_data = compute_brokerage_roles(combined_org_graph, metrics_df)
+    
+    # Add brokerage_role to metrics_df
+    if brokerage_data['enabled']:
+        metrics_df['brokerage_role'] = metrics_df['node_id'].map(brokerage_data['roles'])
+        metrics_df['community_id'] = metrics_df['node_id'].map(brokerage_data['communities'])
+    
+    # Interpret brokerage ecosystem
+    org_count = len(nodes_df[nodes_df['node_type'].str.lower().isin(['org', 'organization'])])
+    brokerage_interpretation = interpret_brokerage_ecosystem(brokerage_data, org_count)
+    top_brokers = get_top_brokers(brokerage_data, nodes_df)
+    
     # Compute Roles × Region Lens summary
     print("\nComputing Roles × Region Lens...")
     lens_config = load_region_lens_config(project_dir)
@@ -3954,13 +4406,38 @@ def run(nodes_path, edges_path, output_dir, project_id="glfn"):
     
     print("\nGenerating insights...")
     insight_cards = generate_insight_cards(nodes_df, edges_df, metrics_df, interlock_graph, flow_stats, overlap_df, project_id)
+    
+    # Add brokerage to insight cards
+    insight_cards['brokerage'] = {
+        'enabled': brokerage_data['enabled'],
+        'role_counts': brokerage_data['role_counts'],
+        'community_count': brokerage_data['community_count'],
+        'pattern': brokerage_interpretation['pattern'],
+        'interpretation': brokerage_interpretation['interpretation'],
+        'strategic_implications': brokerage_interpretation['strategic_implications'],
+        'top_brokers': [(node_id, label, role) for node_id, label, role in top_brokers]
+    }
+    
     project_summary = generate_project_summary(nodes_df, edges_df, metrics_df, flow_stats)
     
     # Add roles/region to project summary
     project_summary['roles_region'] = roles_region_summary
     
-    # Generate markdown report
-    markdown_report = generate_markdown_report(insight_cards, project_summary, project_id, roles_region_summary)
+    # Add brokerage summary to project_summary
+    project_summary['brokerage'] = {
+        'enabled': brokerage_data['enabled'],
+        'community_count': brokerage_data['community_count'],
+        'pattern': brokerage_interpretation['pattern'],
+        'role_counts': brokerage_data['role_counts']
+    }
+    
+    # Generate markdown report (with brokerage section)
+    markdown_report = generate_markdown_report(
+        insight_cards, project_summary, project_id, roles_region_summary,
+        brokerage_data=brokerage_data,
+        brokerage_interpretation=brokerage_interpretation,
+        top_brokers=top_brokers
+    )
     
     print("\nWriting outputs...")
     output_dir = Path(output_dir)
