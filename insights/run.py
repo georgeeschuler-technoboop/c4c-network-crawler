@@ -61,8 +61,12 @@ except ImportError:
 # Version
 # =============================================================================
 
-ENGINE_VERSION = "4.0.0"
+ENGINE_VERSION = "4.0.2"  # Updated: table rendering in HTML
 BUNDLE_FORMAT_VERSION = "1.1"
+RUN_PY_VERSION = "4.0.2"  # For debugging - check this value in logs
+
+# Debug: Print version when module loads
+print(f"[InsightGraph] run.py v{RUN_PY_VERSION} loaded")
 
 # =============================================================================
 # Default Paths (for backwards compatibility)
@@ -262,6 +266,7 @@ def render_html_report(
     Returns:
         HTML string
     """
+    print(f"render_html_report called (run.py v{RUN_PY_VERSION})")  # Debug
     # Try to use markdown library if available
     try:
         import markdown
@@ -356,33 +361,105 @@ def _basic_markdown_to_html(md: str) -> str:
     """Basic markdown to HTML conversion without external libraries."""
     import re
     
-    html = md
+    lines = md.split('\n')
+    html_lines = []
+    in_table = False
+    table_lines = []
     
-    # Headers
-    html = re.sub(r'^### (.+)$', r'<h3>\1</h3>', html, flags=re.MULTILINE)
-    html = re.sub(r'^## (.+)$', r'<h2>\1</h2>', html, flags=re.MULTILINE)
-    html = re.sub(r'^# (.+)$', r'<h1>\1</h1>', html, flags=re.MULTILINE)
+    for line in lines:
+        # Check if this is a table line
+        if '|' in line and line.strip().startswith('|'):
+            if not in_table:
+                in_table = True
+                table_lines = []
+            table_lines.append(line)
+            continue
+        elif in_table:
+            # End of table, render it
+            html_lines.append(_render_table(table_lines))
+            in_table = False
+            table_lines = []
+        
+        # Headers
+        if line.startswith('### '):
+            html_lines.append(f'<h3>{line[4:]}</h3>')
+        elif line.startswith('## '):
+            html_lines.append(f'<h2>{line[3:]}</h2>')
+        elif line.startswith('# '):
+            html_lines.append(f'<h1>{line[2:]}</h1>')
+        elif line.strip() == '---':
+            html_lines.append('<hr>')
+        elif line.strip() == '':
+            html_lines.append('')
+        elif line.startswith('- '):
+            # List item
+            content = line[2:]
+            content = _inline_formatting(content)
+            html_lines.append(f'<li>{content}</li>')
+        else:
+            # Regular paragraph
+            content = _inline_formatting(line)
+            html_lines.append(f'<p>{content}</p>')
     
-    # Bold and italic
-    html = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', html)
-    html = re.sub(r'\*(.+?)\*', r'<em>\1</em>', html)
+    # Handle table at end of content
+    if in_table and table_lines:
+        html_lines.append(_render_table(table_lines))
     
-    # Code
-    html = re.sub(r'`(.+?)`', r'<code>\1</code>', html)
-    
-    # Links
-    html = re.sub(r'\[(.+?)\]\((.+?)\)', r'<a href="\2">\1</a>', html)
-    
-    # Line breaks (preserve paragraph structure)
-    html = re.sub(r'\n\n', '</p><p>', html)
-    html = f'<p>{html}</p>'
+    # Wrap consecutive list items in <ul>
+    result = '\n'.join(html_lines)
+    result = re.sub(r'((?:<li>.*?</li>\n?)+)', r'<ul>\1</ul>', result)
     
     # Clean up empty paragraphs
-    html = re.sub(r'<p>\s*</p>', '', html)
-    html = re.sub(r'<p>(<h[123]>)', r'\1', html)
-    html = re.sub(r'(</h[123]>)</p>', r'\1', html)
+    result = re.sub(r'<p>\s*</p>', '', result)
     
-    return html
+    return result
+
+
+def _inline_formatting(text: str) -> str:
+    """Apply inline markdown formatting."""
+    import re
+    # Bold
+    text = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', text)
+    # Italic (but not inside URLs or already processed)
+    text = re.sub(r'(?<!\*)\*([^*]+?)\*(?!\*)', r'<em>\1</em>', text)
+    # Code
+    text = re.sub(r'`(.+?)`', r'<code>\1</code>', text)
+    # Links
+    text = re.sub(r'\[(.+?)\]\((.+?)\)', r'<a href="\2">\1</a>', text)
+    return text
+
+
+def _render_table(lines: list) -> str:
+    """Render markdown table lines to HTML."""
+    import re
+    
+    if len(lines) < 2:
+        return ''
+    
+    html = ['<table>']
+    
+    for i, line in enumerate(lines):
+        # Skip separator line (|---|---|)
+        if re.match(r'^\|[\s\-:|]+\|$', line.strip()):
+            continue
+        
+        cells = [c.strip() for c in line.split('|')[1:-1]]  # Remove empty first/last
+        
+        if i == 0:
+            # Header row
+            html.append('<thead><tr>')
+            for cell in cells:
+                html.append(f'<th>{_inline_formatting(cell)}</th>')
+            html.append('</tr></thead><tbody>')
+        else:
+            # Data row
+            html.append('<tr>')
+            for cell in cells:
+                html.append(f'<td>{_inline_formatting(cell)}</td>')
+            html.append('</tr>')
+    
+    html.append('</tbody></table>')
+    return '\n'.join(html)
 
 
 # =============================================================================
