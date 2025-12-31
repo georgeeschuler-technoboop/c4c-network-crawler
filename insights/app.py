@@ -233,7 +233,7 @@ def json_dumps_safe(obj, **kwargs):
 # Config
 # =============================================================================
 
-APP_VERSION = "0.15.10"  # Network-type-aware analysis
+APP_VERSION = "0.15.11"  # UTF-8 encoding fix for downloads
 C4C_LOGO_URL = "https://static.wixstatic.com/media/275a3f_9c48d5079fcf4b688606c81d8f34d5a5~mv2.jpg"
 INSIGHTGRAPH_ICON_URL = "https://static.wixstatic.com/media/275a3f_7736e28c9f5e40c1b2407e09dc5cb6e7~mv2.png"
 
@@ -2539,11 +2539,18 @@ For questions, contact: info@connectingforchangellc.com
             
             # Markdown report
             if has_report:
-                zf.writestr("report.md", data["markdown_report"])
+                # Explicit UTF-8 encoding for text files
+                md_content = data["markdown_report"]
+                if isinstance(md_content, str):
+                    md_content = md_content.encode('utf-8')
+                zf.writestr("report.md", md_content)
             
             # HTML report (use pre-generated from outer scope)
             if html_report:
-                zf.writestr("index.html", html_report)
+                html_content = html_report
+                if isinstance(html_content, str):
+                    html_content = html_content.encode('utf-8')
+                zf.writestr("index.html", html_content)
             
             # Input data (if available)
             if has_nodes:
@@ -2588,7 +2595,7 @@ For questions, contact: info@connectingforchangellc.com
                 "📄 Download Report (HTML)",
                 data=html_bytes,
                 file_name=f"{data['project_id']}_report.html",
-                mime="text/html",
+                mime="text/html; charset=utf-8",
                 type="primary",
                 use_container_width=True,
                 help="Open in any browser, print to PDF, or share directly"
@@ -2596,11 +2603,13 @@ For questions, contact: info@connectingforchangellc.com
         elif has_report:
             if html_error:
                 st.warning(f"HTML generation failed: {html_error}")
+            # Ensure markdown is encoded as UTF-8 bytes
+            md_bytes = data["markdown_report"].encode('utf-8') if isinstance(data["markdown_report"], str) else data["markdown_report"]
             st.download_button(
                 "📝 Download Report (Markdown)",
-                data=data["markdown_report"],
+                data=md_bytes,
                 file_name="insight_report.md",
-                mime="text/markdown",
+                mime="text/markdown; charset=utf-8",
                 type="primary",
                 use_container_width=True,
                 help="Source markdown — convert to PDF with any markdown editor"
