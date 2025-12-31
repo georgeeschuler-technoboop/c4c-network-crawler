@@ -245,7 +245,7 @@ def run(
 # =============================================================================
 
 def render_html_report(
-    markdown_report: str = None,
+    markdown_content: str = None,
     project_summary: dict = None,
     insight_cards: dict = None,
     project_id: str = "report"
@@ -254,7 +254,7 @@ def render_html_report(
     Render HTML report from markdown or analysis outputs.
     
     Args:
-        markdown_report: Pre-generated markdown report string
+        markdown_content: Pre-generated markdown report string
         project_summary: Project summary dict (fallback if no markdown)
         insight_cards: Insight cards dict (fallback if no markdown)
         project_id: Project identifier for title
@@ -271,15 +271,15 @@ def render_html_report(
         print("Warning: markdown library not installed. Using basic HTML conversion.")
     
     # Generate HTML from markdown report
-    if markdown_report:
+    if markdown_content:
         if has_markdown:
             html_content = markdown.markdown(
-                markdown_report,
+                markdown_content,
                 extensions=['tables', 'fenced_code']
             )
         else:
             # Basic conversion without markdown library
-            html_content = _basic_markdown_to_html(markdown_report)
+            html_content = _basic_markdown_to_html(markdown_content)
     else:
         # Fallback: generate basic HTML from project_summary
         html_content = f"<h1>{project_id} — Network Analysis Report</h1>"
