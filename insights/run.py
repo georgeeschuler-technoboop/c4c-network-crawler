@@ -6,6 +6,10 @@ This is the main entry point for network analysis.
 
 VERSION HISTORY:
 ----------------
+v4.0.1 (2025-12-31): Fixed imports for Streamlit Cloud compatibility
+- Use absolute imports with sys.path manipulation
+- Works when loaded via importlib (app.py dynamic loading)
+
 v4.0.0 (2025-12-31): Network-type-aware architecture
 - Detects network type from data: funder, social, or hybrid
 - Routes to FunderAnalyzer or SocialAnalyzer
@@ -23,17 +27,35 @@ USAGE:
 """
 
 import json
-import pandas as pd
+import sys
 from pathlib import Path
+
+# Add parent directory to path for dynamic loading compatibility
+_this_dir = Path(__file__).parent
+if str(_this_dir) not in sys.path:
+    sys.path.insert(0, str(_this_dir))
+
+import pandas as pd
 from datetime import datetime, timezone
 
-from .analyzers import (
-    detect_network_type,
-    detect_source_app,
-    FunderAnalyzer,
-    SocialAnalyzer,
-    AnalysisResult,
-)
+# Now import analyzers (works both as package and when dynamically loaded)
+try:
+    from analyzers import (
+        detect_network_type,
+        detect_source_app,
+        FunderAnalyzer,
+        SocialAnalyzer,
+        AnalysisResult,
+    )
+except ImportError:
+    # Fallback for package import
+    from .analyzers import (
+        detect_network_type,
+        detect_source_app,
+        FunderAnalyzer,
+        SocialAnalyzer,
+        AnalysisResult,
+    )
 
 # =============================================================================
 # Version
@@ -248,4 +270,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-    
