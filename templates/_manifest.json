@@ -1,0 +1,178 @@
+{
+  "manifest_version": "1.0",
+  "last_updated": "2025-12-31",
+  "bucket": "c4c-artifacts",
+  "base_url": "https://igbzclkhwnxnypjssdwz.supabase.co/storage/v1/object/public/c4c-artifacts",
+  "conventions": {
+    "path_pattern": "{base_url}/{collection}/{project}/{category}/<file>",
+    "collections": ["demo", "schema"],
+    "categories": ["inputs", "outputs"],
+    "docs": ["README.md"],
+    "rules": [
+      "Inputs live under demo/<project>/inputs/",
+      "Outputs live under demo/<project>/outputs/",
+      "Each demo project has a demo/<project>/README.md",
+      "Cross-app conventions live under schema/README.md"
+    ]
+  },
+  "apps": {
+    "actorgraph": {
+      "name": "ActorGraph",
+      "url": "https://c4c-network-crawler-actorgraph.streamlit.app/",
+      "icon": "https://static.wixstatic.com/media/275a3f_87490929c29444a99f948f1e12cac9a8~mv2.png",
+      "status": "stable",
+      "version": "v0.5.6"
+    },
+    "orggraph_us": {
+      "name": "OrgGraph US",
+      "url": "https://c4c-funder-flow.streamlit.app/",
+      "icon": "https://static.wixstatic.com/media/275a3f_f8ac661446cc49788526af77befbf7b3~mv2.png",
+      "status": "stable",
+      "version": "v0.25.0"
+    },
+    "orggraph_ca": {
+      "name": "OrgGraph CA",
+      "url": "https://c4c-network-crawler-orggraph-ca.streamlit.app/",
+      "icon": "https://static.wixstatic.com/media/275a3f_c5ebff210ab645a0aca15baf35ec9333~mv2.png",
+      "status": "beta",
+      "version": "v0.16.0"
+    },
+    "insightgraph": {
+      "name": "InsightGraph",
+      "url": "https://c4c-network-crawler-insights-cards.streamlit.app/",
+      "icon": "https://static.wixstatic.com/media/275a3f_7736e28c9f5e40c1b2407e09dc5cb6e7~mv2.png",
+      "status": "active_dev",
+      "version": "v0.15.11",
+      "notes": "run.py v4.0.2"
+    },
+    "cloudprojects": {
+      "name": "CloudProjects",
+      "url": "https://c4c-network-crawler-test.streamlit.app/",
+      "icon": "https://static.wixstatic.com/media/275a3f_ce58a832a0324637aed7603cec34900b~mv2.png",
+      "status": "internal",
+      "version": "v0.4.0"
+    },
+    "seed_resolver": {
+      "name": "Seed Resolver",
+      "url": "https://c4c-network-crawler-resolver.streamlit.app/",
+      "icon": "https://static.wixstatic.com/media/275a3f_994fc437eff045c3ba6aaf4bb11af0d0~mv2.png",
+      "status": "alpha",
+      "version": null
+    }
+  },
+  "projects": [
+    {
+      "id": "glfn",
+      "title": "GLFN Demo",
+      "description": "Great Lakes Funders Network demo assets for OrgGraph US + OrgGraph CA + InsightGraph workflows.",
+      "tags": ["demo", "glfn", "funder", "cross-network"],
+      "paths": {
+        "root": "demo/glfn",
+        "inputs": "demo/glfn/inputs",
+        "outputs": "demo/glfn/outputs",
+        "readme": "demo/glfn/README.md"
+      },
+      "inputs": [
+        {
+          "id": "glfn_ca_charity_csv_zip",
+          "name": "GLFN Demo — Canada Charity Data CSV (ZIP)",
+          "type": "zip",
+          "category": "inputs",
+          "primary_app": "orggraph_ca",
+          "url": "https://igbzclkhwnxnypjssdwz.supabase.co/storage/v1/object/public/c4c-artifacts/demo/glfn/inputs/glfn_ca_charity_csv.zip",
+          "size_bytes": null,
+          "sha256": null,
+          "notes": "OrgGraph CA demo input (Canadian charity dataset)."
+        },
+        {
+          "id": "glfn_us_irs990_xml_zip",
+          "name": "GLFN Demo — US IRS 990 XML (ZIP)",
+          "type": "zip",
+          "category": "inputs",
+          "primary_app": "orggraph_us",
+          "url": "https://igbzclkhwnxnypjssdwz.supabase.co/storage/v1/object/public/c4c-artifacts/demo/glfn/inputs/glfn_us_irs990_xml.zip",
+          "size_bytes": null,
+          "sha256": null,
+          "notes": "OrgGraph US demo input (IRS 990 XML filings)."
+        }
+      ],
+      "outputs": [
+        {
+          "id": "glfn_polinode_export_xlsx",
+          "name": "GLFN Demo — Polinode-ready Export (XLSX)",
+          "type": "xlsx",
+          "category": "outputs",
+          "primary_app": "orggraph_us",
+          "url": "https://igbzclkhwnxnypjssdwz.supabase.co/storage/v1/object/public/c4c-artifacts/demo/glfn/outputs/glfn_polinode_export.xlsx",
+          "size_bytes": null,
+          "sha256": null,
+          "notes": "Known-good workbook that imports cleanly into Polinode (nodes + edges)."
+        },
+        {
+          "id": "glfn_insightgraph_report_html",
+          "name": "GLFN Demo — InsightGraph HTML Report (HTML)",
+          "type": "html",
+          "category": "outputs",
+          "primary_app": "insightgraph",
+          "url": "https://igbzclkhwnxnypjssdwz.supabase.co/storage/v1/object/public/c4c-artifacts/demo/glfn/outputs/glfn_insightgraph_report.html",
+          "size_bytes": null,
+          "sha256": null,
+          "notes": "Shareable example report generated from linked GLFN networks."
+        }
+      ],
+      "docs": [
+        {
+          "id": "glfn_readme",
+          "name": "Demo README — GLFN",
+          "type": "md",
+          "category": "doc",
+          "url": "https://igbzclkhwnxnypjssdwz.supabase.co/storage/v1/object/public/c4c-artifacts/demo/glfn/README.md",
+          "notes": "How to run GLFN demo end-to-end."
+        }
+      ]
+    },
+    {
+      "id": "how",
+      "title": "HOW Coalition Demo",
+      "description": "Healing Our Waters coalition seed inputs for Seed Resolver + ActorGraph demo runs.",
+      "tags": ["demo", "how", "social", "seeds"],
+      "paths": {
+        "root": "demo/how",
+        "inputs": "demo/how/inputs",
+        "outputs": "demo/how/outputs",
+        "readme": "demo/how/README.md"
+      },
+      "inputs": [
+        {
+          "id": "how_seeds_6_and_10_zip",
+          "name": "HOW Coalition — Seed Sets 6 + 10 (ZIP)",
+          "type": "zip",
+          "category": "inputs",
+          "primary_app": "seed_resolver",
+          "url": "https://igbzclkhwnxnypjssdwz.supabase.co/storage/v1/object/public/c4c-artifacts/demo/how/inputs/how_seeds_6_and_10.zip",
+          "size_bytes": null,
+          "sha256": null,
+          "notes": "Combined seed sets; useful for Seed Resolver and ActorGraph."
+        }
+      ],
+      "outputs": [],
+      "docs": [
+        {
+          "id": "how_readme",
+          "name": "Demo README — HOW Coalition",
+          "type": "md",
+          "category": "doc",
+          "url": "https://igbzclkhwnxnypjssdwz.supabase.co/storage/v1/object/public/c4c-artifacts/demo/how/README.md",
+          "notes": "Notes on HOW coalition seed inputs and usage."
+        }
+      ]
+    }
+  ],
+  "schema": {
+    "id": "schema_conventions",
+    "title": "Schema & Conventions",
+    "description": "Cross-app naming rules, role vocabulary, bundle structure, and export conventions.",
+    "url": "https://igbzclkhwnxnypjssdwz.supabase.co/storage/v1/object/public/c4c-artifacts/schema/README.md",
+    "status": "draft"
+  }
+}
