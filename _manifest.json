@@ -1,6 +1,6 @@
 {
-  "manifest_version": "1.1",
-  "last_updated": "2025-12-31",
+  "manifest_version": "1.2",
+  "last_updated": "2026-01-01",
   "bucket": "c4c-artifacts",
   "base_url": "https://igbzclkhwnxnypjssdwz.supabase.co/storage/v1/object/public/c4c-artifacts",
 
@@ -71,43 +71,49 @@
       "id": "qs_actorgraph",
       "title": "Quick Start — ActorGraph",
       "type": "quickstart",
-      "format": "md",
-      "url": "https://igbzclkhwnxnypjssdwz.supabase.co/storage/v1/object/public/c4c-artifacts/docs/quickstart_actorgraph.md"
-    },
-    {
-      "id": "qs_orggraph_us",
-      "title": "Quick Start — OrgGraph US",
-      "type": "quickstart",
-      "format": "md",
-      "url": "https://igbzclkhwnxnypjssdwz.supabase.co/storage/v1/object/public/c4c-artifacts/docs/quickstart_orggraph_us.md"
-    },
-    {
-      "id": "qs_orggraph_ca",
-      "title": "Quick Start — OrgGraph CA",
-      "type": "quickstart",
-      "format": "md",
-      "url": "https://igbzclkhwnxnypjssdwz.supabase.co/storage/v1/object/public/c4c-artifacts/docs/quickstart_orggraph_ca.md"
-    },
-    {
-      "id": "qs_seed_resolver",
-      "title": "Quick Start — Seed Resolver",
-      "type": "quickstart",
-      "format": "md",
-      "url": "https://igbzclkhwnxnypjssdwz.supabase.co/storage/v1/object/public/c4c-artifacts/docs/quickstart_seed_resolver.md"
+      "format": "html",
+      "url": "https://igbzclkhwnxnypjssdwz.supabase.co/storage/v1/object/public/c4c-artifacts/docs/quickstart_actorgraph.html",
+      "notes": "Build social networks from LinkedIn. ~15 min."
     },
     {
       "id": "qs_cloudprojects",
       "title": "Quick Start — CloudProjects",
       "type": "quickstart",
-      "format": "md",
-      "url": "https://igbzclkhwnxnypjssdwz.supabase.co/storage/v1/object/public/c4c-artifacts/docs/quickstart_cloudprojects.md"
+      "format": "html",
+      "url": "https://igbzclkhwnxnypjssdwz.supabase.co/storage/v1/object/public/c4c-artifacts/docs/quickstart_cloudprojects.html",
+      "notes": "Browse and manage saved network projects."
     },
     {
       "id": "qs_insightgraph",
       "title": "Quick Start — InsightGraph",
       "type": "quickstart",
-      "format": "md",
-      "url": "https://igbzclkhwnxnypjssdwz.supabase.co/storage/v1/object/public/c4c-artifacts/docs/quickstart_insightgraph.md"
+      "format": "html",
+      "url": "https://igbzclkhwnxnypjssdwz.supabase.co/storage/v1/object/public/c4c-artifacts/docs/quickstart_insightgraph.html",
+      "notes": "Analyze networks and generate insight reports. ~5 min."
+    },
+    {
+      "id": "qs_orggraph_ca",
+      "title": "Quick Start — OrgGraph CA",
+      "type": "quickstart",
+      "format": "html",
+      "url": "https://igbzclkhwnxnypjssdwz.supabase.co/storage/v1/object/public/c4c-artifacts/docs/quickstart_orggraph_ca.html",
+      "notes": "Build funder networks from CRA/Canada Charity data. ~10 min."
+    },
+    {
+      "id": "qs_orggraph_us",
+      "title": "Quick Start — OrgGraph US",
+      "type": "quickstart",
+      "format": "html",
+      "url": "https://igbzclkhwnxnypjssdwz.supabase.co/storage/v1/object/public/c4c-artifacts/docs/quickstart_orggraph_us.html",
+      "notes": "Build funder networks from IRS 990-PF data. ~10 min."
+    },
+    {
+      "id": "qs_seed_resolver",
+      "title": "Quick Start — Seed Resolver",
+      "type": "quickstart",
+      "format": "html",
+      "url": "https://igbzclkhwnxnypjssdwz.supabase.co/storage/v1/object/public/c4c-artifacts/docs/quickstart_seed_resolver.html",
+      "notes": "Clean messy seed lists before ActorGraph. ~5 min."
     }
   ],
 
