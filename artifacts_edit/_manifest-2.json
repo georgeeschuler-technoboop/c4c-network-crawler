@@ -1,82 +1,57 @@
 {
-  "manifest_version": "1.4",
-  "last_updated": "2025-12-31",
+  "manifest_version": "1.7",
+  "last_updated": "2026-01-01",
   "bucket": "c4c-artifacts",
   "base_url": "https://igbzclkhwnxnypjssdwz.supabase.co/storage/v1/object/public/c4c-artifacts",
-  "conventions": {
-    "path_pattern": "{base_url}/{collection}/{project}/{category}/<file>",
-    "collections": ["demo", "schema", "docs"],
-    "categories": ["inputs", "outputs"],
-    "docs": ["README.md"],
-    "rules": [
-      "Inputs live under demo/<project>/inputs/",
-      "Outputs live under demo/<project>/outputs/",
-      "Each demo project has a demo/<project>/README.md",
-      "Cross-app conventions live under schema/README.md",
-      "Docs live under docs/*"
-    ]
-  },
+  "docs_home": "https://www.connectingforchangellc.com/documents",
   "docs": [
+    {
+      "id": "qs_seed_resolver",
+      "type": "quickstart",
+      "title": "Quick Start — Seed Resolver",
+      "notes": "Clean messy seed lists before ActorGraph. ~5 min. (Alpha)",
+      "web_url": "https://www.connectingforchangellc.com/seed-resolver"
+    },
     {
       "id": "qs_actorgraph",
       "type": "quickstart",
-      "format": "html",
       "title": "Quick Start — ActorGraph",
       "notes": "Build social networks from LinkedIn. ~15 min.",
-      "url": "https://igbzclkhwnxnypjssdwz.supabase.co/storage/v1/object/public/c4c-artifacts/docs/quickstart_actorgraph.html",
-      "render_url": "https://igbzclkhwnxnypjssdwz.functions.supabase.co/serve-doc?path=docs/quickstart_actorgraph.html"
-    },
-    {
-      "id": "qs_cloudprojects",
-      "type": "quickstart",
-      "format": "html",
-      "title": "Quick Start — CloudProjects",
-      "notes": "Browse and manage saved network projects and bundles.",
-      "url": "https://igbzclkhwnxnypjssdwz.supabase.co/storage/v1/object/public/c4c-artifacts/docs/quickstart_cloudprojects.html",
-      "render_url": "https://igbzclkhwnxnypjssdwz.functions.supabase.co/serve-doc?path=docs/quickstart_cloudprojects.html"
-    },
-    {
-      "id": "qs_insightgraph",
-      "type": "quickstart",
-      "format": "html",
-      "title": "Quick Start — InsightGraph",
-      "notes": "Analyze networks and generate insight reports. ~5 min.",
-      "url": "https://igbzclkhwnxnypjssdwz.supabase.co/storage/v1/object/public/c4c-artifacts/docs/quickstart_insightgraph.html",
-      "render_url": "https://igbzclkhwnxnypjssdwz.functions.supabase.co/serve-doc?path=docs/quickstart_insightgraph.html"
-    },
-    {
-      "id": "qs_orggraph_ca",
-      "type": "quickstart",
-      "format": "html",
-      "title": "Quick Start — OrgGraph CA",
-      "notes": "Build funder networks from Canada Charity/T3010 data. ~10 min.",
-      "url": "https://igbzclkhwnxnypjssdwz.supabase.co/storage/v1/object/public/c4c-artifacts/docs/quickstart_orggraph_ca.html",
-      "render_url": "https://igbzclkhwnxnypjssdwz.functions.supabase.co/serve-doc?path=docs/quickstart_orggraph_ca.html"
+      "web_url": "https://www.connectingforchangellc.com/actorgraph"
     },
     {
       "id": "qs_orggraph_us",
       "type": "quickstart",
-      "format": "html",
       "title": "Quick Start — OrgGraph US",
       "notes": "Build funder networks from IRS 990-PF data. ~10 min.",
-      "url": "https://igbzclkhwnxnypjssdwz.supabase.co/storage/v1/object/public/c4c-artifacts/docs/quickstart_orggraph_us.html",
-      "render_url": "https://igbzclkhwnxnypjssdwz.functions.supabase.co/serve-doc?path=docs/quickstart_orggraph_us.html"
+      "web_url": "https://www.connectingforchangellc.com/orggraph-us"
     },
     {
-      "id": "qs_seed_resolver",
+      "id": "qs_orggraph_ca",
       "type": "quickstart",
-      "format": "html",
-      "title": "Quick Start — Seed Resolver",
-      "notes": "Clean messy seed lists before ActorGraph. ~5 min. (Alpha)",
-      "url": "https://igbzclkhwnxnypjssdwz.supabase.co/storage/v1/object/public/c4c-artifacts/docs/quickstart_seed_resolver.html",
-      "render_url": "https://igbzclkhwnxnypjssdwz.functions.supabase.co/serve-doc?path=docs/quickstart_seed_resolver.html"
+      "title": "Quick Start — OrgGraph CA",
+      "notes": "Build funder networks from Canada Charity/T3010 data. ~10 min.",
+      "web_url": "https://www.connectingforchangellc.com/orggraph-ca"
+    },
+    {
+      "id": "qs_cloudprojects",
+      "type": "quickstart",
+      "title": "Quick Start — CloudProjects",
+      "notes": "Browse and manage saved network projects and bundles.",
+      "web_url": "https://www.connectingforchangellc.com/cloudprojects"
+    },
+    {
+      "id": "qs_insightgraph",
+      "type": "quickstart",
+      "title": "Quick Start — InsightGraph",
+      "notes": "Analyze networks and generate insight reports. ~5 min.",
+      "web_url": "https://www.connectingforchangellc.com/insightgraph"
     },
     {
       "id": "insightgraph_metrics_v2",
       "type": "metrics",
-      "format": "pdf",
       "title": "InsightGraph — Metrics Calculation Guide v2.0",
-      "notes": "How network metrics are calculated. For Sarah’s data science review.",
+      "notes": "How network metrics are calculated. For Sarah's data science review.",
       "url": "https://igbzclkhwnxnypjssdwz.supabase.co/storage/v1/object/public/c4c-artifacts/docs/insightgraph_metrics_v2.pdf"
     }
   ],
@@ -115,7 +90,7 @@
       "icon": "https://static.wixstatic.com/media/275a3f_7736e28c9f5e40c1b2407e09dc5cb6e7~mv2.png",
       "status": "active_dev",
       "version": "v0.15.11",
-      "notes": "run.py v4.0.2",
+      "notes": "run.py v4.0.3",
       "quickstart_id": "qs_insightgraph"
     },
     "cloudprojects": {
@@ -143,69 +118,41 @@
       "title": "GLFN Demo",
       "description": "Great Lakes Funders Network demo assets for OrgGraph US + OrgGraph CA + InsightGraph workflows.",
       "tags": ["demo", "glfn", "funder", "cross-network"],
-      "paths": {
-        "root": "demo/glfn",
-        "inputs": "demo/glfn/inputs",
-        "outputs": "demo/glfn/outputs",
-        "readme": "demo/glfn/README.md"
-      },
+      "readme": "https://igbzclkhwnxnypjssdwz.supabase.co/storage/v1/object/public/c4c-artifacts/demo/glfn/README.md",
       "inputs": [
         {
           "id": "glfn_ca_charity_csv_zip",
-          "name": "GLFN Demo — Canada Charity Data CSV (ZIP)",
+          "name": "GLFN — Canada Charity Data (ZIP)",
           "type": "zip",
-          "category": "inputs",
           "primary_app": "orggraph_ca",
           "url": "https://igbzclkhwnxnypjssdwz.supabase.co/storage/v1/object/public/c4c-artifacts/demo/glfn/inputs/glfn_ca_charity_csv.zip",
-          "size_bytes": null,
-          "sha256": null,
           "notes": "OrgGraph CA demo input (Canadian charity dataset)."
         },
         {
           "id": "glfn_us_irs990_xml_zip",
-          "name": "GLFN Demo — US IRS 990 XML (ZIP)",
+          "name": "GLFN — US IRS 990 XML (ZIP)",
           "type": "zip",
-          "category": "inputs",
           "primary_app": "orggraph_us",
           "url": "https://igbzclkhwnxnypjssdwz.supabase.co/storage/v1/object/public/c4c-artifacts/demo/glfn/inputs/glfn_us_irs990_xml.zip",
-          "size_bytes": null,
-          "sha256": null,
           "notes": "OrgGraph US demo input (IRS 990 XML filings)."
         }
       ],
       "outputs": [
         {
           "id": "glfn_polinode_export_xlsx",
-          "name": "GLFN Demo — Polinode-ready Export (XLSX)",
+          "name": "GLFN — Polinode Export (XLSX)",
           "type": "xlsx",
-          "category": "outputs",
           "primary_app": "orggraph_us",
           "url": "https://igbzclkhwnxnypjssdwz.supabase.co/storage/v1/object/public/c4c-artifacts/demo/glfn/outputs/glfn_polinode_export.xlsx",
-          "size_bytes": null,
-          "sha256": null,
           "notes": "Known-good workbook that imports cleanly into Polinode (nodes + edges)."
         },
         {
           "id": "glfn_insightgraph_report_html",
-          "name": "GLFN Demo — InsightGraph HTML Report (HTML)",
+          "name": "GLFN — InsightGraph Report (HTML)",
           "type": "html",
-          "category": "outputs",
           "primary_app": "insightgraph",
           "url": "https://igbzclkhwnxnypjssdwz.supabase.co/storage/v1/object/public/c4c-artifacts/demo/glfn/outputs/glfn_insightgraph_report.html",
-          "size_bytes": null,
-          "sha256": null,
           "notes": "Shareable example report generated from linked GLFN networks."
-        }
-      ],
-      "docs": [
-        {
-          "id": "glfn_readme",
-          "name": "Demo README — GLFN",
-          "type": "md",
-          "category": "doc",
-          "primary_app": "orggraph_us",
-          "url": "https://igbzclkhwnxnypjssdwz.supabase.co/storage/v1/object/public/c4c-artifacts/demo/glfn/README.md",
-          "notes": "How to run GLFN demo end-to-end."
         }
       ]
     },
@@ -214,37 +161,18 @@
       "title": "HOW Coalition Demo",
       "description": "Healing Our Waters coalition seed inputs for Seed Resolver + ActorGraph demo runs.",
       "tags": ["demo", "how", "social", "seeds"],
-      "paths": {
-        "root": "demo/how",
-        "inputs": "demo/how/inputs",
-        "outputs": "demo/how/outputs",
-        "readme": "demo/how/README.md"
-      },
+      "readme": "https://igbzclkhwnxnypjssdwz.supabase.co/storage/v1/object/public/c4c-artifacts/demo/how/README.md",
       "inputs": [
         {
           "id": "how_seeds_6_and_10_zip",
-          "name": "HOW Coalition — Seed Sets 6 + 10 (ZIP)",
+          "name": "HOW Coalition — Seed Sets (ZIP)",
           "type": "zip",
-          "category": "inputs",
           "primary_app": "seed_resolver",
           "url": "https://igbzclkhwnxnypjssdwz.supabase.co/storage/v1/object/public/c4c-artifacts/demo/how/inputs/how_seeds_6_and_10.zip",
-          "size_bytes": null,
-          "sha256": null,
           "notes": "Combined seed sets; useful for Seed Resolver and ActorGraph."
         }
       ],
-      "outputs": [],
-      "docs": [
-        {
-          "id": "how_readme",
-          "name": "Demo README — HOW Coalition",
-          "type": "md",
-          "category": "doc",
-          "primary_app": "seed_resolver",
-          "url": "https://igbzclkhwnxnypjssdwz.supabase.co/storage/v1/object/public/c4c-artifacts/demo/how/README.md",
-          "notes": "Notes on HOW coalition seed inputs and usage."
-        }
-      ]
+      "outputs": []
     }
   ],
   "schema": {
