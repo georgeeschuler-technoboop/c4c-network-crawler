@@ -5,6 +5,7 @@
 # saved from OrgGraph, ActorGraph, and InsightGraph.
 #
 # VERSION HISTORY:
+# v0.5.0: Add Docs & Artifacts tab (manifest-driven)
 # v0.4.2: Add explicit favicon debug panel + show injection errors when ?debug_favicon=1
 # v0.4.1: Favicon debug + fallback logic (local file + data-URL injection with optional diagnostics)
 # v0.4.0: Stable release with data URL favicon injection
@@ -29,14 +30,11 @@ SCRIPT_DIR = Path(__file__).parent
 ICON_PATH = SCRIPT_DIR / "cloudprojects_icon.png"
 
 # Optional diagnostics: add ?debug_favicon=1 to the URL to show favicon debug in sidebar.
-# (Keeps normal UI clean.)
 try:
     DEBUG_FAVICON = str(st.query_params.get("debug_favicon", "0")).strip().lower() in ("1", "true", "yes", "on")
 except Exception:
     DEBUG_FAVICON = False
 
-# Primary approach: let Streamlit set the page icon from a local file path.
-# (This is the supported method and works for most deployments.)
 st.set_page_config(
     page_title="CloudProjects",
     page_icon=str(ICON_PATH) if ICON_PATH.exists() else "☁️",
@@ -45,19 +43,9 @@ st.set_page_config(
 )
 
 def _inject_data_url_favicon(png_path: Path):
-    """
-    Fallback approach: inject a data-URL favicon.
-    Why: some Streamlit Cloud deployments / browser caches can "pin" a favicon.
-    This may help in certain cases; harmless if ignored.
-
-    NOTE: Streamlit renders markdown into the BODY, not the <head>.
-    Some browsers accept <link rel=icon> from body; some don't.
-    """
     if not png_path.exists():
         raise FileNotFoundError(f"Icon file not found: {png_path}")
-
     b64 = base64.b64encode(png_path.read_bytes()).decode("utf-8")
-
     st.markdown(
         f"""
         <link rel="icon" type="image/png" sizes="32x32" href="data:image/png;base64,{b64}">
@@ -67,7 +55,6 @@ def _inject_data_url_favicon(png_path: Path):
         unsafe_allow_html=True,
     )
 
-# Run injection and capture outcome (but only show details if DEBUG_FAVICON)
 inject_ok = True
 inject_msg = "Not attempted"
 try:
@@ -80,7 +67,6 @@ except Exception as e:
     if DEBUG_FAVICON:
         st.sidebar.error(f"Favicon injection failed: {inject_msg}")
 
-# Debug panel (only if requested)
 if DEBUG_FAVICON:
     st.sidebar.markdown("### 🧪 Favicon debug")
     st.sidebar.write("ICON_PATH:", str(ICON_PATH))
@@ -99,13 +85,17 @@ from datetime import datetime, timezone
 from io import BytesIO
 import zipfile
 import json
+import requests
 from dataclasses import dataclass
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 
 # =============================================================================
 # Constants
 # =============================================================================
-APP_VERSION = "0.4.2"
+APP_VERSION = "0.5.0"
+
+# Manifest URL for docs and artifacts
+MANIFEST_URL = "https://igbzclkhwnxnypjssdwz.supabase.co/storage/v1/object/public/c4c-artifacts/demo/_manifest.json"
 
 # Logo/icon files should be in same directory as this script
 C4C_LOGO_FILE = SCRIPT_DIR / "c4c_logo.png"
@@ -125,7 +115,48 @@ APP_ICONS = {
     "orggraph_ca": "🍁",
     "actorgraph": "🔗",
     "insightgraph": "📊",
+    "seed_resolver": "🧹",
+    "cloudprojects": "☁️",
 }
+
+# =============================================================================
+# Manifest Fetching (for Docs & Artifacts)
+# =============================================================================
+@st.cache_data(ttl=300)  # Cache for 5 minutes
+def fetch_manifest() -> Optional[Dict[str, Any]]:
+    """Fetch the manifest from Supabase. Returns None on error."""
+    try:
+        response = requests.get(MANIFEST_URL, timeout=10)
+        response.raise_for_status()
+        return response.json()
+    except Exception as e:
+        st.error(f"Failed to load manifest: {e}")
+        return None
+
+
+def get_file_icon(file_type: str) -> str:
+    """Return an emoji icon based on file type."""
+    icons = {
+        "md": "📝",
+        "pdf": "📄",
+        "zip": "📦",
+        "xlsx": "📊",
+        "html": "🌐",
+        "csv": "📋",
+    }
+    return icons.get(file_type.lower(), "📁")
+
+
+def get_file_type_from_url(url: str) -> str:
+    """Extract file type from URL."""
+    if not url:
+        return ""
+    url_lower = url.lower()
+    for ext in ["pdf", "zip", "xlsx", "html", "md", "csv"]:
+        if url_lower.endswith(f".{ext}"):
+            return ext
+    return ""
+
 
 # =============================================================================
 # Embedded Project Store Client
@@ -376,6 +407,8 @@ def init_session_state():
         st.session_state.project_store = None
     if "selected_project" not in st.session_state:
         st.session_state.selected_project = None
+    if "active_tab" not in st.session_state:
+        st.session_state.active_tab = "projects"
 
 
 def init_project_store():
@@ -754,57 +787,227 @@ def render_data_preview(client, project):
         st.error(f"Preview error: {e}")
 
 
+# =============================================================================
+# Docs & Artifacts Tab
+# =============================================================================
+def render_docs_artifacts_tab():
+    """Render the Docs & Artifacts tab with manifest-driven content."""
+    
+    manifest = fetch_manifest()
+    
+    if not manifest:
+        st.warning("Could not load docs and artifacts manifest.")
+        st.caption("Check network connection or try refreshing.")
+        return
+    
+    # Quick Start Guides
+    st.markdown("### 📘 Quick Start Guides")
+    st.caption("Markdown versions — download or view in any text editor.")
+    
+    docs = manifest.get("docs", [])
+    quickstarts = [d for d in docs if d.get("type") == "quickstart"]
+    
+    if quickstarts:
+        for doc in quickstarts:
+            title = doc.get("title", "Untitled")
+            notes = doc.get("notes", "")
+            md_url = doc.get("md_url", "")
+            
+            if md_url:
+                col1, col2, col3 = st.columns([0.5, 4, 1.5])
+                with col1:
+                    # Get app icon from quickstart_id
+                    qs_id = doc.get("id", "")
+                    app_key = qs_id.replace("qs_", "") if qs_id.startswith("qs_") else ""
+                    icon = APP_ICONS.get(app_key, "📝")
+                    st.write(icon)
+                with col2:
+                    st.markdown(f"**{title}**")
+                    st.caption(notes)
+                with col3:
+                    st.link_button("⬇ Download MD", md_url, use_container_width=True)
+    else:
+        st.info("No Quick Start guides found.")
+    
+    st.divider()
+    
+    # Technical References
+    st.markdown("### 📊 Technical References")
+    
+    other_docs = [d for d in docs if d.get("type") != "quickstart"]
+    schema = manifest.get("schema", {})
+    
+    if other_docs or schema:
+        for doc in other_docs:
+            title = doc.get("title", "Untitled")
+            notes = doc.get("notes", "")
+            url = doc.get("url", "")
+            file_type = get_file_type_from_url(url)
+            icon = get_file_icon(file_type)
+            
+            if url:
+                col1, col2, col3 = st.columns([0.5, 4, 1.5])
+                with col1:
+                    st.write(icon)
+                with col2:
+                    st.markdown(f"**{title}**")
+                    st.caption(notes)
+                with col3:
+                    btn_label = "📄 View PDF" if file_type == "pdf" else "⬇ Download"
+                    st.link_button(btn_label, url, use_container_width=True)
+        
+        # Schema
+        if schema and schema.get("url"):
+            col1, col2, col3 = st.columns([0.5, 4, 1.5])
+            with col1:
+                st.write("📋")
+            with col2:
+                st.markdown(f"**{schema.get('title', 'Schema & Conventions')}**")
+                status = schema.get("status", "draft")
+                st.caption(f"{schema.get('description', '')} ({status})")
+            with col3:
+                st.link_button("📄 Open", schema.get("url"), use_container_width=True)
+    else:
+        st.info("No technical references found.")
+    
+    st.divider()
+    
+    # Demo Projects (Artifacts)
+    st.markdown("### 📁 Demo Project Artifacts")
+    st.caption("Inputs and outputs for demo workflows.")
+    
+    projects = manifest.get("projects", [])
+    
+    if projects:
+        for project in projects:
+            project_title = project.get("title", project.get("id", "Project"))
+            project_desc = project.get("description", "")
+            readme_url = project.get("readme", "")
+            
+            with st.expander(f"**{project_title}**", expanded=True):
+                st.caption(project_desc)
+                
+                if readme_url:
+                    st.link_button("📄 README", readme_url)
+                
+                # Inputs
+                inputs = project.get("inputs", [])
+                if inputs:
+                    st.markdown("**Inputs**")
+                    for item in inputs:
+                        name = item.get("name", "Untitled")
+                        notes = item.get("notes", "")
+                        url = item.get("url", "")
+                        file_type = item.get("type", get_file_type_from_url(url))
+                        icon = get_file_icon(file_type)
+                        primary_app = item.get("primary_app", "")
+                        app_icon = APP_ICONS.get(primary_app, "")
+                        
+                        if url:
+                            col1, col2, col3 = st.columns([0.5, 4, 1.5])
+                            with col1:
+                                st.write(icon)
+                            with col2:
+                                app_badge = f" {app_icon}" if app_icon else ""
+                                st.markdown(f"{name}{app_badge}")
+                                st.caption(notes)
+                            with col3:
+                                st.link_button("⬇ Download", url, use_container_width=True)
+                
+                # Outputs
+                outputs = project.get("outputs", [])
+                if outputs:
+                    st.markdown("**Outputs**")
+                    for item in outputs:
+                        name = item.get("name", "Untitled")
+                        notes = item.get("notes", "")
+                        url = item.get("url", "")
+                        file_type = item.get("type", get_file_type_from_url(url))
+                        icon = get_file_icon(file_type)
+                        primary_app = item.get("primary_app", "")
+                        app_icon = APP_ICONS.get(primary_app, "")
+                        
+                        if url:
+                            col1, col2, col3 = st.columns([0.5, 4, 1.5])
+                            with col1:
+                                st.write(icon)
+                            with col2:
+                                app_badge = f" {app_icon}" if app_icon else ""
+                                st.markdown(f"{name}{app_badge}")
+                                st.caption(notes)
+                            with col3:
+                                btn_label = "👁 View" if file_type == "html" else "⬇ Download"
+                                st.link_button(btn_label, url, use_container_width=True)
+    else:
+        st.info("No demo projects found.")
+    
+    # Manifest info
+    st.divider()
+    manifest_version = manifest.get("manifest_version", "—")
+    last_updated = manifest.get("last_updated", "—")
+    st.caption(f"📋 Manifest v{manifest_version} • Last updated: {last_updated}")
+
+
+# =============================================================================
+# Main
+# =============================================================================
 def main():
     init_session_state()
 
     st.title("☁️ CloudProjects")
-    st.caption(f"Manage cloud projects from OrgGraph, ActorGraph, and InsightGraph • v{APP_VERSION}")
+    st.caption(f"Manage cloud projects and access docs & artifacts • v{APP_VERSION}")
 
     st.sidebar.title("☁️ Cloud")
     client = render_auth_sidebar()
 
-    if not client:
-        st.divider()
-        st.markdown("""
-        ### Welcome to CloudProjects
-
-        Browse and manage all your cloud-saved projects from:
-
-        - 🏛️ **OrgGraph US** — US nonprofit network data
-        - 🍁 **OrgGraph CA** — Canadian nonprofit network data
-        - 🔗 **ActorGraph** — LinkedIn network data
-        - 📊 **InsightGraph** — Network analysis reports
-
-        **Login** in the sidebar to view your projects.
-        """)
-        return
-
-    st.sidebar.divider()
-    st.sidebar.markdown("### 🔍 Filters")
-
-    source_app_filter = st.sidebar.selectbox(
-        "Source App",
-        options=list(SOURCE_APPS.keys()),
-        format_func=lambda x: SOURCE_APPS[x],
-        index=0,
-    )
-
-    search_query = st.sidebar.text_input("🔎 Search projects", placeholder="Project name...")
-
-    st.divider()
-
-    if st.session_state.selected_project:
-        render_project_detail(client, st.session_state.selected_project)
-    else:
-        st.markdown("### 📋 Your Projects")
-        projects = load_projects(client, source_app_filter)
-        render_project_table(projects, search_query)
-
-        if projects:
+    # Main tabs
+    tab_projects, tab_docs = st.tabs(["📋 Projects", "📚 Docs & Artifacts"])
+    
+    with tab_projects:
+        if not client:
             st.divider()
-            total_nodes = sum(p.node_count or 0 for p in projects)
-            total_edges = sum(p.edge_count or 0 for p in projects)
-            st.caption(f"**Total:** {len(projects)} projects • {total_nodes:,} nodes • {total_edges:,} edges")
+            st.markdown("""
+            ### Welcome to CloudProjects
+
+            Browse and manage all your cloud-saved projects from:
+
+            - 🏛️ **OrgGraph US** — US nonprofit network data
+            - 🍁 **OrgGraph CA** — Canadian nonprofit network data
+            - 🔗 **ActorGraph** — LinkedIn network data
+            - 📊 **InsightGraph** — Network analysis reports
+
+            **Login** in the sidebar to view your projects.
+            """)
+        else:
+            st.sidebar.divider()
+            st.sidebar.markdown("### 🔍 Filters")
+
+            source_app_filter = st.sidebar.selectbox(
+                "Source App",
+                options=list(SOURCE_APPS.keys()),
+                format_func=lambda x: SOURCE_APPS[x],
+                index=0,
+            )
+
+            search_query = st.sidebar.text_input("🔎 Search projects", placeholder="Project name...")
+
+            st.divider()
+
+            if st.session_state.selected_project:
+                render_project_detail(client, st.session_state.selected_project)
+            else:
+                st.markdown("### 📋 Your Projects")
+                projects = load_projects(client, source_app_filter)
+                render_project_table(projects, search_query)
+
+                if projects:
+                    st.divider()
+                    total_nodes = sum(p.node_count or 0 for p in projects)
+                    total_edges = sum(p.edge_count or 0 for p in projects)
+                    st.caption(f"**Total:** {len(projects)} projects • {total_nodes:,} nodes • {total_edges:,} edges")
+    
+    with tab_docs:
+        render_docs_artifacts_tab()
 
 
 if __name__ == "__main__":
