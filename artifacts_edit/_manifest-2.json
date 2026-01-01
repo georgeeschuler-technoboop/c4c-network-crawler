@@ -1,5 +1,5 @@
 {
-  "manifest_version": "1.7",
+  "manifest_version": "1.8",
   "last_updated": "2026-01-01",
   "bucket": "c4c-artifacts",
   "base_url": "https://igbzclkhwnxnypjssdwz.supabase.co/storage/v1/object/public/c4c-artifacts",
@@ -10,42 +10,48 @@
       "type": "quickstart",
       "title": "Quick Start — Seed Resolver",
       "notes": "Clean messy seed lists before ActorGraph. ~5 min. (Alpha)",
-      "web_url": "https://www.connectingforchangellc.com/seed-resolver"
+      "web_url": "https://www.connectingforchangellc.com/seed-resolver",
+      "md_url": "https://igbzclkhwnxnypjssdwz.supabase.co/storage/v1/object/public/c4c-artifacts/docs/quickstart_seed_resolver.md"
     },
     {
       "id": "qs_actorgraph",
       "type": "quickstart",
       "title": "Quick Start — ActorGraph",
       "notes": "Build social networks from LinkedIn. ~15 min.",
-      "web_url": "https://www.connectingforchangellc.com/actorgraph"
+      "web_url": "https://www.connectingforchangellc.com/actorgraph",
+      "md_url": "https://igbzclkhwnxnypjssdwz.supabase.co/storage/v1/object/public/c4c-artifacts/docs/quickstart_actorgraph.md"
     },
     {
       "id": "qs_orggraph_us",
       "type": "quickstart",
       "title": "Quick Start — OrgGraph US",
       "notes": "Build funder networks from IRS 990-PF data. ~10 min.",
-      "web_url": "https://www.connectingforchangellc.com/orggraph-us"
+      "web_url": "https://www.connectingforchangellc.com/orggraph-us",
+      "md_url": "https://igbzclkhwnxnypjssdwz.supabase.co/storage/v1/object/public/c4c-artifacts/docs/quickstart_orggraph_us.md"
     },
     {
       "id": "qs_orggraph_ca",
       "type": "quickstart",
       "title": "Quick Start — OrgGraph CA",
       "notes": "Build funder networks from Canada Charity/T3010 data. ~10 min.",
-      "web_url": "https://www.connectingforchangellc.com/orggraph-ca"
+      "web_url": "https://www.connectingforchangellc.com/orggraph-ca",
+      "md_url": "https://igbzclkhwnxnypjssdwz.supabase.co/storage/v1/object/public/c4c-artifacts/docs/quickstart_orggraph_ca.md"
     },
     {
       "id": "qs_cloudprojects",
       "type": "quickstart",
       "title": "Quick Start — CloudProjects",
       "notes": "Browse and manage saved network projects and bundles.",
-      "web_url": "https://www.connectingforchangellc.com/cloudprojects"
+      "web_url": "https://www.connectingforchangellc.com/cloudprojects",
+      "md_url": "https://igbzclkhwnxnypjssdwz.supabase.co/storage/v1/object/public/c4c-artifacts/docs/quickstart_cloudprojects.md"
     },
     {
       "id": "qs_insightgraph",
       "type": "quickstart",
       "title": "Quick Start — InsightGraph",
       "notes": "Analyze networks and generate insight reports. ~5 min.",
-      "web_url": "https://www.connectingforchangellc.com/insightgraph"
+      "web_url": "https://www.connectingforchangellc.com/insightgraph",
+      "md_url": "https://igbzclkhwnxnypjssdwz.supabase.co/storage/v1/object/public/c4c-artifacts/docs/quickstart_insightgraph.md"
     },
     {
       "id": "insightgraph_metrics_v2",
