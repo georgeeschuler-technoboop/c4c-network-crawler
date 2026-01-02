@@ -103,8 +103,8 @@ UPDATED v0.15.0: grants_detail.csv saved to project folder
 - Schema aligned with OrgGraph CA for cross-border analysis
 """
 import streamlit as st
-from console_ui import inject_c4c_console_theme, c4c_header, c4c_badge, c4c_card_open, c4c_card_close, c4c_console
-from console_state import render_live_console, is_stage_complete, get_cloud_status
+from console_ui import inject_c4c_console_theme, c4c_header, c4c_badge
+from console_state import get_cloud_status
 import pandas as pd
 import json
 from io import BytesIO
@@ -3275,34 +3275,34 @@ def main():
         right_html=f"<span class='c4c-pill' style='margin-right:8px;'>{cloud_text}</span>{c4c_badge(f'v{APP_VERSION}', 'indigo')}"
     )
 
-    c4c_card_open("Quick Start", "Run a clean project in under 2 minutes.", variant="primary")
-    st.markdown(
-        """
-- **Create or select a project**
-- **Upload one or more 990-PF files** (or use demo data)
-- **Run ingestion → export a bundle** (ZIP) for Polinode + InsightGraph
-        """
-    )
-    c4c_card_close()
+    # Quick Start - collapsible, links to guide
+    with st.expander("📘 Quick Start", expanded=False):
+        st.markdown("""
+1. **Create or select a project** below
+2. **Upload one or more 990-PF files** (or use demo data)
+3. **Run ingestion → export a bundle** (ZIP) for Polinode + InsightGraph
 
-    # Live console (reflects current workflow state)
-    current_stage = render_live_console()
+[View full guide](https://www.connectingforchangellc.com/orggraph-us)
+        """)
 
     # ==========================================================================
     # STAGE 1: Project Selection
     # ==========================================================================
-    stage1_complete = is_stage_complete('project', current_stage)
     current_project = st.session_state.get('current_project')
+    has_data = st.session_state.get('processed', False)
+    
+    # Stage 1 is complete if we have a project selected
+    stage1_complete = current_project is not None
     
     # Determine expander label
-    if stage1_complete and current_project:
+    if stage1_complete:
         display_name = current_project.replace('_', ' ').title() if current_project != '_demo' else 'Demo'
-        stage1_label = f"✓ Stage 1 · Project: {display_name}"
+        stage1_label = f"✓ Project: {display_name}"
     else:
-        stage1_label = "● Stage 1 · Project"
+        stage1_label = "📁 Project"
     
     with st.expander(stage1_label, expanded=not stage1_complete):
-        if stage1_complete and current_project:
+        if stage1_complete:
             # Collapsed summary view - show change option
             col1, col2 = st.columns([4, 1])
             with col1:
