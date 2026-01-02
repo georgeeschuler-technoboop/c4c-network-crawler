@@ -1,9 +1,35 @@
 {
-  "manifest_version": "1.9",
+  "manifest_version": "2.0",
   "last_updated": "2026-01-01",
   "bucket": "c4c-artifacts",
   "base_url": "https://igbzclkhwnxnypjssdwz.supabase.co/storage/v1/object/public/c4c-artifacts",
   "docs_home": "https://www.connectingforchangellc.com/documents",
+
+  "status_rules": {
+    "alpha": [
+      "Promise still being drafted (or not yet agreed)",
+      "Core outputs not finalized (schema/format may change)",
+      "Known rough edges; user workflows still being discovered",
+      "Expect breaking changes and missing documentation"
+    ],
+    "active_dev": [
+      "Promise still moving",
+      "Docs unstable",
+      "Features in flux"
+    ],
+    "beta": [
+      "Promise locked",
+      "Outputs defined",
+      "Stability work ongoing"
+    ],
+    "stable": [
+      "Phase 5 checklist complete",
+      "Determinism verified",
+      "Soak period complete",
+      "No open expectation risks"
+    ]
+  },
+
   "docs": [
     {
       "id": "qs_seed_resolver",
@@ -68,6 +94,7 @@
       "url": "https://igbzclkhwnxnypjssdwz.supabase.co/storage/v1/object/public/c4c-artifacts/docs/INSIGHTGRAPH_V1_PROMISE.md"
     }
   ],
+
   "apps": {
     "actorgraph": {
       "name": "ActorGraph",
@@ -76,7 +103,8 @@
       "icon": "https://static.wixstatic.com/media/275a3f_87490929c29444a99f948f1e12cac9a8~mv2.png",
       "status": "stable",
       "version": "v0.5.6",
-      "quickstart_id": "qs_actorgraph"
+      "quickstart_id": "qs_actorgraph",
+      "status_blurb": "Reliable, repeatable LinkedIn-based network export engine—use this for real work and clean bundles."
     },
     "orggraph_us": {
       "name": "OrgGraph US",
@@ -85,7 +113,8 @@
       "icon": "https://static.wixstatic.com/media/275a3f_f8ac661446cc49788526af77befbf7b3~mv2.png",
       "status": "stable",
       "version": "v0.25.0",
-      "quickstart_id": "qs_orggraph_us"
+      "quickstart_id": "qs_orggraph_us",
+      "status_blurb": "Production-ready IRS 990 network builder—polinode-ready exports + funder/grantee/board structure you can trust."
     },
     "orggraph_ca": {
       "name": "OrgGraph CA",
@@ -94,7 +123,8 @@
       "icon": "https://static.wixstatic.com/media/275a3f_c5ebff210ab645a0aca15baf35ec9333~mv2.png",
       "status": "beta",
       "version": "v0.16.0",
-      "quickstart_id": "qs_orggraph_ca"
+      "quickstart_id": "qs_orggraph_ca",
+      "status_blurb": "Functional Canada variant with schema alignment in progress—good for testing cross-network workflows, still tightening edges."
     },
     "insightgraph": {
       "name": "InsightGraph",
@@ -104,7 +134,8 @@
       "status": "beta",
       "version": "v0.15.11",
       "notes": "run.py v4.0.3 — Phase 4F complete",
-      "quickstart_id": "qs_insightgraph"
+      "quickstart_id": "qs_insightgraph",
+      "status_blurb": "Promise locked and outputs defined—now in stability/testing mode en route to Stable via Phase 5."
     },
     "cloudprojects": {
       "name": "CloudProjects",
@@ -113,7 +144,8 @@
       "icon": "https://static.wixstatic.com/media/275a3f_ce58a832a0324637aed7603cec34900b~mv2.png",
       "status": "internal",
       "version": "v0.5.0",
-      "quickstart_id": "qs_cloudprojects"
+      "quickstart_id": "qs_cloudprojects",
+      "status_blurb": "Internal workspace hub for shared bundles and demo assets—treat as the team’s canonical file workspace."
     },
     "seed_resolver": {
       "name": "Seed Resolver",
@@ -122,9 +154,11 @@
       "icon": "https://static.wixstatic.com/media/275a3f_994fc437eff045c3ba6aaf4bb11af0d0~mv2.png",
       "status": "alpha",
       "version": null,
-      "quickstart_id": "qs_seed_resolver"
+      "quickstart_id": "qs_seed_resolver",
+      "status_blurb": "Early-stage helper for cleaning messy seed lists—expect rough edges, but it prevents bad downstream crawls."
     }
   },
+
   "projects": [
     {
       "id": "glfn",
@@ -188,6 +222,7 @@
       "outputs": []
     }
   ],
+
   "schema": {
     "id": "schema_conventions",
     "title": "Schema & Conventions",
