@@ -3261,11 +3261,15 @@ def inject_c4c_console_ui():
 
 def main():
     init_session_state()
+    
+    # Get cloud status for header
+    cloud_logged_in, cloud_text = get_cloud_status()
+    
     c4c_header(
         title="OrgGraph (US)",
         subtitle="Organization-centered network mapping for grants, board interlocks, and ecosystems.",
         icon_url=APP_ICON_URL,
-        right_html=c4c_badge(f"v{APP_VERSION}", "indigo")
+        right_html=f"<span class='c4c-pill' style='margin-right:8px;'>{cloud_text}</span>{c4c_badge(f'v{APP_VERSION}', 'indigo')}"
     )
 
     c4c_card_open("Quick Start", "Run a clean project in under 2 minutes.", variant="primary")
@@ -3278,12 +3282,8 @@ def main():
     )
     c4c_card_close()
 
-    # Lightweight console hint (this grows as actions run)
-    c4c_console("Console", [
-        "• Tip: Use Project Mode to start fresh or append to an existing project.",
-        "• Outputs are saved as a single bundle (ZIP) for portability.",
-        "• If cloud storage is enabled, you can also save bundles to Supabase."
-    ])
+    # Live console (reflects current workflow state)
+    current_stage = render_live_console()
 
     # ==========================================================================
     # Project Mode Selection
