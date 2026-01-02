@@ -579,8 +579,8 @@ class FunderAnalyzer(NetworkAnalyzer):
         # Decision Options
         cards.append(InsightCard(
             card_id="decision_options",
-            use_case="Decision Options",
-            title="Decision Options",
+            use_case="Strategic Considerations",
+            title="Strategic Considerations",
             summary=self._generate_decision_options(health)
         ))
         
