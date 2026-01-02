@@ -103,8 +103,7 @@ UPDATED v0.15.0: grants_detail.csv saved to project folder
 - Schema aligned with OrgGraph CA for cross-border analysis
 """
 import streamlit as st
-from console_ui import inject_c4c_console_theme, c4c_header, c4c_badge
-from console_state import get_cloud_status
+from console_ui_pipeline import inject_c4c_theme, c4c_topbar, c4c_pill, c4c_stage_open, c4c_stage_close
 import pandas as pd
 import json
 from io import BytesIO
@@ -173,7 +172,6 @@ st.set_page_config(
     page_icon=APP_ICON_URL,
     layout="wide"
 )
-inject_c4c_console_theme()
 # =============================================================================
 # Project Management Functions
 # =============================================================================
@@ -3250,241 +3248,205 @@ def render_upload_interface(project_name: str):
 # =============================================================================
 # Main Application
 # =============================================================================
-
-# =============================================================================
-# C4C CONSOLE UI (Streamlit theming helpers)
-# =============================================================================
-def inject_c4c_console_ui():
-    """Inject C4C console-style CSS. Safe to call multiple times."""
-    
-# (UI helpers moved to console_ui.py)
-
 def main():
     init_session_state()
-    
-    # Sidebar: Cloud login/status
-    render_cloud_status()
-    
-    # Get cloud status for header display
-    cloud_logged_in, cloud_text = get_cloud_status()
-    
-    c4c_header(
+    inject_c4c_theme()
+
+    # -------------------------------
+    # Cloud context (Project Store)
+    # -------------------------------
+    init_project_store()
+    cloud_client = st.session_state.get("project_store")
+
+    cloud_ok = False
+    cloud_email = ""
+    cloud_project_count = None
+
+    if cloud_client and cloud_client.is_authenticated():
+        cloud_ok = True
+        user = cloud_client.get_current_user() or {}
+        cloud_email = user.get("email", "")
+        try:
+            projects, _ = cloud_client.list_projects(source_app=SOURCE_APP)
+            cloud_project_count = len(projects) if projects else 0
+        except Exception:
+            cloud_project_count = None
+
+    # -------------------------------
+    # Top Utility Bar (persistent vibe)
+    # -------------------------------
+    pills = []
+    if cloud_ok:
+        pills.append(c4c_pill("Cloud", cloud_email or "Connected", icon="☁️"))
+        if cloud_project_count is not None:
+            pills.append(c4c_pill("Projects", str(cloud_project_count), icon="📦"))
+    else:
+        pills.append(c4c_pill("Cloud", "Not connected", icon="☁️"))
+
+    current_proj = st.session_state.get("current_project")
+    if current_proj:
+        pills.append(c4c_pill("Project", current_proj, icon="📁"))
+
+    pills.append(c4c_pill("v", APP_VERSION, icon=""))
+
+    c4c_topbar(
         title="OrgGraph (US)",
         subtitle="Organization-centered network mapping for grants, board interlocks, and ecosystems.",
         icon_url=APP_ICON_URL,
-        right_html=f"<span class='c4c-pill' style='margin-right:8px;'>{cloud_text}</span>{c4c_badge(f'v{APP_VERSION}', 'indigo')}"
+        right_pills=pills
     )
 
-    # Quick Start - collapsible, links to guide
-    with st.expander("📘 Quick Start", expanded=False):
-        st.markdown("""
-1. **Create or select a project** below
-2. **Upload one or more 990-PF files** (or use demo data)
-3. **Run ingestion → export a bundle** (ZIP) for Polinode + InsightGraph
-
-[View full guide](https://www.connectingforchangellc.com/orggraph-us)
-        """)
-
-    # ==========================================================================
-    # STAGE 1: Project Selection
-    # ==========================================================================
-    current_project = st.session_state.get('current_project')
-    has_data = st.session_state.get('processed', False)
-    
-    # Stage 1 is complete if we have a project selected
-    stage1_complete = current_project is not None
-    
-    # Determine expander label
-    if stage1_complete:
-        display_name = current_project.replace('_', ' ').title() if current_project != '_demo' else 'Demo'
-        stage1_label = f"✓ Project: {display_name}"
-    else:
-        stage1_label = "📁 Project"
-    
-    with st.expander(stage1_label, expanded=not stage1_complete):
-        if stage1_complete:
-            # Collapsed summary view - show change option
-            col1, col2 = st.columns([4, 1])
-            with col1:
-                display_name = current_project.replace('_', ' ').title() if current_project != '_demo' else 'Demo'
-                st.markdown(f"**Active project:** `{current_project}`")
-            with col2:
-                if st.button("Change", key="stage1_change_btn", type="secondary"):
-                    st.session_state.current_project = None
-                    clear_session_state()
+    # -------------------------------
+    # Cloud utility (not a pipeline stage)
+    # -------------------------------
+    with st.expander("☁️ Cloud", expanded=False):
+        if not cloud_client:
+            st.info("Cloud storage is unavailable in this deployment (missing Supabase configuration).")
+        elif cloud_ok:
+            colA, colB = st.columns([4, 1])
+            with colA:
+                st.caption(f"Signed in as **{cloud_email}**" if cloud_email else "Signed in.")
+            with colB:
+                if st.button("Logout", key="cloud_logout_main", use_container_width=True):
+                    cloud_client.logout()
                     st.rerun()
         else:
-            # Full project selection UI
-            projects = get_projects()
-            existing_project_names = [p["name"] for p in projects if not p["is_demo"]]
-            has_demo = any(p["is_demo"] for p in projects)
-            
-            # Mode selection
-            mode_options = ["➕ New Project"]
-            if existing_project_names:
-                mode_options.append("📂 Add to Existing Project")
-            if has_demo:
-                mode_options.append("👁️ View Demo")
-            
-            project_mode = st.radio(
-                "What would you like to do?",
-                mode_options,
-                horizontal=True,
-                label_visibility="collapsed"
-            )
-            
-            st.divider()
-            
-            # ==========================================================================
-            # NEW PROJECT MODE
-            # ==========================================================================
-            if project_mode == "➕ New Project":
-                st.markdown("**Create New Project**")
-                
-                st.caption("""
-                **Naming tips:** Use a descriptive name like "Great Lakes Funders 2024" or "Water Stewardship Network". 
-                Avoid special characters. The name becomes a folder, so "Great Lakes Funders" → `great_lakes_funders/`
-                """)
-                
-                col1, col2 = st.columns([3, 1])
-                with col1:
-                    new_project_name = st.text_input(
-                        "Project Name",
-                        placeholder="e.g., Water Funders Network",
-                        help="Choose a descriptive name for your project"
-                    )
-                
-                with col2:
-                    st.markdown("<br>", unsafe_allow_html=True)  # Spacing
-                    create_btn = st.button("Create Project", type="primary", disabled=not new_project_name)
-                
-                if new_project_name:
-                    folder_name = get_folder_name(new_project_name)
-                    st.caption(f"📁 Will create folder: `demo_data/{folder_name}/`")
-                
-                if create_btn and new_project_name:
-                    success, message = create_project(new_project_name)
+            tab1, tab2 = st.tabs(["Login", "Sign Up"])
+            with tab1:
+                email = st.text_input("Email", key="cloud_login_email_main")
+                password = st.text_input("Password", type="password", key="cloud_login_pass_main")
+                if st.button("Login", key="cloud_login_btn_main"):
+                    success, error = cloud_client.login(email, password)
                     if success:
-                        st.success(f"✅ {message}")
-                        st.session_state.current_project = get_folder_name(new_project_name)
-                        clear_session_state()
+                        st.success("✅ Logged in!")
                         st.rerun()
                     else:
-                        st.error(f"❌ {message}")
-            
-            # ==========================================================================
-            # ADD TO EXISTING PROJECT MODE
-            # ==========================================================================
-            elif project_mode == "📂 Add to Existing Project":
-                st.markdown("**Select Project**")
-                
-                # Build dropdown options with node/edge counts
-                project_options = []
-                for p in projects:
-                    if not p["is_demo"]:
-                        display_name = get_project_display_name(p["name"])
-                        if p["has_data"]:
-                            nodes_df, edges_df, grants_detail_df = load_project_data(p["name"])
-                            display_name += f" ({len(nodes_df)} nodes, {len(edges_df)} edges)"
-                        else:
-                            display_name += " (empty)"
-                        project_options.append((p["name"], display_name))
-                
-                if not project_options:
-                    st.info("No existing projects found. Create a new project first.")
+                        st.error(f"Login failed: {error}")
+            with tab2:
+                st.caption("First time? Create an account.")
+                signup_email = st.text_input("Email", key="cloud_signup_email_main")
+                signup_pass = st.text_input("Password", type="password", key="cloud_signup_pass_main")
+                if st.button("Sign Up", key="cloud_signup_btn_main"):
+                    success, error = cloud_client.signup(signup_email, signup_pass)
+                    if success:
+                        st.success("✅ Check email to confirm")
+                    else:
+                        st.error(f"Signup failed: {error}")
+
+    # ==========================================================================
+    # Stage 1 · Project
+    # ==========================================================================
+    stage1_status = "complete" if st.session_state.get("current_project") else "active"
+    c4c_stage_open(
+        1,
+        "Project",
+        status=stage1_status,
+        subtitle="Create a new project or add data to an existing project."
+    )
+
+    projects = get_projects()
+    existing_project_names = [p["name"] for p in projects if not p["is_demo"]]
+    has_demo = any(p["is_demo"] for p in projects)
+
+    mode_options = ["➕ New Project"]
+    if existing_project_names:
+        mode_options.append("📂 Add to Existing Project")
+    if has_demo:
+        mode_options.append("👁️ View Demo")
+
+    project_mode = st.radio(
+        "Project mode",
+        mode_options,
+        horizontal=True,
+        label_visibility="collapsed",
+        key="project_mode_radio"
+    )
+
+    st.markdown("")  # breathing room
+
+    if project_mode == "➕ New Project":
+        st.caption("Use a descriptive name (e.g., “Great Lakes Funders 2024”). Avoid special characters.")
+        col1, col2 = st.columns([3, 1])
+        with col1:
+            new_project_name = st.text_input(
+                "Project Name",
+                placeholder="e.g., Water Funders Network",
+                help="Choose a descriptive name for your project",
+                key="new_project_name_input"
+            )
+        with col2:
+            st.markdown("<br>", unsafe_allow_html=True)
+            create_btn = st.button("Set Project", type="primary", disabled=not new_project_name, key="create_project_btn")
+
+        if new_project_name:
+            folder_name = get_folder_name(new_project_name)
+            st.caption(f"📁 Folder: `demo_data/{folder_name}/`")
+
+        if create_btn and new_project_name:
+            success, message = create_project(new_project_name)
+            if success:
+                st.success(f"✅ {message}")
+                st.session_state.current_project = get_folder_name(new_project_name)
+                clear_session_state()
+                st.rerun()
+            else:
+                st.error(f"❌ {message}")
+
+        # Continue below once a project exists
+        if st.session_state.current_project:
+            st.markdown("---")
+            st.caption(f"✓ Project selected: **{st.session_state.current_project}**")
+
+    elif project_mode == "📂 Add to Existing Project":
+        project_options = []
+        for p in projects:
+            if not p["is_demo"]:
+                display_name = get_project_display_name(p["name"])
+                if p["has_data"]:
+                    nodes_df, edges_df, grants_detail_df = load_project_data(p["name"])
+                    display_name += f" ({len(nodes_df)} nodes, {len(edges_df)} edges)"
                 else:
-                    selected_display = st.selectbox(
-                        "Select project to add data to:",
-                        [display for _, display in project_options],
-                        label_visibility="collapsed"
-                    )
-                    
-                    # Find selected project name
-                    selected_project = None
-                    for name, display in project_options:
-                        if display == selected_display:
-                            selected_project = name
-                            break
-                    
-                    if selected_project and st.button("Open Project", type="primary"):
-                        st.session_state.current_project = selected_project
-                        st.rerun()
-            
-            # ==========================================================================
-            # VIEW DEMO MODE
-            # ==========================================================================
-            elif project_mode == "👁️ View Demo":
-                st.markdown("**Demo Dataset**")
-                st.caption(f"📂 Explore sample data from `demo_data/{DEMO_PROJECT_NAME}/`")
-                
-                if st.button("Load Demo", type="secondary"):
-                    st.session_state.current_project = DEMO_PROJECT_NAME
-                    # Load demo data into state
-                    demo_path = DEMO_DATA_DIR / DEMO_PROJECT_NAME
-                    nodes_path = demo_path / "nodes.csv"
-                    edges_path = demo_path / "edges.csv"
-                    grants_path = demo_path / "grants_detail.csv"
-                    
-                    if nodes_path.exists() and edges_path.exists():
-                        nodes_df = pd.read_csv(nodes_path)
-                        edges_df = pd.read_csv(edges_path)
-                        grants_df = pd.read_csv(grants_path) if grants_path.exists() else None
-                        set_processed_state(nodes_df, edges_df, grants_df, [], {}, [], None)
-                    st.rerun()
+                    display_name += " (empty)"
+                project_options.append((p["name"], display_name))
 
-    # ==========================================================================
-    # After Stage 1: Show upload or results based on project state
-    # ==========================================================================
-    if not current_project:
-        # No project selected - stop here
-        st.info("👆 Select or create a project above to continue.")
-        st.stop()
-    
-    # Project is selected - show appropriate next stage
-    if current_project == DEMO_PROJECT_NAME:
-        # Demo mode: show demo data directly
+        if not project_options:
+            st.info("No existing projects found. Create a new project first.")
+        else:
+            selected_display = st.selectbox(
+                "Select project",
+                [display for _, display in project_options],
+                label_visibility="collapsed",
+                key="existing_project_select"
+            )
+            selected_project = None
+            for name, display in project_options:
+                if display == selected_display:
+                    selected_project = name
+                    break
+
+            if selected_project:
+                st.session_state.current_project = selected_project
+                st.success(f"✓ Project selected: {selected_project}")
+
+    else:  # Demo
+        st.caption(f"📂 Loading from `demo_data/{DEMO_PROJECT_NAME}/`…")
         nodes_df, edges_df, grants_detail_df = load_project_data(DEMO_PROJECT_NAME)
-        
+
         if nodes_df.empty and edges_df.empty:
-            st.warning("**No demo data found.** The demo dataset hasn't been set up yet.")
-            st.stop()
-        
-        grants_count = len(grants_detail_df) if not grants_detail_df.empty else 0
-        st.success(f"✅ Demo data: {len(nodes_df)} nodes, {len(edges_df)} edges, {grants_count} grant details")
-        
-        # Show existing foundations
-        existing_foundations = get_existing_foundations(nodes_df)
-        if existing_foundations:
-            with st.expander(f"📋 Foundations in Demo ({len(existing_foundations)})", expanded=False):
-                for label, source in existing_foundations:
-                    flag = "🇨🇦" if source == "CHARITYDATA_CA" else "🇺🇸" if source == "IRS_990" else "📄"
-                    st.write(f"{flag} {label}")
-        
-        # Use grants_detail.csv if available
-        grants_df = grants_detail_df if not grants_detail_df.empty else None
-        if grants_df is None and not edges_df.empty and "edge_type" in edges_df.columns:
-            grant_edges = edges_df[edges_df["edge_type"].str.lower().isin(["grant"])].copy()
-            if not grant_edges.empty:
-                grants_df = pd.DataFrame({
-                    'foundation_name': grant_edges['from_id'],
-                    'grantee_name': grant_edges['to_id'],
-                    'grant_amount': grant_edges['amount'],
-                    'grantee_state': grant_edges.get('region', ''),
-                })
-        
-        # Render outputs (read-only demo)
-        render_graph_summary(nodes_df, edges_df, grants_df)
-        
-        show_analytics = st.checkbox("📊 Show Network Analytics", value=False)
-        if show_analytics:
-            render_analytics(grants_df, None)
-        
-        render_data_preview(nodes_df, edges_df)
-        render_downloads(nodes_df, edges_df, grants_df, None, DEMO_PROJECT_NAME, None, None)
-    else:
-        # Regular project: show upload interface
-        render_upload_interface(current_project)
+            st.warning("No demo data found. Create a new project to get started.")
+        else:
+            grants_count = len(grants_detail_df) if not grants_detail_df.empty else 0
+            st.success(f"✅ Demo: {len(nodes_df)} nodes, {len(edges_df)} edges, {grants_count} grant details")
+            st.session_state.current_project = DEMO_PROJECT_NAME
 
+    c4c_stage_close()
 
-if __name__ == "__main__":
+    # ==========================================================================
+    # Existing UI continues (Stage 2+ will be refactored next)
+    # ==========================================================================
+    if st.session_state.get("current_project"):
+        st.markdown("")
+        render_upload_interface(st.session_state.current_project)
+
+if __name__ == '__main__':
     main()
