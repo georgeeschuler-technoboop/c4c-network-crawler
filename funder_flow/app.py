@@ -3262,7 +3262,10 @@ def inject_c4c_console_ui():
 def main():
     init_session_state()
     
-    # Get cloud status for header
+    # Sidebar: Cloud login/status
+    render_cloud_status()
+    
+    # Get cloud status for header display
     cloud_logged_in, cloud_text = get_cloud_status()
     
     c4c_header(
