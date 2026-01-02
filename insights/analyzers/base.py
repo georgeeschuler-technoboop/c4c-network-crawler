@@ -475,7 +475,7 @@ def compute_brokerage_roles(G: nx.Graph, betweenness_map: dict = None) -> Broker
     
     # Run Louvain community detection
     try:
-        partition = community_louvain.best_partition(G)
+        partition = community_louvain.best_partition(G, random_state=42)
     except Exception as e:
         print(f"Warning: Community detection failed: {e}")
         return result
