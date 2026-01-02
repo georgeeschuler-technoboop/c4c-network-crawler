@@ -3289,129 +3289,164 @@ def main():
     current_stage = render_live_console()
 
     # ==========================================================================
-    # Project Mode Selection
+    # STAGE 1: Project Selection
     # ==========================================================================
+    stage1_complete = is_stage_complete('project', current_stage)
+    current_project = st.session_state.get('current_project')
     
-    st.subheader("📁 Project")
+    # Determine expander label
+    if stage1_complete and current_project:
+        display_name = current_project.replace('_', ' ').title() if current_project != '_demo' else 'Demo'
+        stage1_label = f"✓ Stage 1 · Project: {display_name}"
+    else:
+        stage1_label = "● Stage 1 · Project"
     
-    projects = get_projects()
-    existing_project_names = [p["name"] for p in projects if not p["is_demo"]]
-    has_demo = any(p["is_demo"] for p in projects)
-    
-    # Mode selection
-    mode_options = ["➕ New Project"]
-    if existing_project_names:
-        mode_options.append("📂 Add to Existing Project")
-    if has_demo:
-        mode_options.append("👁️ View Demo")
-    
-    project_mode = st.radio(
-        "What would you like to do?",
-        mode_options,
-        horizontal=True,
-        label_visibility="collapsed"
-    )
-    
-    st.divider()
-    
-    # ==========================================================================
-    # NEW PROJECT MODE
-    # ==========================================================================
-    if project_mode == "➕ New Project":
-        st.markdown("### Create New Project")
-        
-        st.caption("""
-        **Naming tips:** Use a descriptive name like "Great Lakes Funders 2024" or "Water Stewardship Network". 
-        Avoid special characters. The name becomes a folder, so "Great Lakes Funders" → `great_lakes_funders/`
-        """)
-        
-        col1, col2 = st.columns([3, 1])
-        with col1:
-            new_project_name = st.text_input(
-                "Project Name",
-                placeholder="e.g., Water Funders Network",
-                help="Choose a descriptive name for your project"
+    with st.expander(stage1_label, expanded=not stage1_complete):
+        if stage1_complete and current_project:
+            # Collapsed summary view - show change option
+            col1, col2 = st.columns([4, 1])
+            with col1:
+                display_name = current_project.replace('_', ' ').title() if current_project != '_demo' else 'Demo'
+                st.markdown(f"**Active project:** `{current_project}`")
+            with col2:
+                if st.button("Change", key="stage1_change_btn", type="secondary"):
+                    st.session_state.current_project = None
+                    clear_session_state()
+                    st.rerun()
+        else:
+            # Full project selection UI
+            projects = get_projects()
+            existing_project_names = [p["name"] for p in projects if not p["is_demo"]]
+            has_demo = any(p["is_demo"] for p in projects)
+            
+            # Mode selection
+            mode_options = ["➕ New Project"]
+            if existing_project_names:
+                mode_options.append("📂 Add to Existing Project")
+            if has_demo:
+                mode_options.append("👁️ View Demo")
+            
+            project_mode = st.radio(
+                "What would you like to do?",
+                mode_options,
+                horizontal=True,
+                label_visibility="collapsed"
             )
-        
-        with col2:
-            st.markdown("<br>", unsafe_allow_html=True)  # Spacing
-            create_btn = st.button("Create Project", type="primary", disabled=not new_project_name)
-        
-        if new_project_name:
-            folder_name = get_folder_name(new_project_name)
-            st.caption(f"📁 Will create folder: `demo_data/{folder_name}/`")
-        
-        if create_btn and new_project_name:
-            success, message = create_project(new_project_name)
-            if success:
-                st.success(f"✅ {message}")
-                st.session_state.current_project = get_folder_name(new_project_name)
-                clear_session_state()
-                st.rerun()
-            else:
-                st.error(f"❌ {message}")
-        
-        # If project was just created, show upload interface
-        if st.session_state.current_project:
-            project_name = st.session_state.current_project
+            
             st.divider()
-            render_upload_interface(project_name)
-    
-    # ==========================================================================
-    # ADD TO EXISTING PROJECT MODE
-    # ==========================================================================
-    elif project_mode == "📂 Add to Existing Project":
-        st.markdown("### Select Project")
-        
-        # Build dropdown options with node/edge counts
-        project_options = []
-        for p in projects:
-            if not p["is_demo"]:
-                display_name = get_project_display_name(p["name"])
-                if p["has_data"]:
-                    nodes_df, edges_df, grants_detail_df = load_project_data(p["name"])
-                    display_name += f" ({len(nodes_df)} nodes, {len(edges_df)} edges)"
+            
+            # ==========================================================================
+            # NEW PROJECT MODE
+            # ==========================================================================
+            if project_mode == "➕ New Project":
+                st.markdown("**Create New Project**")
+                
+                st.caption("""
+                **Naming tips:** Use a descriptive name like "Great Lakes Funders 2024" or "Water Stewardship Network". 
+                Avoid special characters. The name becomes a folder, so "Great Lakes Funders" → `great_lakes_funders/`
+                """)
+                
+                col1, col2 = st.columns([3, 1])
+                with col1:
+                    new_project_name = st.text_input(
+                        "Project Name",
+                        placeholder="e.g., Water Funders Network",
+                        help="Choose a descriptive name for your project"
+                    )
+                
+                with col2:
+                    st.markdown("<br>", unsafe_allow_html=True)  # Spacing
+                    create_btn = st.button("Create Project", type="primary", disabled=not new_project_name)
+                
+                if new_project_name:
+                    folder_name = get_folder_name(new_project_name)
+                    st.caption(f"📁 Will create folder: `demo_data/{folder_name}/`")
+                
+                if create_btn and new_project_name:
+                    success, message = create_project(new_project_name)
+                    if success:
+                        st.success(f"✅ {message}")
+                        st.session_state.current_project = get_folder_name(new_project_name)
+                        clear_session_state()
+                        st.rerun()
+                    else:
+                        st.error(f"❌ {message}")
+            
+            # ==========================================================================
+            # ADD TO EXISTING PROJECT MODE
+            # ==========================================================================
+            elif project_mode == "📂 Add to Existing Project":
+                st.markdown("**Select Project**")
+                
+                # Build dropdown options with node/edge counts
+                project_options = []
+                for p in projects:
+                    if not p["is_demo"]:
+                        display_name = get_project_display_name(p["name"])
+                        if p["has_data"]:
+                            nodes_df, edges_df, grants_detail_df = load_project_data(p["name"])
+                            display_name += f" ({len(nodes_df)} nodes, {len(edges_df)} edges)"
+                        else:
+                            display_name += " (empty)"
+                        project_options.append((p["name"], display_name))
+                
+                if not project_options:
+                    st.info("No existing projects found. Create a new project first.")
                 else:
-                    display_name += " (empty)"
-                project_options.append((p["name"], display_name))
-        
-        if not project_options:
-            st.info("No existing projects found. Create a new project first.")
-            st.stop()
-        
-        selected_display = st.selectbox(
-            "Select project to add data to:",
-            [display for _, display in project_options],
-            label_visibility="collapsed"
-        )
-        
-        # Find selected project name
-        selected_project = None
-        for name, display in project_options:
-            if display == selected_display:
-                selected_project = name
-                break
-        
-        if selected_project:
-            st.session_state.current_project = selected_project
-            st.divider()
-            render_upload_interface(selected_project)
+                    selected_display = st.selectbox(
+                        "Select project to add data to:",
+                        [display for _, display in project_options],
+                        label_visibility="collapsed"
+                    )
+                    
+                    # Find selected project name
+                    selected_project = None
+                    for name, display in project_options:
+                        if display == selected_display:
+                            selected_project = name
+                            break
+                    
+                    if selected_project and st.button("Open Project", type="primary"):
+                        st.session_state.current_project = selected_project
+                        st.rerun()
+            
+            # ==========================================================================
+            # VIEW DEMO MODE
+            # ==========================================================================
+            elif project_mode == "👁️ View Demo":
+                st.markdown("**Demo Dataset**")
+                st.caption(f"📂 Explore sample data from `demo_data/{DEMO_PROJECT_NAME}/`")
+                
+                if st.button("Load Demo", type="secondary"):
+                    st.session_state.current_project = DEMO_PROJECT_NAME
+                    # Load demo data into state
+                    demo_path = DEMO_DATA_DIR / DEMO_PROJECT_NAME
+                    nodes_path = demo_path / "nodes.csv"
+                    edges_path = demo_path / "edges.csv"
+                    grants_path = demo_path / "grants_detail.csv"
+                    
+                    if nodes_path.exists() and edges_path.exists():
+                        nodes_df = pd.read_csv(nodes_path)
+                        edges_df = pd.read_csv(edges_path)
+                        grants_df = pd.read_csv(grants_path) if grants_path.exists() else None
+                        set_processed_state(nodes_df, edges_df, grants_df, [], {}, [], None)
+                    st.rerun()
+
+    # ==========================================================================
+    # After Stage 1: Show upload or results based on project state
+    # ==========================================================================
+    if not current_project:
+        # No project selected - stop here
+        st.info("👆 Select or create a project above to continue.")
+        st.stop()
     
-    # ==========================================================================
-    # VIEW DEMO MODE
-    # ==========================================================================
-    elif project_mode == "👁️ View Demo":
-        st.markdown("### Demo Dataset")
-        st.caption(f"📂 Loading from `demo_data/{DEMO_PROJECT_NAME}/`...")
-        
+    # Project is selected - show appropriate next stage
+    if current_project == DEMO_PROJECT_NAME:
+        # Demo mode: show demo data directly
         nodes_df, edges_df, grants_detail_df = load_project_data(DEMO_PROJECT_NAME)
         
         if nodes_df.empty and edges_df.empty:
-            st.warning("""
-            **No demo data found.**
-            
-            The demo dataset hasn't been set up yet. Create a new project to get started.
-            """)
+            st.warning("**No demo data found.** The demo dataset hasn't been set up yet.")
             st.stop()
         
         grants_count = len(grants_detail_df) if not grants_detail_df.empty else 0
@@ -3420,15 +3455,14 @@ def main():
         # Show existing foundations
         existing_foundations = get_existing_foundations(nodes_df)
         if existing_foundations:
-            with st.expander(f"📋 Foundations in Demo ({len(existing_foundations)})", expanded=True):
+            with st.expander(f"📋 Foundations in Demo ({len(existing_foundations)})", expanded=False):
                 for label, source in existing_foundations:
                     flag = "🇨🇦" if source == "CHARITYDATA_CA" else "🇺🇸" if source == "IRS_990" else "📄"
                     st.write(f"{flag} {label}")
         
-        # Use grants_detail.csv if available, otherwise reconstruct from edges
+        # Use grants_detail.csv if available
         grants_df = grants_detail_df if not grants_detail_df.empty else None
         if grants_df is None and not edges_df.empty and "edge_type" in edges_df.columns:
-            # CoreGraph v1: Accept both old and new formats
             grant_edges = edges_df[edges_df["edge_type"].str.lower().isin(["grant"])].copy()
             if not grant_edges.empty:
                 grants_df = pd.DataFrame({
@@ -3438,15 +3472,18 @@ def main():
                     'grantee_state': grant_edges.get('region', ''),
                 })
         
-        # Render outputs (read-only)
+        # Render outputs (read-only demo)
         render_graph_summary(nodes_df, edges_df, grants_df)
         
         show_analytics = st.checkbox("📊 Show Network Analytics", value=False)
         if show_analytics:
-            render_analytics(grants_df, None)  # Demo mode has no region_def
+            render_analytics(grants_df, None)
         
         render_data_preview(nodes_df, edges_df)
         render_downloads(nodes_df, edges_df, grants_df, None, DEMO_PROJECT_NAME, None, None)
+    else:
+        # Regular project: show upload interface
+        render_upload_interface(current_project)
 
 
 if __name__ == "__main__":
