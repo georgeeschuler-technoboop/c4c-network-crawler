@@ -5,6 +5,7 @@
 # saved from OrgGraph, ActorGraph, and InsightGraph.
 #
 # VERSION HISTORY:
+# v0.5.1: Fix delete button (session state bug — confirmation didn't survive rerun)
 # v0.5.0: Add Docs & Artifacts tab (manifest-driven)
 # v0.4.2: Add explicit favicon debug panel + show injection errors when ?debug_favicon=1
 # v0.4.1: Favicon debug + fallback logic (local file + data-URL injection with optional diagnostics)
@@ -409,6 +410,8 @@ def init_session_state():
         st.session_state.selected_project = None
     if "active_tab" not in st.session_state:
         st.session_state.active_tab = "projects"
+    if "confirm_delete_project_id" not in st.session_state:
+        st.session_state.confirm_delete_project_id = None
 
 
 def init_project_store():
@@ -661,7 +664,11 @@ def render_project_detail(client, project):
         st.divider()
         render_data_preview(client, project)
 
+    # Track delete confirmation in session state to survive reruns
     if delete_clicked:
+        st.session_state.confirm_delete_project_id = project.id
+    
+    if st.session_state.get("confirm_delete_project_id") == project.id:
         st.divider()
         st.warning("⚠️ **Delete this project?** This cannot be undone.")
 
@@ -673,6 +680,7 @@ def render_project_detail(client, project):
                     if success:
                         st.success("✅ Project deleted")
                         st.session_state.selected_project = None
+                        st.session_state.confirm_delete_project_id = None
                         st.rerun()
                     else:
                         st.error(f"Delete failed: {error}")
@@ -680,6 +688,7 @@ def render_project_detail(client, project):
                     st.error(f"Delete error: {e}")
         with col2:
             if st.button("Cancel", use_container_width=True):
+                st.session_state.confirm_delete_project_id = None
                 st.rerun()
 
 
