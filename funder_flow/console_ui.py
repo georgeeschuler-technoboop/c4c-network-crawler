@@ -1,9 +1,8 @@
 """
-C4C Console UI helpers (Streamlit)
+C4C UI helpers (Streamlit)
 Shared styling + components used across C4C Data Platform apps (OrgGraph / ActorGraph / InsightGraph).
 
-Drop this file alongside app.py and import:
-from console_ui import inject_c4c_console_theme, c4c_header, c4c_card_open, c4c_card_close, c4c_console
+Focus: clean "Lab Console" vibe + carded, stage-based pipeline layout.
 """
 
 from __future__ import annotations
@@ -25,6 +24,7 @@ _CSS = r"""<style>
   --c4c-border:#e5e7eb;
   --c4c-card:#ffffff;
   --c4c-bg:#f8fafc;
+  --c4c-soft:#eef2ff;
 }
 
 html, body, [data-testid="stAppViewContainer"]{
@@ -36,22 +36,36 @@ html, body, [data-testid="stAppViewContainer"]{
   padding-top: 0px !important;
 }
 
-/* Tighten default padding slightly */
-..block-container, [data-testid="stMainBlockContainer"]{
-  padding-top: 3.25rem !important;
+/* Main container padding (robust across Streamlit versions) */
+.block-container, [data-testid="stMainBlockContainer"]{
+  padding-top: 1.25rem !important;
   padding-bottom: 2rem !important;
 }
 
-/* App header */
-.c4c-header{
-  display:flex;
-  gap:14px;
-  align-items:center;
+/* Top utility bar */
+.c4c-topbar{
+  background: var(--c4c-card);
+  border: 1px solid var(--c4c-border);
+  border-radius: 18px;
+  padding: 14px 16px;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
   margin: 0.25rem 0 1.0rem 0;
 }
-.c4c-header .logo{
-  width: 52px;
-  height: 52px;
+.c4c-topbar .row{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:12px;
+}
+.c4c-topbar .left{
+  display:flex;
+  align-items:center;
+  gap:14px;
+  min-width:0;
+}
+.c4c-topbar .logo{
+  width: 44px;
+  height: 44px;
   border-radius: 14px;
   border: 1px solid var(--c4c-border);
   background: var(--c4c-card);
@@ -59,82 +73,98 @@ html, body, [data-testid="stAppViewContainer"]{
   align-items:center;
   justify-content:center;
   overflow:hidden;
-  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
 }
-.c4c-header .title{
-  font-size: 1.65rem;
-  font-weight: 700;
+.c4c-topbar .title{
+  font-size: 1.35rem;
+  font-weight: 750;
   color: var(--c4c-ink);
   line-height: 1.1;
+  white-space:nowrap;
+  overflow:hidden;
+  text-overflow:ellipsis;
 }
-.c4c-header .subtitle{
-  margin-top: 2px;
-  color: var(--c4c-muted);
-  font-size: 0.95rem;
-}
-
-/* Cards */
-.c4c-card{
-  background: var(--c4c-card);
-  border: 1px solid var(--c4c-border);
-  border-radius: 16px;
-  padding: 16px 16px 12px 16px;
-  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
-  margin-bottom: 14px;
-}
-.c4c-card.primary{
-  border-left: 4px solid var(--c4c-indigo);
-  padding-left: 14px;
-}
-.c4c-card .card-title{
-  font-weight: 700;
-  color: var(--c4c-ink);
-  margin-bottom: 6px;
-}
-.c4c-card .card-subtitle{
+.c4c-topbar .subtitle{
+  margin-top: 3px;
   color: var(--c4c-muted);
   font-size: 0.92rem;
-  margin-bottom: 10px;
+  white-space:nowrap;
+  overflow:hidden;
+  text-overflow:ellipsis;
 }
-.c4c-kv{
+.c4c-topbar .right{
   display:flex;
+  align-items:center;
+  gap:8px;
   flex-wrap:wrap;
-  gap:10px 16px;
-  color: var(--c4c-muted);
-  font-size: 0.9rem;
+  justify-content:flex-end;
 }
 .c4c-pill{
   display:inline-flex;
   align-items:center;
   gap:6px;
-  padding: 4px 10px;
+  padding: 5px 10px;
   border-radius: 999px;
   border: 1px solid var(--c4c-border);
-  background: rgba(255,255,255,0.6);
+  background: rgba(255,255,255,0.75);
   color: var(--c4c-muted);
+  font-size: 0.86rem;
+}
+.c4c-pill strong{
+  color: var(--c4c-ink);
+  font-weight: 650;
 }
 
-/* Console */
-.c4c-console{
-  background: #0b1020;
-  border: 1px solid rgba(203,213,245,0.15);
-  border-radius: 16px;
-  padding: 14px 14px 10px 14px;
-  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.20);
+/* Stage cards */
+.c4c-card{
+  background: var(--c4c-card);
+  border: 1px solid var(--c4c-border);
+  border-radius: 18px;
+  padding: 16px 16px 12px 16px;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
   margin-bottom: 14px;
 }
-.c4c-console .card-title{
-  color: #e6e9ff;
-  font-weight: 700;
-  margin-bottom: 6px;
+.c4c-card .card-head{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:10px;
+  margin-bottom: 10px;
 }
-.c4c-console pre{
-  white-space: pre-wrap;
-  color: #cbd5f5;
-  margin: 0;
+.c4c-card .card-title{
+  font-weight: 750;
+  color: var(--c4c-ink);
+}
+.c4c-card .card-subtitle{
+  color: var(--c4c-muted);
+  font-size: 0.92rem;
+  margin-top: 3px;
+}
+.c4c-stage{
+  display:flex;
+  align-items:center;
+  gap:10px;
+}
+.c4c-stage .stage-label{
   font-size: 0.86rem;
-  line-height: 1.35;
+  font-weight: 650;
+  color: var(--c4c-muted);
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--c4c-border);
+  background: var(--c4c-soft);
 }
+.c4c-status{
+  font-size: 0.86rem;
+  font-weight: 650;
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--c4c-border);
+  background: rgba(255,255,255,0.75);
+  color: var(--c4c-muted);
+}
+.c4c-status.complete{ border-color: rgba(34,197,94,0.35); background: rgba(34,197,94,0.08); color: #166534; }
+.c4c-status.active{ border-color: rgba(40,37,190,0.35); background: rgba(40,37,190,0.07); color: #1e1b4b; }
+.c4c-status.idle{}
 
 /* Buttons */
 .stDownloadButton button, .stButton button{
@@ -148,77 +178,79 @@ hr{
 </style>"""
 
 
-def inject_c4c_console_theme(extra_css: str = "") -> None:
-    """
-    Inject the shared C4C console UI theme CSS.
-    Call once near the top of the app (right after st.set_page_config).
-    """
+def inject_c4c_theme(extra_css: str = "") -> None:
+    """Inject shared C4C theme CSS. Call once after st.set_page_config()."""
     st.markdown(
-        _CSS + (f"\n<style>\n{{extra_css}}\n</style>" if extra_css else ""),
+        _CSS + (f"\n<style>\n{extra_css}\n</style>" if extra_css else ""),
         unsafe_allow_html=True
     )
 
 
-def c4c_header(title: str, subtitle: str = "", icon_url: Optional[str] = None, right_html: str = "") -> None:
-    """Render the console-style header."""
+def c4c_topbar(
+    title: str,
+    subtitle: str = "",
+    icon_url: Optional[str] = None,
+    right_pills: Sequence[str] | None = None,
+) -> None:
+    """Render the top utility bar. right_pills are HTML strings (already escaped)."""
     logo_html = (
-        f"<img src='{escape(icon_url)}' style='width:42px;height:42px;object-fit:contain;'/>" if icon_url else ""
+        f"<img src='{escape(icon_url)}' style='width:34px;height:34px;object-fit:contain;'/>" if icon_url else ""
     )
+    pills_html = "".join(right_pills or [])
     st.markdown(
         f"""
-<div class='c4c-header'>
-  <div class='logo'>{logo_html}</div>
-  <div style='flex:1;min-width:0;'>
-    <div class='title'>{escape(title)}</div>
-    <div class='subtitle'>{escape(subtitle) if subtitle else ''}</div>
+<div class='c4c-topbar'>
+  <div class='row'>
+    <div class='left'>
+      <div class='logo'>{logo_html}</div>
+      <div style='min-width:0;'>
+        <div class='title'>{escape(title)}</div>
+        <div class='subtitle'>{escape(subtitle) if subtitle else ''}</div>
+      </div>
+    </div>
+    <div class='right'>{pills_html}</div>
   </div>
-  <div class='header-right'>{right_html}</div>
 </div>
 """,
         unsafe_allow_html=True,
     )
 
 
-def c4c_badge(text: str, tone: str = "default") -> str:
-    """Return a badge HTML string.
+def c4c_pill(label: str, value: str = "", icon: str = "") -> str:
+    """Return a pill HTML string."""
+    icon_html = f"<span>{escape(icon)}</span>" if icon else ""
+    value_html = f"<strong>{escape(value)}</strong>" if value else ""
+    mid = " " if (value_html and label) else ""
+    return f"<span class='c4c-pill'>{icon_html}{escape(label)}{mid}{value_html}</span>"
 
-    tone in: default, indigo, amber, terracotta, teal, success, warn, danger.
+
+def c4c_stage_open(stage_num: int, title: str, status: str = "idle", subtitle: str = "") -> None:
     """
-    t = tone.strip().lower()
-    return f"<span class='c4c-badge tone-{escape(t)}'>{escape(text)}</span>"
+    Open a stage card. Call c4c_stage_close().
 
-
-def c4c_card_open(title: str, subtitle: str = "", variant: str = "") -> None:
-    """Open a card container. Remember to call c4c_card_close().
-
-    variant examples: 'primary', 'console', 'muted'
+    status in: idle, active, complete
     """
-    v = variant.strip().lower()
-    cls = "c4c-card" + (f" variant-{escape(v)}" if v else "")
-    sub = f"<div class='card-subtitle'>{escape(subtitle)}</div>" if subtitle else ""
+    status_norm = (status or "idle").strip().lower()
+    status_text = {"idle": "○ Not started", "active": "● Active", "complete": "✓ Complete"}.get(status_norm, status_norm)
+    sub_html = f"<div class='card-subtitle'>{escape(subtitle)}</div>" if subtitle else ""
     st.markdown(
         f"""
-<div class='{cls}'>
-  <div class='card-title'>{escape(title)}</div>
-  {sub}
+<div class='c4c-card'>
+  <div class='card-head'>
+    <div class='c4c-stage'>
+      <span class='stage-label'>Stage {stage_num}</span>
+      <div>
+        <div class='card-title'>{escape(title)}</div>
+        {sub_html}
+      </div>
+    </div>
+    <span class='c4c-status {escape(status_norm)}'>{escape(status_text)}</span>
+  </div>
   <div class='card-body'>
 """,
         unsafe_allow_html=True,
     )
 
 
-def c4c_card_close() -> None:
+def c4c_stage_close() -> None:
     st.markdown("</div></div>", unsafe_allow_html=True)
-
-def c4c_console(title: str, lines: Sequence[str] | Iterable[str]) -> None:
-    """Render a console-style log block."""
-    safe_lines = "\n".join(escape(str(x)) for x in lines)
-    st.markdown(
-        f"""
-<div class='c4c-console'>
-  <div class='card-title'>{escape(title)}</div>
-  <pre>{safe_lines}</pre>
-</div>
-""",
-        unsafe_allow_html=True,
-    )
