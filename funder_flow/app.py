@@ -2846,6 +2846,10 @@ def render_downloads(nodes_df: pd.DataFrame, edges_df: pd.DataFrame,
     v0.25.0: Added board_detail.csv with interlock detection
     """
     st.subheader("📥 Export Data")
+
+    # Pipeline status flags (Stage 4)
+    if "stage4_actions" not in st.session_state:
+        st.session_state["stage4_actions"] = {"download_zip": False, "save_project": False, "save_cloud": False}
     
     # Sanitize project name for filenames
     safe_project_name = project_name.replace(" ", "_").lower() if project_name else "orggraph_export"
@@ -2908,6 +2912,7 @@ def render_downloads(nodes_df: pd.DataFrame, edges_df: pd.DataFrame,
                     if grants_detail is not None and not grants_detail.empty:
                         grants_detail.to_csv(project_path / "grants_detail.csv", index=False)
                     st.success(f"✅ Saved to project folder")
+                    st.session_state["stage4_actions"]["save_project"] = True
                 except Exception as e:
                     st.error(f"Error: {e}")
         else:
@@ -2939,6 +2944,7 @@ def render_downloads(nodes_df: pd.DataFrame, edges_df: pd.DataFrame,
                 
                 if success:
                     st.success(f"☁️ {message}")
+                    st.session_state["stage4_actions"]["save_cloud"] = True
                 else:
                     st.error(f"❌ {message}")
     
@@ -3001,6 +3007,8 @@ def render_downloads(nodes_df: pd.DataFrame, edges_df: pd.DataFrame,
             mime="application/zip",
             type="primary",
             use_container_width=True,
+            key=f"dl_zip_{safe_project_name}",
+            on_click=lambda: st.session_state["stage4_actions"].__setitem__("download_zip", True),
             help="Download everything in one bundle — ready for Polinode, sharing, or offline use"
         )
     
@@ -3569,7 +3577,9 @@ def main():
     # ==========================================================================
     # Stage 4 · Outputs
     # ==========================================================================
-    stage4_status = "idle" if not processed else "active"
+    stage4_actions = st.session_state.get("stage4_actions", {"download_zip": False, "save_project": False, "save_cloud": False})
+    stage4_done = any(bool(v) for v in stage4_actions.values())
+    stage4_status = "idle" if not processed else ("complete" if stage4_done else "active")
     c4c_stage_open(
         4,
         "Outputs",
@@ -3580,6 +3590,17 @@ def main():
     if not processed:
         st.info("Run **Stage 3 · Process** to generate outputs.")
     else:
+        # Stage 4 completion summary
+        stage4_actions = st.session_state.get("stage4_actions", {"download_zip": False, "save_project": False, "save_cloud": False})
+        done_labels = []
+        if stage4_actions.get("download_zip"):
+            done_labels.append("Downloaded ZIP")
+        if stage4_actions.get("save_project"):
+            done_labels.append("Saved to Project")
+        if stage4_actions.get("save_cloud"):
+            done_labels.append("Saved to Cloud")
+        if done_labels:
+            st.caption("✓ " + " · ".join(done_labels))
         # Region definition may be set during Stage 3; fall back to 'none'
         region_def = st.session_state.get("region_def", {"id": "none", "name": "None"})
         render_downloads(
