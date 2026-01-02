@@ -1,5 +1,5 @@
 {
-  "manifest_version": "1.8",
+  "manifest_version": "1.9",
   "last_updated": "2026-01-01",
   "bucket": "c4c-artifacts",
   "base_url": "https://igbzclkhwnxnypjssdwz.supabase.co/storage/v1/object/public/c4c-artifacts",
@@ -59,6 +59,13 @@
       "title": "InsightGraph — Metrics Calculation Guide v2.0",
       "notes": "How network metrics are calculated. For Sarah's data science review.",
       "url": "https://igbzclkhwnxnypjssdwz.supabase.co/storage/v1/object/public/c4c-artifacts/docs/insightgraph_metrics_v2.pdf"
+    },
+    {
+      "id": "insightgraph_v1_promise",
+      "type": "contract",
+      "title": "InsightGraph v1.0 — Product Promise",
+      "notes": "Scope contract defining what v1.0 guarantees and does not guarantee.",
+      "url": "https://igbzclkhwnxnypjssdwz.supabase.co/storage/v1/object/public/c4c-artifacts/docs/INSIGHTGRAPH_V1_PROMISE.md"
     }
   ],
   "apps": {
@@ -94,9 +101,9 @@
       "description": "Network-type-aware analysis, broker roles, overlap detection, and narrative-ready insight outputs.",
       "url": "https://c4c-network-crawler-insights-cards.streamlit.app/",
       "icon": "https://static.wixstatic.com/media/275a3f_7736e28c9f5e40c1b2407e09dc5cb6e7~mv2.png",
-      "status": "active_dev",
+      "status": "beta",
       "version": "v0.15.11",
-      "notes": "run.py v4.0.3",
+      "notes": "run.py v4.0.3 — Phase 4F complete",
       "quickstart_id": "qs_insightgraph"
     },
     "cloudprojects": {
@@ -105,7 +112,7 @@
       "url": "https://c4c-network-crawler-test.streamlit.app/",
       "icon": "https://static.wixstatic.com/media/275a3f_ce58a832a0324637aed7603cec34900b~mv2.png",
       "status": "internal",
-      "version": "v0.4.0",
+      "version": "v0.5.0",
       "quickstart_id": "qs_cloudprojects"
     },
     "seed_resolver": {
