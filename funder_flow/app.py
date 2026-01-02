@@ -104,6 +104,7 @@ UPDATED v0.15.0: grants_detail.csv saved to project folder
 """
 import streamlit as st
 from console_ui import inject_c4c_console_theme, c4c_header, c4c_badge, c4c_card_open, c4c_card_close, c4c_console
+from console_state import render_live_console, is_stage_complete, get_cloud_status
 import pandas as pd
 import json
 from io import BytesIO
