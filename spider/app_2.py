@@ -12,9 +12,10 @@ from pyvis.network import Network
 # =============================================================================
 # App Versioning
 # =============================================================================
-APP_VERSION = "0.2.6"
+APP_VERSION = "0.2.7"
 
 VERSION_HISTORY = [
+    ("0.2.7", "Add animation presets (Gentle/Medium/Wild) and Pause/Resume button for PyVis physics control. Add continuous simulation mode."),
     ("0.2.6", "Fix blank renders by using PyVis inline assets (cdn_resources='in_line'). Add filter-by-community. Improve PyVis physics options."),
     ("0.2.5", "Stabilize PyVis options: JSON-only set_options, empty-graph guard, debug mode."),
     ("0.2.4", "Add visible version + version history in UI; keep layout modes + re-run layout + exports."),
@@ -101,6 +102,91 @@ def compute_layout_positions(G: nx.Graph, layout_algo: str, seed: int) -> Dict[s
     return scaled
 
 
+def inject_pause_resume_button(html_str: str, physics_enabled: bool, continuous_simulation: bool) -> str:
+    """
+    Inject a Pause/Resume button into the PyVis HTML.
+    Only injects if physics is enabled. 
+    Note: continuous_simulation is available for future enhancements but currently unused.
+    """
+    if not physics_enabled:
+        return html_str
+    
+    # JavaScript snippet that adds a floating Pause/Resume button
+    script = """
+    <script type="text/javascript">
+    (function() {
+        // Wait for network to be initialized
+        var checkNetwork = setInterval(function() {
+            if (typeof network !== 'undefined' && network) {
+                clearInterval(checkNetwork);
+                initPauseResumeButton();
+            }
+        }, 100);
+        
+        function initPauseResumeButton() {
+            // Create button
+            var btn = document.createElement('button');
+            btn.id = 'pauseResumeBtn';
+            btn.textContent = 'Pause';
+            btn.style.cssText = 'position: absolute; top: 10px; right: 10px; z-index: 1000; ' +
+                'padding: 8px 16px; background-color: #4c78a8; color: white; border: none; ' +
+                'border-radius: 4px; cursor: pointer; font-size: 14px; font-family: arial; ' +
+                'box-shadow: 0 2px 4px rgba(0,0,0,0.2); transition: background-color 0.2s;';
+            
+            // Hover effect
+            btn.onmouseover = function() { this.style.backgroundColor = '#3a5f8a'; };
+            btn.onmouseout = function() { this.style.backgroundColor = '#4c78a8'; };
+            
+            var isPaused = false;
+            
+            btn.onclick = function() {
+                if (typeof network === 'undefined' || !network) return;
+                
+                if (isPaused) {
+                    // Resume
+                    if (typeof network.startSimulation === 'function') {
+                        network.startSimulation();
+                    } else if (typeof network.physics !== 'undefined' && 
+                               typeof network.physics.startSimulation === 'function') {
+                        network.physics.startSimulation();
+                    }
+                    btn.textContent = 'Pause';
+                    isPaused = false;
+                } else {
+                    // Pause
+                    if (typeof network.stopSimulation === 'function') {
+                        network.stopSimulation();
+                    } else if (typeof network.physics !== 'undefined' && 
+                               typeof network.physics.stopSimulation === 'function') {
+                        network.physics.stopSimulation();
+                    }
+                    btn.textContent = 'Resume';
+                    isPaused = true;
+                }
+            };
+            
+            // Find the network container and append button
+            var container = document.getElementById('mynetwork');
+            if (container) {
+                container.parentElement.style.position = 'relative';
+                container.parentElement.appendChild(btn);
+            }
+        }
+    })();
+    </script>
+    """
+    
+    # Insert before closing </body> tag
+    if "</body>" in html_str:
+        html_str = html_str.replace("</body>", script + "\n</body>")
+    else:
+        # Fallback: append to end
+        html_str += script
+    
+    return html_str
+
+
+
 def build_graph(
     nodes_df: pd.DataFrame,
     edges_df: pd.DataFrame,
@@ -159,7 +245,14 @@ def build_graph(
     return G
 
 
-def pyvis_options_json(physics_enabled: bool, solver: str, damping: float, spring_len: int) -> str:
+def pyvis_options_json(
+    physics_enabled: bool,
+    solver: str,
+    damping: float,
+    spring_len: int,
+    stabilization_enabled: bool = True,
+    continuous_simulation: bool = False,
+) -> str:
     """
     PyVis expects JSON only. (Do not pass JS like `var options = {...}`.)
     """
@@ -183,7 +276,11 @@ def pyvis_options_json(physics_enabled: bool, solver: str, damping: float, sprin
         "physics": {
             "enabled": bool(physics_enabled),
             "solver": solver,  # "barnesHut" or "forceAtlas2Based"
-            "stabilization": {"enabled": True, "iterations": 250, "updateInterval": 25},
+            "stabilization": {
+                "enabled": bool(stabilization_enabled) and not continuous_simulation,
+                "iterations": 250 if not continuous_simulation else 100,
+                "updateInterval": 25,
+            },
             "barnesHut": {
                 "gravitationalConstant": -2200,
                 "centralGravity": 0.25,
@@ -220,6 +317,8 @@ def to_pyvis(
     solver: str,
     damping: float,
     spring_len: int,
+    stabilization_enabled: bool = True,
+    continuous_simulation: bool = False,
 ) -> Network:
     # CRITICAL: inline assets prevent blank render on Streamlit Cloud / CSP environments
     net = Network(
@@ -334,7 +433,16 @@ def to_pyvis(
         net.add_edge(u_str, v_str, label=e_label, color=e_color, width=width, title=str(attrs))
 
     # JSON-only options (no JS)
-    net.set_options(pyvis_options_json(physics_enabled, solver=solver, damping=damping, spring_len=spring_len))
+    net.set_options(
+        pyvis_options_json(
+            physics_enabled,
+            solver=solver,
+            damping=damping,
+            spring_len=spring_len,
+            stabilization_enabled=stabilization_enabled,
+            continuous_simulation=continuous_simulation,
+        )
+    )
     return net
 
 
@@ -384,9 +492,96 @@ with st.sidebar:
 
     st.divider()
     st.header("PyVis physics tuning")
-    solver = st.selectbox("Physics solver", ["barnesHut", "forceAtlas2Based"], index=0)
-    damping = st.slider("Damping (higher = settles faster)", 0.05, 0.95, 0.35, 0.05)
-    spring_len = st.slider("Spring length", 30, 300, 120, 10)
+    
+    # Animation presets
+    st.markdown("**Animation presets**")
+    preset_choice = st.radio(
+        "Choose a preset (or customize manually below)",
+        ["(none - manual)", "Gentle", "Medium", "Wild"],
+        index=0,
+        help="Presets auto-configure solver, damping, spring length, and continuous simulation. Manual adjustments override preset.",
+    )
+    
+    # Define preset values
+    preset_configs = {
+        "Gentle": {
+            "solver": "barnesHut",
+            "damping": 0.7,
+            "spring_len": 200,
+            "animation_intensity": 0.7,
+            "continuous_simulation": False,
+        },
+        "Medium": {
+            "solver": "barnesHut",
+            "damping": 0.45,
+            "spring_len": 120,
+            "animation_intensity": 1.0,
+            "continuous_simulation": False,
+        },
+        "Wild": {
+            "solver": "forceAtlas2Based",
+            "damping": 0.25,
+            "spring_len": 60,
+            "animation_intensity": 1.5,
+            "continuous_simulation": True,
+        },
+    }
+    
+    # Apply preset or use session state defaults
+    if "preset_applied" not in st.session_state:
+        st.session_state.preset_applied = None
+    
+    # If preset changed, apply it
+    if preset_choice != "(none - manual)" and preset_choice != st.session_state.preset_applied:
+        if preset_choice in preset_configs:
+            st.session_state.preset_applied = preset_choice
+            preset = preset_configs[preset_choice]
+            st.session_state.solver_preset = preset["solver"]
+            st.session_state.damping_preset = preset["damping"]
+            st.session_state.spring_len_preset = preset["spring_len"]
+            st.session_state.animation_intensity_preset = preset["animation_intensity"]
+            st.session_state.continuous_simulation_preset = preset["continuous_simulation"]
+    elif preset_choice == "(none - manual)":
+        st.session_state.preset_applied = None
+    
+    # Get values (from preset or use widget defaults)
+    solver_default = st.session_state.get("solver_preset", "barnesHut")
+    damping_default = st.session_state.get("damping_preset", 0.35)
+    spring_len_default = st.session_state.get("spring_len_preset", 120)
+    animation_intensity_default = st.session_state.get("animation_intensity_preset", 1.0)
+    continuous_simulation_default = st.session_state.get("continuous_simulation_preset", False)
+    
+    st.markdown("---")
+    solver = st.selectbox(
+        "Physics solver",
+        ["barnesHut", "forceAtlas2Based"],
+        index=0 if solver_default == "barnesHut" else 1,
+        key="solver_widget",
+    )
+    damping = st.slider(
+        "Damping (higher = settles faster)",
+        0.05, 0.95, float(damping_default), 0.05,
+        key="damping_widget",
+    )
+    spring_len = st.slider(
+        "Spring length",
+        30, 300, int(spring_len_default), 10,
+        key="spring_len_widget",
+    )
+    
+    continuous_simulation = st.checkbox(
+        "Continuous simulation (nodes keep moving)",
+        value=continuous_simulation_default,
+        help="When enabled, physics never stops. Good for organic/living network feel.",
+        key="continuous_simulation_widget",
+    )
+    
+    animation_intensity = st.slider(
+        "Animation intensity",
+        0.1, 2.0, float(animation_intensity_default), 0.1,
+        help="Visual indicator of preset intensity. Currently for reference only; not directly applied to PyVis physics.",
+        key="animation_intensity_widget",
+    )
 
     st.divider()
     st.header("Performance")
@@ -673,9 +868,15 @@ with col2:
         solver=solver,
         damping=damping,
         spring_len=spring_len,
+        stabilization_enabled=True,
+        continuous_simulation=continuous_simulation,
     )
 
-    st.components.v1.html(net.generate_html(), height=780, scrolling=True)
+    # Generate HTML and inject Pause/Resume button if physics enabled
+    html_content = net.generate_html()
+    html_content = inject_pause_resume_button(html_content, physics_enabled, continuous_simulation)
+    
+    st.components.v1.html(html_content, height=780, scrolling=True)
 
     with st.expander("Downloads"):
         out_nodes = pd.DataFrame([{"id": str(n), **a} for n, a in H.nodes(data=True)])
