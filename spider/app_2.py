@@ -223,10 +223,16 @@ def insert_pause_resume_button(html: str, physics_active: bool, continuous_simul
     // Wait for the network to be initialized
     window.addEventListener('load', function() {
         // Try to find the network instance - PyVis typically assigns it to 'network' variable
+        var attempts = 0;
+        var maxAttempts = 50; // Max 5 seconds (50 * 100ms)
         var checkNetwork = setInterval(function() {
+            attempts++;
             if (typeof network !== 'undefined' && network) {
                 clearInterval(checkNetwork);
                 initPauseButton();
+            } else if (attempts >= maxAttempts) {
+                clearInterval(checkNetwork);
+                console.warn('PyVis network instance not found after timeout');
             }
         }, 100);
         
@@ -457,8 +463,6 @@ if "spring_len" not in st.session_state:
     st.session_state.spring_len = 120
 if "continuous_simulation" not in st.session_state:
     st.session_state.continuous_simulation = False
-if "animation_intensity" not in st.session_state:
-    st.session_state.animation_intensity = 1.0
 
 
 # =============================================================================
@@ -516,19 +520,16 @@ with st.sidebar:
         st.session_state.solver = "barnesHut"
         st.session_state.damping = 0.7
         st.session_state.spring_len = 200
-        st.session_state.animation_intensity = 0.7
         st.session_state.continuous_simulation = False
     elif selected_preset == "Medium":
         st.session_state.solver = "barnesHut"
         st.session_state.damping = 0.45
         st.session_state.spring_len = 120
-        st.session_state.animation_intensity = 1.0
         st.session_state.continuous_simulation = False
     elif selected_preset == "Wild":
         st.session_state.solver = "forceAtlas2Based"
         st.session_state.damping = 0.25
         st.session_state.spring_len = 60
-        st.session_state.animation_intensity = 1.5
         st.session_state.continuous_simulation = True
     
     st.markdown("---")
