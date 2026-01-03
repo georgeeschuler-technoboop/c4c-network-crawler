@@ -22,7 +22,11 @@ VERSION_HISTORY = [
     ("0.2.0", "Initial upload + mapping + basic filters and visualization."),
 ]
 
-st.set_page_config(page_title=f"Mini Network Mapper v{APP_VERSION}", layout="wide")
+# Hosted icon image provided by user
+ICON_URL = "https://static.wixstatic.com/media/275a3f_79568d0917e7417ba66260068963efde~mv2.png"
+
+# set page config including page_icon (Streamlit accepts emoji or local path; a URL often works in modern Streamlit)
+st.set_page_config(page_title=f"MiniGraph v{APP_VERSION}", layout="wide", page_icon=ICON_URL)
 
 
 # =============================================================================
@@ -488,8 +492,21 @@ if "animation_intensity" not in st.session_state:
 # =============================================================================
 # UI
 # =============================================================================
-st.title("Mini Network Mapper")
-st.caption(f"Version: **v{APP_VERSION}**")
+# Header with icon, title and subtitle
+header_col_icon, header_col_text = st.columns([0.09, 0.91], gap="small")
+with header_col_icon:
+    try:
+        st.image(ICON_URL, width=56)
+    except Exception:
+        # If image fails to load for any reason, fall back to nothing
+        pass
+
+with header_col_text:
+    st.markdown("## MiniGraph")
+    st.markdown(
+        "A lightweight, experimental tool for quickly sketching and inspecting small network structures before deeper analysis."
+    )
+    st.caption(f"Version: **v{APP_VERSION}** — Experimental (pre-alpha)")
 
 with st.expander("Version history", expanded=False):
     for v, note in VERSION_HISTORY:
