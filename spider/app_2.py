@@ -105,7 +105,8 @@ def compute_layout_positions(G: nx.Graph, layout_algo: str, seed: int) -> Dict[s
 def inject_pause_resume_button(html_str: str, physics_enabled: bool, continuous_simulation: bool) -> str:
     """
     Inject a Pause/Resume button into the PyVis HTML.
-    Only injects if physics is enabled. The button is more useful with continuous simulation.
+    Only injects if physics is enabled. 
+    Note: continuous_simulation is available for future enhancements but currently unused.
     """
     if not physics_enabled:
         return html_str
@@ -532,13 +533,14 @@ with st.sidebar:
     
     # If preset changed, apply it
     if preset_choice != "(none - manual)" and preset_choice != st.session_state.preset_applied:
-        st.session_state.preset_applied = preset_choice
-        preset = preset_configs[preset_choice]
-        st.session_state.solver_preset = preset["solver"]
-        st.session_state.damping_preset = preset["damping"]
-        st.session_state.spring_len_preset = preset["spring_len"]
-        st.session_state.animation_intensity_preset = preset["animation_intensity"]
-        st.session_state.continuous_simulation_preset = preset["continuous_simulation"]
+        if preset_choice in preset_configs:
+            st.session_state.preset_applied = preset_choice
+            preset = preset_configs[preset_choice]
+            st.session_state.solver_preset = preset["solver"]
+            st.session_state.damping_preset = preset["damping"]
+            st.session_state.spring_len_preset = preset["spring_len"]
+            st.session_state.animation_intensity_preset = preset["animation_intensity"]
+            st.session_state.continuous_simulation_preset = preset["continuous_simulation"]
     elif preset_choice == "(none - manual)":
         st.session_state.preset_applied = None
     
@@ -577,7 +579,7 @@ with st.sidebar:
     animation_intensity = st.slider(
         "Animation intensity",
         0.1, 2.0, float(animation_intensity_default), 0.1,
-        help="Multiplier for animation speed (higher = more movement). Not directly used by PyVis but can inform custom behaviors.",
+        help="Visual indicator of preset intensity. Currently for reference only; not directly applied to PyVis physics.",
         key="animation_intensity_widget",
     )
 
