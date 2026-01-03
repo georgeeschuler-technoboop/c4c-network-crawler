@@ -159,10 +159,30 @@ def build_graph(
     return G
 
 
-def pyvis_options_json(physics_enabled: bool, solver: str, damping: float, spring_len: int) -> str:
+def pyvis_options_json(
+    physics_enabled: bool,
+    solver: str,
+    damping: float,
+    spring_len: int,
+    stabilization_enabled: bool = True,
+    intensity: float = 1.0,
+) -> str:
     """
     PyVis expects JSON only. (Do not pass JS like `var options = {...}`.)
+
+    Added parameters:
+    - stabilization_enabled: when False, physics runs continuously (more "animated")
+    - intensity: multiplier for selective physics params to make motion stronger/weaker
     """
+    # Base solver-specific defaults; intensity scales them
+    barnes_grav = int(-2200 * intensity)
+    barnes_spring_const = 0.03 * intensity
+    barnes_avoid = 0.4 * (1.0 + (intensity - 1.0) * 0.5)
+
+    fa_grav = int(-40 * intensity)
+    fa_spring_const = 0.08 * intensity
+    fa_avoid = 0.5 * (1.0 + (intensity - 1.0) * 0.5)
+
     options: Dict[str, Any] = {
         "interaction": {
             "hover": True,
@@ -183,27 +203,132 @@ def pyvis_options_json(physics_enabled: bool, solver: str, damping: float, sprin
         "physics": {
             "enabled": bool(physics_enabled),
             "solver": solver,  # "barnesHut" or "forceAtlas2Based"
-            "stabilization": {"enabled": True, "iterations": 250, "updateInterval": 25},
+            # stabilization controls whether the solver runs until a stable layout,
+            # or keeps running (animated). When disabled, we add adaptive timestep settings.
+            "stabilization": {"enabled": bool(stabilization_enabled), "iterations": 250, "updateInterval": 25}
+            if stabilization_enabled
+            else {"enabled": False},
             "barnesHut": {
-                "gravitationalConstant": -2200,
+                "gravitationalConstant": barnes_grav,
                 "centralGravity": 0.25,
                 "springLength": int(spring_len),
-                "springConstant": 0.03,
+                "springConstant": float(barnes_spring_const),
                 "damping": float(damping),
-                "avoidOverlap": 0.4,
+                "avoidOverlap": float(barnes_avoid),
             },
             "forceAtlas2Based": {
-                "gravitationalConstant": -40,
+                "gravitationalConstant": fa_grav,
                 "centralGravity": 0.02,
                 "springLength": int(spring_len),
-                "springConstant": 0.08,
+                "springConstant": float(fa_spring_const),
                 "damping": float(damping),
-                "avoidOverlap": 0.5,
+                "avoidOverlap": float(fa_avoid),
             },
+            # adaptiveTimestep and timestep help produce smoother continuous animation
+            "timestep": 0.5 if not stabilization_enabled else 1.0,
+            "adaptiveTimestep": not stabilization_enabled,
         },
         "layout": {"improvedLayout": True},
     }
     return json.dumps(options)
+
+
+def insert_pause_resume_button(html: str, physics_active: bool, continuous_simulation: bool) -> str:
+    """
+    Inject a small Pause/Resume floating button + inline JS into the HTML before </body>.
+    The button appears only if physics_active is True AND continuous_simulation is True.
+    The JS will attempt to find the vis Network instance (defensive) and toggle physics via setOptions.
+    """
+    if not physics_active or not continuous_simulation:
+        return html
+
+    script = r"""
+<script type="text/javascript">
+(function(){
+  try {
+    // create button
+    var btn = document.createElement('button');
+    btn.id = 'pyvis-pause-resume';
+    btn.innerText = 'Pause';
+    btn.title = 'Pause / Resume physics simulation';
+    btn.style.position = 'fixed';
+    btn.style.top = '12px';
+    btn.style.right = '12px';
+    btn.style.zIndex = 9999;
+    btn.style.padding = '8px 12px';
+    btn.style.borderRadius = '6px';
+    btn.style.border = 'none';
+    btn.style.background = '#111';
+    btn.style.color = '#fff';
+    btn.style.fontSize = '14px';
+    btn.style.cursor = 'pointer';
+    btn.style.opacity = 0.9;
+    document.body.appendChild(btn);
+
+    // robustly find a vis Network instance on window
+    var net = window.network || null;
+    if (!net) {
+      for (var k in window) {
+        try {
+          if (window[k] && window[k].constructor && window[k].constructor.name === 'Network') {
+            net = window[k];
+            break;
+          }
+        } catch(e){}
+      }
+    }
+
+    // if still not found, try to find via global vars attached in pyvis generated scripts
+    if (!net) {
+      // find script tags and try to eval variable name assigned to new vis.Network
+      // fallback: do nothing if we can't find an instance
+      // (we keep button but disable it)
+      btn.disabled = true;
+      btn.title = 'Visualization instance not found (Pause unavailable)';
+      return;
+    }
+
+    var paused = false;
+
+    function setPhysicsEnabled(enabled) {
+      try {
+        if (typeof net.setOptions === 'function') {
+          net.setOptions({physics: {enabled: enabled}});
+        } else if (net.physics && typeof net.physics === 'object') {
+          // fallback - try manipulating internal flag
+          net.physics.enabled = enabled;
+        }
+      } catch(e) {
+        console.warn('Could not set physics via setOptions:', e);
+      }
+    }
+
+    btn.addEventListener('click', function(){
+      paused = !paused;
+      if (paused) {
+        btn.innerText = 'Resume';
+        setPhysicsEnabled(false);
+      } else {
+        btn.innerText = 'Pause';
+        setPhysicsEnabled(true);
+        // give network a nudge to stabilize/continue
+        try { if (typeof net.stabilize === 'function') net.stabilize(); } catch(e){}
+      }
+    });
+
+  } catch (e) {
+    console.warn('Pause/Resume injection error', e);
+  }
+})();
+</script>
+"""
+    # inject before </body>
+    if "</body>" in html:
+        parts = html.rsplit("</body>", 1)
+        html = parts[0] + script + "</body>" + parts[1]
+    else:
+        html = html + script
+    return html
 
 
 def to_pyvis(
@@ -220,6 +345,8 @@ def to_pyvis(
     solver: str,
     damping: float,
     spring_len: int,
+    stabilization_enabled: bool = True,
+    intensity: float = 1.0,
 ) -> Network:
     # CRITICAL: inline assets prevent blank render on Streamlit Cloud / CSP environments
     net = Network(
@@ -333,8 +460,8 @@ def to_pyvis(
 
         net.add_edge(u_str, v_str, label=e_label, color=e_color, width=width, title=str(attrs))
 
-    # JSON-only options (no JS)
-    net.set_options(pyvis_options_json(physics_enabled, solver=solver, damping=damping, spring_len=spring_len))
+    # JSON-only options (no JS) - expose stabilization & intensity tweaks to support smoother animation
+    net.set_options(pyvis_options_json(physics_enabled, solver=solver, damping=damping, spring_len=spring_len, stabilization_enabled=stabilization_enabled, intensity=intensity))
     return net
 
 
@@ -344,6 +471,19 @@ def to_pyvis(
 if "layout_seed" not in st.session_state:
     st.session_state.layout_seed = int(time.time()) % 1_000_000
 
+# initialize keys for controls so we can programmatically set them via presets
+if "selected_preset" not in st.session_state:
+    st.session_state.selected_preset = "(none)"
+if "solver" not in st.session_state:
+    st.session_state.solver = "barnesHut"
+if "damping" not in st.session_state:
+    st.session_state.damping = 0.35
+if "spring_len" not in st.session_state:
+    st.session_state.spring_len = 120
+if "continuous_simulation" not in st.session_state:
+    st.session_state.continuous_simulation = False
+if "animation_intensity" not in st.session_state:
+    st.session_state.animation_intensity = 1.0
 
 # =============================================================================
 # UI
@@ -380,13 +520,56 @@ with st.sidebar:
     )
 
     physics_checkbox = st.checkbox("Enable physics (animated)", value=True)
+
     layout_algo = st.selectbox("Python layout algorithm", ["spring", "kamada_kawai"], index=0)
 
     st.divider()
     st.header("PyVis physics tuning")
-    solver = st.selectbox("Physics solver", ["barnesHut", "forceAtlas2Based"], index=0)
-    damping = st.slider("Damping (higher = settles faster)", 0.05, 0.95, 0.35, 0.05)
-    spring_len = st.slider("Spring length", 30, 300, 120, 10)
+
+    # Animation presets UI (none / Gentle / Medium / Wild)
+    preset = st.radio(
+        "Animation preset",
+        ["(none)", "Gentle", "Medium", "Wild"],
+        index=["(none)", "Gentle", "Medium", "Wild"].index(st.session_state.get("selected_preset", "(none)")),
+        key="selected_preset",
+        help="Pick a preset to quickly tune solver, damping, spring length, intensity and continuous simulation.",
+    )
+
+    # presets mapping
+    PRESETS = {
+        "Gentle": {"solver": "barnesHut", "damping": 0.7, "spring_len": 200, "animation_intensity": 0.7, "continuous_simulation": False},
+        "Medium": {"solver": "barnesHut", "damping": 0.45, "spring_len": 120, "animation_intensity": 1.0, "continuous_simulation": False},
+        "Wild": {"solver": "forceAtlas2Based", "damping": 0.25, "spring_len": 60, "animation_intensity": 1.5, "continuous_simulation": True},
+    }
+
+    # If a preset is selected (not "(none)"), apply it to session_state so widgets reflect preset values.
+    if preset and preset in PRESETS:
+        p = PRESETS[preset]
+        # apply into session_state (updates widgets that use these keys)
+        st.session_state.solver = p["solver"]
+        st.session_state.damping = p["damping"]
+        st.session_state.spring_len = int(p["spring_len"])
+        st.session_state.animation_intensity = float(p["animation_intensity"])
+        st.session_state.continuous_simulation = bool(p["continuous_simulation"])
+
+    # Show individual controls (w/ keys so they are programmatically settable by presets)
+    solver = st.selectbox("Physics solver", ["barnesHut", "forceAtlas2Based"], index=0 if st.session_state.solver == "barnesHut" else 1, key="solver")
+    damping = st.slider("Damping (higher = settles faster)", 0.05, 0.95, st.session_state.damping, 0.05, key="damping")
+    spring_len = st.slider("Spring length", 30, 300, st.session_state.spring_len, 10, key="spring_len")
+
+    # New controls for animation behavior
+    st.markdown("Animation controls")
+    continuous_simulation = st.checkbox(
+        "Continuous simulation (keep physics running, more animated)",
+        value=st.session_state.continuous_simulation,
+        key="continuous_simulation",
+        help="When enabled, stabilization is disabled so nodes keep moving; good for 'live' animated views."
+    )
+    animation_intensity = st.slider(
+        "Animation intensity (motion strength)", 0.5, 2.0, st.session_state.animation_intensity, 0.1,
+        key="animation_intensity",
+        help="Increase to make repulsion/gravity/spring forces stronger for a more dramatic animation."
+    )
 
     st.divider()
     st.header("Performance")
@@ -537,7 +720,7 @@ with col1:
 
     search = st.text_input("Search node (by id or label text)", value="").strip().lower()
 
-    # Community filter (your requested feature)
+    # Community filter
     community_filter: Optional[List[int]] = None
     if "_community" in all_node_attrs:
         comm_vals = sorted({a.get("_community") for _, a in G.nodes(data=True) if a.get("_community") is not None})
@@ -659,6 +842,10 @@ with col2:
         else:
             physics_enabled = bool(physics_checkbox)
 
+    # If user requested continuous simulation we disable stabilization in the options so the view stays animated.
+    stabilization_enabled = not bool(continuous_simulation)
+    intensity = float(animation_intensity)
+
     net = to_pyvis(
         H,
         height="750px",
@@ -673,9 +860,14 @@ with col2:
         solver=solver,
         damping=damping,
         spring_len=spring_len,
+        stabilization_enabled=stabilization_enabled,
+        intensity=intensity,
     )
 
-    st.components.v1.html(net.generate_html(), height=780, scrolling=True)
+    html = net.generate_html()
+    # Insert Pause/Resume only if physics is active and continuous_simulation requested
+    wrapped_html = insert_pause_resume_button(html, physics_active=physics_enabled, continuous_simulation=continuous_simulation)
+    st.components.v1.html(wrapped_html, height=780, scrolling=True)
 
     with st.expander("Downloads"):
         out_nodes = pd.DataFrame([{"id": str(n), **a} for n, a in H.nodes(data=True)])
