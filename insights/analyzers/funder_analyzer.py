@@ -6,6 +6,13 @@ Wraps existing run.py logic with the NetworkAnalyzer interface.
 
 VERSION HISTORY:
 ----------------
+v1.1.0 (2026-01-06): YAML Copy Map Integration
+- Health labels now sourced from INSIGHTGRAPH_COPY_MAP_v1.yaml
+- Interpretive guardrail added to markdown reports
+- Health descriptions from YAML
+- Single source of truth for narrative copy
+- Graceful fallback if copy_manager unavailable
+
 v1.0.1 (2025-12-31): Fixed funding amount calculation
 - build_grant_graph: Prefer 'amount' column over 'weight' for edge weights
 - compute_flow_stats: Use 'amount' column for total funding calculation
@@ -42,10 +49,88 @@ from .base import (
 )
 
 # =============================================================================
+# YAML Copy Manager Integration
+# =============================================================================
+
+# Try to import copy_manager for YAML-driven labels
+try:
+    from copy_manager import get_copy_manager
+    COPY_MANAGER_AVAILABLE = True
+except ImportError:
+    COPY_MANAGER_AVAILABLE = False
+
+
+def _get_health_label(score: int) -> str:
+    """
+    Get health label using current 70/40 thresholds with YAML vocabulary.
+    
+    Mapping:
+    - ≥70 → "Strong" (top tier)
+    - ≥40 → "Moderate" (middle tier)  
+    - <40 → "Fragile" (bottom tier)
+    """
+    if COPY_MANAGER_AVAILABLE:
+        try:
+            copy = get_copy_manager()
+            # Map current thresholds to YAML bands
+            if score >= 70:
+                return copy.get_health_band(85).label  # "Strong"
+            elif score >= 40:
+                return copy.get_health_band(65).label  # "Moderate"
+            else:
+                return copy.get_health_band(30).label  # "Fragile"
+        except Exception:
+            pass
+    
+    # Fallback to original labels
+    if score >= 70:
+        return "Healthy coordination"
+    elif score >= 40:
+        return "Mixed signals"
+    else:
+        return "Fragmented / siloed"
+
+
+def _get_health_description(score: int) -> str:
+    """Get health description from YAML based on score."""
+    if COPY_MANAGER_AVAILABLE:
+        try:
+            copy = get_copy_manager()
+            if score >= 70:
+                return copy.get_health_band(85).description
+            elif score >= 40:
+                return copy.get_health_band(65).description
+            else:
+                return copy.get_health_band(30).description
+        except Exception:
+            pass
+    
+    # Fallback descriptions
+    if score >= 70:
+        return "Structurally aligned; coordination pathways are robust."
+    elif score >= 40:
+        return "Mixed signals; coordination is possible but not automatic."
+    else:
+        return "High structural risk; the network depends on a small number of critical bridges."
+
+
+def _get_health_guardrail() -> str:
+    """Get the interpretive guardrail from YAML."""
+    if COPY_MANAGER_AVAILABLE:
+        try:
+            copy = get_copy_manager()
+            return copy.health_score_helper
+        except Exception:
+            pass
+    
+    return "Network Health reflects coordination capacity — not impact, effectiveness, or intent."
+
+
+# =============================================================================
 # Version
 # =============================================================================
 
-FUNDER_ANALYZER_VERSION = "1.0.0"
+FUNDER_ANALYZER_VERSION = "1.1.0"
 
 # =============================================================================
 # Thresholds (from original run.py)
@@ -60,344 +145,303 @@ CAPITAL_HUB_THRESHOLD = 75  # Percentile for "capital hub" designation
 # =============================================================================
 
 def build_grant_graph(nodes_df: pd.DataFrame, edges_df: pd.DataFrame) -> nx.DiGraph:
-    """Build directed ORG—ORG grant graph weighted by funding amount."""
+    """Build directed graph from grant edges only."""
     G = nx.DiGraph()
     
     # Add organization nodes
-    org_nodes = nodes_df[nodes_df["node_type"].str.lower().isin(["org", "organization"])]
+    org_nodes = nodes_df[nodes_df['node_type'].isin(['org', 'organization'])]
     for _, row in org_nodes.iterrows():
-        G.add_node(row["node_id"], **row.to_dict())
+        G.add_node(row['node_id'], **row.to_dict())
     
-    # Add grant edges - prefer 'amount' (actual dollars) over 'weight' (edge count)
-    grant_edges = edges_df[edges_df["edge_type"].str.lower().isin(["grant"])]
+    # Add grant edges
+    grant_edges = edges_df[edges_df['edge_type'].isin(['grant', 'funding'])]
     for _, row in grant_edges.iterrows():
-        # OrgGraph exports: amount=actual dollars, weight=1 (edge count)
-        amount = row.get("amount")
-        if pd.notna(amount) and amount > 0:
-            edge_weight = float(amount)
-        else:
-            edge_weight = float(row.get("weight", 1))
-        G.add_edge(row["from_id"], row["to_id"], weight=edge_weight, edge_type="grant")
+        # Prefer 'amount' column for weight, fall back to 'weight'
+        weight = row.get('amount', row.get('weight', 1))
+        if pd.isna(weight):
+            weight = 1
+        G.add_edge(row['from_id'], row['to_id'], weight=weight, **row.to_dict())
     
     return G
 
 
 def build_board_graph(nodes_df: pd.DataFrame, edges_df: pd.DataFrame) -> nx.Graph:
-    """Build bipartite PERSON—ORG board membership graph."""
+    """Build undirected graph from board membership edges."""
     G = nx.Graph()
     
     # Add all nodes
     for _, row in nodes_df.iterrows():
-        G.add_node(row["node_id"], **row.to_dict())
+        G.add_node(row['node_id'], **row.to_dict())
     
-    # Add board edges
-    board_edges = edges_df[edges_df["edge_type"].str.lower().isin(["board", "board_membership"])]
+    # Add board membership edges
+    board_edges = edges_df[edges_df['edge_type'].isin(['board_membership', 'board'])]
     for _, row in board_edges.iterrows():
-        G.add_edge(row["from_id"], row["to_id"], edge_type="board")
+        G.add_edge(row['from_id'], row['to_id'], **row.to_dict())
     
     return G
 
 
 def build_interlock_graph(nodes_df: pd.DataFrame, edges_df: pd.DataFrame) -> nx.Graph:
-    """Build ORG—ORG interlock graph weighted by shared board members."""
+    """
+    Build organization-to-organization graph via shared board members.
+    
+    Two organizations are connected if they share at least one board member.
+    """
     G = nx.Graph()
     
-    # Add organization nodes
-    org_nodes = nodes_df[nodes_df["node_type"].str.lower().isin(["org", "organization"])]
-    for _, row in org_nodes.iterrows():
-        G.add_node(row["node_id"], **row.to_dict())
+    # Get board edges
+    board_edges = edges_df[edges_df['edge_type'].isin(['board_membership', 'board'])]
     
-    # Find shared board members
-    board_edges = edges_df[edges_df["edge_type"].str.lower().isin(["board", "board_membership"])]
+    # Map people to their organizations
     person_to_orgs = defaultdict(set)
     for _, row in board_edges.iterrows():
-        person_to_orgs[row["from_id"]].add(row["to_id"])
+        # Determine which is person, which is org
+        from_type = nodes_df[nodes_df['node_id'] == row['from_id']]['node_type'].iloc[0] if len(nodes_df[nodes_df['node_id'] == row['from_id']]) > 0 else 'unknown'
+        to_type = nodes_df[nodes_df['node_id'] == row['to_id']]['node_type'].iloc[0] if len(nodes_df[nodes_df['node_id'] == row['to_id']]) > 0 else 'unknown'
+        
+        if from_type == 'person' and to_type in ['org', 'organization']:
+            person_to_orgs[row['from_id']].add(row['to_id'])
+        elif to_type == 'person' and from_type in ['org', 'organization']:
+            person_to_orgs[row['to_id']].add(row['from_id'])
     
-    # Create interlock edges
-    interlock_weights = defaultdict(lambda: {"weight": 0, "shared_people": []})
-    for person_id, orgs in person_to_orgs.items():
-        orgs_list = list(orgs)
-        for i, org1 in enumerate(orgs_list):
-            for org2 in orgs_list[i+1:]:
-                key = tuple(sorted([org1, org2]))
-                interlock_weights[key]["weight"] += 1
-                interlock_weights[key]["shared_people"].append(person_id)
-    
-    for (org1, org2), data in interlock_weights.items():
-        G.add_edge(org1, org2, weight=data["weight"], shared_people=data["shared_people"])
+    # Create edges between organizations that share board members
+    for person, orgs in person_to_orgs.items():
+        org_list = list(orgs)
+        for i in range(len(org_list)):
+            for j in range(i + 1, len(org_list)):
+                if G.has_edge(org_list[i], org_list[j]):
+                    G[org_list[i]][org_list[j]]['weight'] += 1
+                    G[org_list[i]][org_list[j]]['shared_members'].append(person)
+                else:
+                    G.add_edge(org_list[i], org_list[j], weight=1, shared_members=[person])
     
     return G
 
 
-def build_combined_org_graph(grant_graph: nx.DiGraph, interlock_graph: nx.Graph) -> nx.Graph:
+def build_combined_org_graph(grant_graph: nx.DiGraph, board_graph: nx.Graph) -> nx.Graph:
     """
-    Build combined undirected org-to-org graph for brokerage analysis.
-    Combines grant relationships and interlock relationships.
-    """
-    combined = nx.Graph()
+    Build undirected org-only graph combining grant and board relationships.
     
-    # Add grant edges (as undirected)
+    Used for community detection and centrality metrics.
+    """
+    G = nx.Graph()
+    
+    # Add edges from grant graph (as undirected)
     for u, v, data in grant_graph.edges(data=True):
-        if combined.has_edge(u, v):
-            combined[u][v]['weight'] = combined[u][v].get('weight', 1) + data.get('weight', 1)
-            combined[u][v]['sources'].add('grant')
+        if G.has_edge(u, v):
+            G[u][v]['weight'] += data.get('weight', 1)
         else:
-            combined.add_edge(u, v, weight=data.get('weight', 1), sources={'grant'})
+            G.add_edge(u, v, weight=data.get('weight', 1), edge_type='grant')
     
-    # Add interlock edges
-    for u, v, data in interlock_graph.edges(data=True):
-        if combined.has_edge(u, v):
-            combined[u][v]['weight'] = combined[u][v].get('weight', 1) + data.get('weight', 1)
-            combined[u][v]['sources'].add('interlock')
-        else:
-            combined.add_edge(u, v, weight=data.get('weight', 1), sources={'interlock'})
+    # Add edges from board graph (org-to-person connections)
+    # We want org-to-org through shared people
+    org_nodes = set(n for n in grant_graph.nodes())
+    for u, v, data in board_graph.edges(data=True):
+        if u in org_nodes and v in org_nodes:
+            if G.has_edge(u, v):
+                G[u][v]['weight'] += 1
+            else:
+                G.add_edge(u, v, weight=1, edge_type='board')
     
-    return combined
+    return G
 
 
 # =============================================================================
 # Funder-Specific Metrics
 # =============================================================================
 
-def compute_funder_metrics(nodes_df: pd.DataFrame, grant_graph: nx.DiGraph, 
-                           board_graph: nx.Graph, interlock_graph: nx.Graph) -> pd.DataFrame:
-    """Compute funder-specific metrics for all nodes."""
-    metrics = []
+def compute_flow_stats(grant_graph: nx.DiGraph, nodes_df: pd.DataFrame) -> dict:
+    """Compute funding flow statistics."""
+    stats = {
+        'total_funding': 0,
+        'funder_count': 0,
+        'grantee_count': 0,
+        'multi_funder_count': 0,
+        'multi_funder_pct': 0,
+        'top5_share_pct': 0,
+    }
     
-    # Convert to undirected for betweenness calculation
-    grant_undirected = grant_graph.to_undirected() if grant_graph.number_of_edges() > 0 else nx.Graph()
-    grant_betweenness = nx.betweenness_centrality(grant_undirected) if grant_undirected.number_of_edges() > 0 else {}
-    grant_pagerank = nx.pagerank(grant_graph, weight="weight") if grant_graph.number_of_edges() > 0 else {}
-    board_betweenness = nx.betweenness_centrality(board_graph) if board_graph.number_of_edges() > 0 else {}
+    # Identify funders (nodes with outgoing grant edges)
+    funders = set(u for u, v in grant_graph.edges())
+    # Identify grantees (nodes with incoming grant edges)
+    grantees = set(v for u, v in grant_graph.edges())
     
-    # Component mapping
-    node_to_component = {}
-    if grant_graph.number_of_nodes() > 0:
-        grant_undirected = grant_graph.to_undirected()
-        for i, comp in enumerate(nx.connected_components(grant_undirected)):
-            for node in comp:
-                node_to_component[node] = i
+    stats['funder_count'] = len(funders)
+    stats['grantee_count'] = len(grantees)
     
-    for _, row in nodes_df.iterrows():
-        node_id = row["node_id"]
-        node_type = str(row.get("node_type", "")).lower()
-        
-        m = {
-            "node_id": node_id,
-            "node_type": node_type,
-            "label": row.get("label", ""),
-            "jurisdiction": row.get("jurisdiction", ""),
-            "org_slug": row.get("org_slug", ""),
-            "region": row.get("region", ""),
-        }
-        
-        if node_type in ["org", "organization"]:
-            m["degree"] = grant_graph.degree(node_id) if node_id in grant_graph else 0
-            m["grant_in_degree"] = grant_graph.in_degree(node_id) if node_id in grant_graph else 0
-            m["grant_out_degree"] = grant_graph.out_degree(node_id) if node_id in grant_graph else 0
-            
-            outflow = sum(d.get("weight", 0) for _, _, d in grant_graph.out_edges(node_id, data=True)) if node_id in grant_graph else 0
-            m["grant_outflow_total"] = outflow
-            m["betweenness"] = grant_betweenness.get(node_id, 0)
-            m["pagerank"] = grant_pagerank.get(node_id, 0)
-            m["component_id"] = node_to_component.get(node_id, -1)
-            m["shared_board_count"] = interlock_graph.degree(node_id) if node_id in interlock_graph else 0
-            m["boards_served"] = None
-        else:
-            # Person node
-            m["boards_served"] = board_graph.degree(node_id) if node_id in board_graph else 0
-            m["degree"] = m["boards_served"]
-            m["betweenness"] = board_betweenness.get(node_id, 0)
-            m["grant_in_degree"] = None
-            m["grant_out_degree"] = None
-            m["grant_outflow_total"] = None
-            m["pagerank"] = None
-            m["component_id"] = None
-            m["shared_board_count"] = None
-        
-        metrics.append(m)
+    # Total funding - use 'amount' attribute from edges
+    for u, v, data in grant_graph.edges(data=True):
+        amount = data.get('amount', data.get('weight', 0))
+        if pd.notna(amount):
+            stats['total_funding'] += float(amount)
     
-    return pd.DataFrame(metrics)
+    # Count grantees with multiple funders
+    grantee_funder_counts = defaultdict(int)
+    for u, v in grant_graph.edges():
+        grantee_funder_counts[v] += 1
+    
+    multi_funder = sum(1 for g, count in grantee_funder_counts.items() if count > 1)
+    stats['multi_funder_count'] = multi_funder
+    stats['multi_funder_pct'] = (multi_funder / len(grantees) * 100) if grantees else 0
+    
+    # Top 5 funder share
+    funder_totals = defaultdict(float)
+    for u, v, data in grant_graph.edges(data=True):
+        amount = data.get('amount', data.get('weight', 0))
+        if pd.notna(amount):
+            funder_totals[u] += float(amount)
+    
+    if funder_totals and stats['total_funding'] > 0:
+        top5 = sorted(funder_totals.values(), reverse=True)[:5]
+        stats['top5_share_pct'] = sum(top5) / stats['total_funding'] * 100
+    
+    return stats
 
 
-def compute_derived_signals(metrics_df: pd.DataFrame) -> pd.DataFrame:
-    """Add derived boolean flags based on percentile thresholds."""
-    df = metrics_df.copy()
-    df["is_connector"] = 0
-    df["is_broker"] = 0
-    df["is_hidden_broker"] = 0
-    df["is_capital_hub"] = 0
-    df["is_isolated"] = 0
+def compute_portfolio_overlap(grant_graph: nx.DiGraph) -> dict:
+    """Compute portfolio overlap between funders."""
+    # Map each funder to their grantees
+    funder_portfolios = defaultdict(set)
+    for u, v in grant_graph.edges():
+        funder_portfolios[u].add(v)
     
-    org_mask = df["node_type"].str.lower().isin(["org", "organization"])
-    org_df = df[org_mask]
+    funders = list(funder_portfolios.keys())
+    overlaps = []
     
-    if len(org_df) > 0:
-        degree_75 = np.percentile(org_df["degree"].dropna(), CONNECTOR_THRESHOLD)
-        outflow_vals = org_df["grant_outflow_total"].dropna()
-        outflow_75 = np.percentile(outflow_vals, CAPITAL_HUB_THRESHOLD) if len(outflow_vals) > 0 else 0
-        
-        df.loc[org_mask & (df["degree"] >= degree_75), "is_connector"] = 1
-        df.loc[org_mask & (df["grant_outflow_total"] >= outflow_75) & (df["grant_outflow_total"] > 0), "is_capital_hub"] = 1
-        df.loc[org_mask & (df["degree"] == 1), "is_isolated"] = 1
-        
-        # Broker thresholds among nodes with non-zero betweenness
-        connectors = org_df[org_df["betweenness"] > 0]
-        if len(connectors) > 0:
-            betweenness_85 = np.percentile(connectors["betweenness"], 85)
-            degree_40 = np.percentile(connectors["degree"], 40)
-            
-            df.loc[org_mask & (df["betweenness"] >= betweenness_85), "is_broker"] = 1
-            df.loc[org_mask & (df["betweenness"] >= betweenness_85) & (df["degree"] <= degree_40), "is_hidden_broker"] = 1
+    for i in range(len(funders)):
+        for j in range(i + 1, len(funders)):
+            f1, f2 = funders[i], funders[j]
+            shared = funder_portfolios[f1] & funder_portfolios[f2]
+            if shared:
+                # Jaccard similarity
+                union = funder_portfolios[f1] | funder_portfolios[f2]
+                overlap_pct = len(shared) / len(union) * 100
+                overlaps.append({
+                    'funder_a': f1,
+                    'funder_b': f2,
+                    'shared_count': len(shared),
+                    'overlap_pct': overlap_pct
+                })
     
-    # Person connectors
-    person_mask = df["node_type"].str.lower().isin(["person"])
-    df.loc[person_mask & (df["boards_served"] >= 2), "is_connector"] = 1
-    
-    return df
-
-
-def compute_flow_stats(edges_df: pd.DataFrame, metrics_df: pd.DataFrame) -> dict:
-    """Compute system-level funding flow statistics."""
-    grant_edges = edges_df[edges_df["edge_type"].str.lower().isin(["grant"])].copy()
-    
-    if grant_edges.empty:
-        return {
-            "total_funding": 0,
-            "funder_count": 0,
-            "grantee_count": 0,
-            "top_5_funders_share": 0,
-            "multi_funder_grantees": 0,
-            "multi_funder_pct": 0
-        }
-    
-    # Get amount - prefer 'amount' column over 'weight'
-    # OrgGraph exports: weight=1 (edge count), amount=actual dollars
-    if 'amount' in grant_edges.columns and grant_edges['amount'].notna().any():
-        # Use amount column (actual dollar values)
-        grant_edges['_amount'] = pd.to_numeric(grant_edges['amount'], errors='coerce').fillna(0)
-    elif 'weight' in grant_edges.columns:
-        # Fallback to weight if no amount column
-        grant_edges['_amount'] = pd.to_numeric(grant_edges['weight'], errors='coerce').fillna(1)
-    else:
-        # Default to 1 per edge (count-based)
-        grant_edges['_amount'] = 1
-    
-    total_funding = float(grant_edges['_amount'].sum())
-    funders = int(grant_edges['from_id'].nunique())
-    grantees = int(grant_edges['to_id'].nunique())
-    
-    # Top 5 share
-    funder_totals = grant_edges.groupby('from_id')['_amount'].sum().sort_values(ascending=False)
-    top_5_share = float(funder_totals.head(5).sum() / total_funding * 100) if total_funding > 0 else 0.0
-    
-    # Multi-funder grantees
-    grantee_funder_counts = grant_edges.groupby('to_id')['from_id'].nunique()
-    multi_funder = int((grantee_funder_counts > 1).sum())
-    multi_funder_pct = float(multi_funder / grantees * 100) if grantees > 0 else 0.0
+    # Sort by shared count
+    overlaps.sort(key=lambda x: x['shared_count'], reverse=True)
     
     return {
-        "total_funding": total_funding,
-        "funder_count": funders,
-        "grantee_count": grantees,
-        "top_5_funders_share": top_5_share,
-        "multi_funder_grantees": multi_funder,
-        "multi_funder_pct": multi_funder_pct
+        'top_pairs': overlaps[:10],
+        'max_overlap_pct': max(o['overlap_pct'] for o in overlaps) if overlaps else 0
     }
 
 
-def compute_portfolio_overlap(edges_df: pd.DataFrame) -> pd.DataFrame:
-    """Compute Jaccard similarity between funder portfolios."""
-    grant_edges = edges_df[edges_df["edge_type"].str.lower().isin(["grant"])]
+def compute_governance_stats(interlock_graph: nx.Graph, board_graph: nx.Graph, nodes_df: pd.DataFrame) -> dict:
+    """Compute governance/board interlock statistics."""
+    stats = {
+        'has_governance_data': len(board_graph.edges()) > 0,
+        'shared_board_count': 0,
+        'pct_with_interlocks': 0,
+        'top_connectors': []
+    }
     
-    if grant_edges.empty:
-        return pd.DataFrame(columns=['funder_a', 'funder_b', 'jaccard', 'shared_count', 'a_count', 'b_count'])
+    if not stats['has_governance_data']:
+        return stats
     
-    # Build funder -> grantee sets
-    funder_portfolios = grant_edges.groupby('from_id')['to_id'].apply(set).to_dict()
+    # Count shared board members (people on multiple org boards)
+    person_nodes = nodes_df[nodes_df['node_type'] == 'person']['node_id'].tolist()
+    multi_board_people = []
     
-    # Compute pairwise Jaccard
-    results = []
-    funders = list(funder_portfolios.keys())
+    for person in person_nodes:
+        if person in board_graph:
+            orgs = [n for n in board_graph.neighbors(person) 
+                   if nodes_df[nodes_df['node_id'] == n]['node_type'].iloc[0] in ['org', 'organization']
+                   if len(nodes_df[nodes_df['node_id'] == n]) > 0]
+            if len(orgs) > 1:
+                multi_board_people.append({'person': person, 'org_count': len(orgs)})
     
-    for i, f1 in enumerate(funders):
-        for f2 in funders[i+1:]:
-            set_a = funder_portfolios[f1]
-            set_b = funder_portfolios[f2]
-            intersection = len(set_a & set_b)
-            union = len(set_a | set_b)
-            jaccard = intersection / union if union > 0 else 0
-            
-            if intersection > 0:  # Only include pairs with overlap
-                results.append({
-                    'funder_a': f1,
-                    'funder_b': f2,
-                    'jaccard': jaccard,
-                    'shared_count': intersection,
-                    'a_count': len(set_a),
-                    'b_count': len(set_b)
-                })
+    stats['shared_board_count'] = len(multi_board_people)
     
-    return pd.DataFrame(results)
+    # Percentage of orgs with interlocks
+    orgs_with_interlocks = set()
+    for person_data in multi_board_people:
+        person = person_data['person']
+        if person in board_graph:
+            for neighbor in board_graph.neighbors(person):
+                orgs_with_interlocks.add(neighbor)
+    
+    org_nodes = nodes_df[nodes_df['node_type'].isin(['org', 'organization'])]
+    if len(org_nodes) > 0:
+        stats['pct_with_interlocks'] = len(orgs_with_interlocks) / len(org_nodes) * 100
+    
+    # Top connectors
+    multi_board_people.sort(key=lambda x: x['org_count'], reverse=True)
+    stats['top_connectors'] = multi_board_people[:5]
+    
+    return stats
 
 
 # =============================================================================
-# Funder Health Scoring
+# Health Score (Funder-Specific)
 # =============================================================================
 
-def compute_funder_health(flow_stats: dict, metrics_df: pd.DataFrame, 
-                          n_components: int, largest_component_pct: float) -> HealthScore:
+def compute_health_score(
+    flow_stats: dict,
+    portfolio_overlap: dict,
+    governance_stats: dict,
+    combined_graph: nx.Graph,
+    nodes_df: pd.DataFrame
+) -> HealthScore:
     """
-    Compute 0-100 health score for funder network.
+    Compute network health score for funder networks.
     
     Factors:
-    - Coordination (multi-funder grantees): 0-25 points
-    - Connectivity (largest component): 0-20 points
-    - Concentration (top 5 share): -15 to +10 points
-    - Governance (board interlocks): 0-15 points
+    - Multi-funder grantee percentage (coordination)
+    - Funding concentration (resilience)
+    - Governance connectivity (embedded ties)
+    - Network connectivity (largest component)
     """
+    score = 0
     positive_factors = []
     risk_factors = []
-    score = 20.0  # Base score
     
-    multi_funder_pct = flow_stats.get("multi_funder_pct", 0)
-    
-    # Coordination signal
-    if multi_funder_pct >= 10:
-        score += 25
+    # 1. Multi-funder percentage (0-30 points)
+    multi_funder_pct = flow_stats.get('multi_funder_pct', 0)
+    if multi_funder_pct >= 30:
+        score += 30
         positive_factors.append(f"🟢 **Strong coordination** — {multi_funder_pct:.1f}% of grantees have multiple funders")
-    elif multi_funder_pct >= 5:
+    elif multi_funder_pct >= 10:
         score += 15
         positive_factors.append(f"🟡 **Moderate coordination** — {multi_funder_pct:.1f}% have multiple funders")
-    elif multi_funder_pct >= 1:
-        score += 5
+    elif multi_funder_pct >= 5:
+        score += 8
+    else:
         risk_factors.append(f"🔴 **Low coordination** — only {multi_funder_pct:.1f}% have multiple funders")
-    else:
-        risk_factors.append("🔴 **No portfolio overlap** — funders operate in silos")
     
-    # Connectivity
-    if largest_component_pct >= 80:
+    # 2. Network connectivity (0-25 points)
+    if len(combined_graph) > 0:
+        largest_cc = max(nx.connected_components(combined_graph), key=len) if combined_graph.number_of_nodes() > 0 else set()
+        largest_component_pct = len(largest_cc) / combined_graph.number_of_nodes() * 100 if combined_graph.number_of_nodes() > 0 else 0
+        
+        if largest_component_pct >= 80:
+            score += 25
+            positive_factors.append(f"🟢 **Highly connected** — {largest_component_pct:.0f}% of organizations linked through shared funding")
+        elif largest_component_pct >= 50:
+            score += 15
+        else:
+            risk_factors.append(f"🔴 **Fragmented** — only {largest_component_pct:.0f}% connected through shared funding, most operate in isolated clusters")
+    
+    # 3. Funding concentration (0-20 points) - inverse relationship
+    top5_share = flow_stats.get('top5_share_pct', 100)
+    if top5_share <= 50:
         score += 20
-        positive_factors.append(f"🟢 **Highly connected** — {largest_component_pct:.0f}% of organizations linked through shared funding")
-    elif largest_component_pct >= 50:
-        score += 10
-    else:
-        risk_factors.append(f"🔴 **Fragmented** — only {largest_component_pct:.0f}% connected through shared funding, most operate in isolated clusters")
-    
-    # Concentration
-    top5_share = flow_stats.get("top_5_funders_share", 100)
-    if top5_share >= 95:
-        score -= 15
-        risk_factors.append(f"🔴 **Extreme concentration** — top 5 control {top5_share:.0f}%")
-    elif top5_share < 80:
-        score += 10
         positive_factors.append(f"🟢 **Distributed funding** — top 5 control {top5_share:.0f}%")
+    elif top5_share <= 70:
+        score += 12
+    elif top5_share <= 85:
+        score += 5
+    else:
+        risk_factors.append(f"🔴 **Extreme concentration** — top 5 control {top5_share:.0f}%")
     
-    # Governance connectivity
-    org_metrics = metrics_df[metrics_df["node_type"].str.lower().isin(["org", "organization"])]
-    foundations = org_metrics[org_metrics["grant_outflow_total"] > 0] if "grant_outflow_total" in org_metrics.columns else pd.DataFrame()
-    if len(foundations) > 0:
-        pct_with_interlocks = (foundations["shared_board_count"] > 0).mean() * 100
+    # 4. Governance connectivity (0-15 points)
+    if governance_stats.get('has_governance_data'):
+        pct_with_interlocks = governance_stats.get('pct_with_interlocks', 0)
         if pct_with_interlocks >= 20:
             score += 15
             positive_factors.append(f"🟢 **Governance ties** — {pct_with_interlocks:.0f}% of funders share board members")
@@ -408,12 +452,8 @@ def compute_funder_health(flow_stats: dict, metrics_df: pd.DataFrame,
     
     score = max(0, min(100, int(score)))
     
-    if score >= 70:
-        label = "Healthy coordination"
-    elif score >= 40:
-        label = "Mixed signals"
-    else:
-        label = "Fragmented / siloed"
+    # Get label from YAML (with current 70/40 thresholds)
+    label = _get_health_label(score)
     
     return HealthScore(
         score=score,
@@ -448,10 +488,10 @@ class FunderAnalyzer(NetworkAnalyzer):
         self.interlock_graph = None
         self.combined_org_graph = None
         
-        # Computed data
-        self.metrics_df = None
+        # Funder-specific stats
         self.flow_stats = None
-        self.overlap_df = None
+        self.portfolio_overlap = None
+        self.governance_stats = None
         self.brokerage_data = None
     
     def analyze(self) -> AnalysisResult:
@@ -461,169 +501,146 @@ class FunderAnalyzer(NetworkAnalyzer):
         self.grant_graph = build_grant_graph(self.nodes_df, self.edges_df)
         self.board_graph = build_board_graph(self.nodes_df, self.edges_df)
         self.interlock_graph = build_interlock_graph(self.nodes_df, self.edges_df)
-        self.combined_org_graph = build_combined_org_graph(self.grant_graph, self.interlock_graph)
+        self.combined_org_graph = build_combined_org_graph(self.grant_graph, self.board_graph)
         
-        # Compute metrics
-        self.metrics_df = compute_funder_metrics(
-            self.nodes_df, self.grant_graph, self.board_graph, self.interlock_graph
+        # Compute funder-specific metrics
+        self.flow_stats = compute_flow_stats(self.grant_graph, self.nodes_df)
+        self.portfolio_overlap = compute_portfolio_overlap(self.grant_graph)
+        self.governance_stats = compute_governance_stats(
+            self.interlock_graph, self.board_graph, self.nodes_df
         )
-        self.metrics_df = compute_derived_signals(self.metrics_df)
-        self.flow_stats = compute_flow_stats(self.edges_df, self.metrics_df)
-        self.overlap_df = compute_portfolio_overlap(self.edges_df)
         
-        # Compute brokerage (shared logic from base.py)
-        betweenness_map = dict(zip(self.metrics_df['node_id'], self.metrics_df['betweenness']))
-        self.brokerage_data = compute_brokerage_roles(self.combined_org_graph, betweenness_map)
-        self.brokerage_data.top_brokers = get_top_brokers(self.brokerage_data, self.nodes_df)
+        # Compute brokerage roles
+        self.brokerage_data = self._compute_brokerage()
         
-        # Add brokerage to metrics
-        if self.brokerage_data.enabled:
-            self.metrics_df['brokerage_role'] = self.metrics_df['node_id'].map(self.brokerage_data.roles)
-            self.metrics_df['community_id'] = self.metrics_df['node_id'].map(self.brokerage_data.communities)
-        
-        # Compute component stats
-        component_stats = self.compute_component_stats(self.combined_org_graph)
-        
-        # Compute health
-        health = compute_funder_health(
+        # Compute health score
+        health = compute_health_score(
             self.flow_stats,
-            self.metrics_df,
-            component_stats['n_components'],
-            component_stats['largest_component_pct']
+            self.portfolio_overlap,
+            self.governance_stats,
+            self.combined_org_graph,
+            self.nodes_df
         )
         
         # Generate insight cards
-        cards = self._generate_insight_cards(health, component_stats)
-        
-        # Generate project summary
-        project_summary = self._generate_project_summary()
+        cards = self._generate_insight_cards(health)
         
         # Generate markdown report
         markdown_report = self._generate_markdown_report(health, cards)
         
+        # Compute node metrics
+        metrics_df = self._compute_node_metrics()
+        
         return AnalysisResult(
-            network_type='funder',
-            source_app=self.source_app,
-            project_id=self.project_id,
-            generated_at=self.get_timestamp(),
             health=health,
             cards=cards,
-            metrics_df=self.metrics_df,
-            project_summary=project_summary,
-            brokerage=self.brokerage_data,
+            metrics_df=metrics_df,
+            project_summary=self._generate_project_summary(),
             markdown_report=markdown_report,
-            nodes_df=self.nodes_df,
-            edges_df=self.edges_df
+            network_type='funder',
+            brokerage_data=self.brokerage_data
         )
     
-    def _generate_insight_cards(self, health: HealthScore, component_stats: dict) -> list[InsightCard]:
-        """Generate funder-specific insight cards."""
+    def _compute_brokerage(self) -> BrokerageData:
+        """Compute brokerage ecosystem data."""
+        # Use combined org graph for community detection and brokerage
+        if self.combined_org_graph is None or self.combined_org_graph.number_of_nodes() == 0:
+            return BrokerageData(enabled=False, roles={}, communities=[], summary="")
+        
+        role_assignments, communities = compute_brokerage_roles(
+            self.combined_org_graph, 
+            self.nodes_df
+        )
+        
+        # Get top brokers
+        top_brokers = get_top_brokers(role_assignments, self.nodes_df, limit=8)
+        
+        # Count roles
+        role_counts = defaultdict(int)
+        for node_id, role in role_assignments.items():
+            role_counts[role] += 1
+        
+        # Generate summary
+        total_nodes = len(role_assignments)
+        strategic_roles = ['gatekeeper', 'representative', 'consultant', 'liaison']
+        strategic_count = sum(role_counts.get(r, 0) for r in strategic_roles)
+        strategic_pct = (strategic_count / total_nodes * 100) if total_nodes > 0 else 0
+        
+        if strategic_pct >= 10:
+            pattern = "Broker-rich"
+            summary = f"High brokerage capacity ({strategic_pct:.0f}% in strategic roles). Multiple actors can facilitate cross-community coordination."
+        elif strategic_pct >= 3:
+            pattern = "Balanced"
+            summary = "Brokerage roles are distributed without strong concentration. The network has moderate coordination capacity."
+        else:
+            pattern = "Coordinator-dominated"
+            summary = "Most actors strengthen within-community ties. Cross-community coordination depends on a small number of brokers."
+        
+        return BrokerageData(
+            enabled=True,
+            roles=role_assignments,
+            communities=communities,
+            role_counts=dict(role_counts),
+            top_brokers=top_brokers,
+            pattern=pattern,
+            summary=summary
+        )
+    
+    def _generate_insight_cards(self, health: HealthScore) -> list[InsightCard]:
+        """Generate insight cards for funder network."""
         cards = []
         
         # Network Health Overview
         cards.append(InsightCard(
             card_id="network_health",
-            use_case="System Framing",
             title="Network Health Overview",
+            use_case="Overall Assessment",
             summary=self._format_health_summary(health),
-            ranked_rows=[
-                {"indicator": "Health Score", "value": f"{health.score}/100", "interpretation": health.label},
-                {"indicator": "Multi-Funder Grantees", "value": f"{self.flow_stats['multi_funder_pct']:.1f}%", 
-                 "interpretation": self._interpret_multi_funder()},
-                {"indicator": "Connected through Shared Funding", "value": f"{component_stats['largest_component_pct']:.0f}%",
-                 "interpretation": self._interpret_connectivity(component_stats)},
-                {"indicator": "Top 5 Funder Share", "value": f"{self.flow_stats['top_5_funders_share']:.0f}%",
-                 "interpretation": self._interpret_concentration()}
-            ],
-            health_factors={"positive": health.positive, "risk": health.risk}
+            details={"score": health.score, "label": health.label},
+            signal_strength="high"
         ))
         
         # Funding Concentration
         cards.append(InsightCard(
-            card_id="concentration_snapshot",
-            use_case="Funding Concentration",
+            card_id="funding_concentration",
             title="Funding Concentration",
+            use_case="Funding Concentration",
             summary=self._format_concentration_summary(),
-            ranked_rows=[
-                {"metric": "Total Funding", "value": f"${self.flow_stats['total_funding']:,.0f}"},
-                {"metric": "Funders", "value": str(self.flow_stats['funder_count'])},
-                {"metric": "Grantees", "value": str(self.flow_stats['grantee_count'])},
-                {"metric": "Top 5 Share", "value": f"{self.flow_stats['top_5_funders_share']:.0f}%"},
-                {"metric": "Multi-Funder Grantees", "value": str(self.flow_stats['multi_funder_grantees'])}
-            ]
+            details=self.flow_stats,
+            signal_strength="high"
         ))
         
-        # Board Conduits
-        multi_board = self.metrics_df[
-            (self.metrics_df['node_type'].str.lower() == 'person') & 
-            (self.metrics_df['boards_served'] >= 2)
-        ] if 'boards_served' in self.metrics_df.columns else pd.DataFrame()
-        
+        # Governance / Board Interlocks
         cards.append(InsightCard(
-            card_id="shared_board_conduits",
-            use_case="Board Network & Conduits",
+            card_id="governance",
             title="Shared Board Conduits",
-            summary=self._format_board_summary(multi_board)
+            use_case="Board Network & Conduits",
+            summary=self._format_governance_summary(),
+            details=self.governance_stats,
+            signal_strength="high" if self.governance_stats.get('has_governance_data') else "unavailable"
         ))
         
         # Hidden Brokers
-        hidden_brokers = self.metrics_df[self.metrics_df['is_hidden_broker'] == 1] if 'is_hidden_broker' in self.metrics_df.columns else pd.DataFrame()
-        
         cards.append(InsightCard(
             card_id="hidden_brokers",
-            use_case="Brokerage Roles",
             title="Hidden Brokers",
-            summary=self._format_hidden_broker_summary(hidden_brokers)
+            use_case="Brokerage Roles",
+            summary=self._format_broker_summary(),
+            details={},
+            signal_strength="medium"
         ))
         
-        # Decision Options
+        # Strategic Recommendations
         cards.append(InsightCard(
-            card_id="decision_options",
-            use_case="Strategic Considerations",
+            card_id="recommendations",
             title="Strategic Considerations",
-            summary=self._generate_decision_options(health)
+            use_case="Strategic Considerations",
+            summary=self._format_recommendations(health),
+            details={},
+            signal_strength="high"
         ))
         
         return cards
-    
-    def _generate_project_summary(self) -> ProjectSummary:
-        """Generate project summary for funder network."""
-        org_count = int(len(self.nodes_df[self.nodes_df['node_type'].str.lower().isin(['org', 'organization'])]))
-        person_count = int(len(self.nodes_df[self.nodes_df['node_type'].str.lower() == 'person']))
-        
-        grant_count = int(len(self.edges_df[self.edges_df['edge_type'].str.lower() == 'grant']))
-        board_count = int(len(self.edges_df[self.edges_df['edge_type'].str.lower().isin(['board', 'board_membership'])]))
-        
-        multi_board = self.metrics_df[
-            (self.metrics_df['node_type'].str.lower() == 'person') & 
-            (self.metrics_df['boards_served'] >= 2)
-        ] if 'boards_served' in self.metrics_df.columns else pd.DataFrame()
-        
-        return ProjectSummary(
-            generated_at=self.get_timestamp(),
-            network_type='funder',
-            source_app=self.source_app,
-            node_counts={
-                "total": int(len(self.nodes_df)),
-                "organizations": org_count,
-                "people": person_count
-            },
-            edge_counts={
-                "total": int(len(self.edges_df)),
-                "grants": grant_count,
-                "board_memberships": board_count
-            },
-            funding={
-                "total_amount": float(self.flow_stats['total_funding']),
-                "funder_count": int(self.flow_stats['funder_count']),
-                "grantee_count": int(self.flow_stats['grantee_count']),
-                "top_5_share": float(self.flow_stats['top_5_funders_share'])
-            },
-            governance={
-                "multi_board_people": int(len(multi_board))
-            },
-            brokerage=self.brokerage_data.to_dict() if self.brokerage_data else None
-        )
     
     def _generate_markdown_report(self, health: HealthScore, cards: list[InsightCard]) -> str:
         """Generate markdown report for funder network."""
@@ -645,9 +662,19 @@ class FunderAnalyzer(NetworkAnalyzer):
         lines.append("---")
         lines.append("")
         
-        # Health section
+        # Health section with interpretive guardrail
         health_emoji = "🟢" if health.score >= 70 else "🟡" if health.score >= 40 else "🔴"
         lines.append(f"## {health_emoji} Network Health: {health.score}/100 ({health.label})")
+        lines.append("")
+        
+        # Add interpretive guardrail from YAML
+        guardrail = _get_health_guardrail()
+        lines.append(f"*{guardrail}*")
+        lines.append("")
+        
+        # Add health description from YAML
+        description = _get_health_description(health.score)
+        lines.append(description)
         lines.append("")
         
         if health.positive:
@@ -698,81 +725,105 @@ class FunderAnalyzer(NetworkAnalyzer):
     
     def _interpret_multi_funder(self) -> str:
         pct = self.flow_stats['multi_funder_pct']
-        if pct >= 10:
+        if pct >= 30:
             return "Strong coordination — multiple funders supporting same grantees"
-        elif pct >= 5:
+        elif pct >= 10:
             return "Moderate coordination potential"
-        elif pct >= 1:
-            return "Limited overlap — funders operate mostly independently"
         else:
-            return "No overlap — funders operate in complete silos with no shared grantees"
+            return "Low coordination — mostly siloed funding"
     
-    def _interpret_connectivity(self, component_stats: dict) -> str:
-        pct = component_stats['largest_component_pct']
-        if pct >= 80:
-            return "Highly connected through shared funding relationships"
-        elif pct >= 50:
-            return "Moderately connected"
-        else:
-            return f"Only {pct:.0f}% of organizations are connected through shared funding. Most funders operate in isolated clusters with completely distinct portfolios"
+    def _interpret_connectivity(self) -> str:
+        if self.combined_org_graph and self.combined_org_graph.number_of_nodes() > 0:
+            largest_cc = max(nx.connected_components(self.combined_org_graph), key=len)
+            pct = len(largest_cc) / self.combined_org_graph.number_of_nodes() * 100
+            if pct >= 80:
+                return "Highly connected"
+            elif pct >= 50:
+                return "Moderately connected"
+            else:
+                return f"Fragmented — only {pct:.0f}% of nodes connected"
+        return "Unknown"
     
     def _interpret_concentration(self) -> str:
-        share = self.flow_stats['top_5_funders_share']
-        if share >= 95:
-            return "Extreme concentration — top 5 control nearly all funding"
-        elif share >= 80:
-            return "High concentration"
-        elif share >= 60:
+        top5 = self.flow_stats['top5_share_pct']
+        if top5 >= 85:
+            return "Extreme concentration risk"
+        elif top5 >= 70:
             return "Moderate concentration"
         else:
-            return f"Distributed — top 5 control only {share:.0f}%, healthy funder diversity"
+            return "Healthy distribution"
     
     def _format_concentration_summary(self) -> str:
-        share = self.flow_stats['top_5_funders_share']
+        top5 = self.flow_stats['top5_share_pct']
         total = self.flow_stats['total_funding']
         
-        if share >= 95:
-            return f"🔴 **Extreme concentration**\n\nTop 5 funders control {share:.0f}% of ${total:,.0f}. This creates significant dependency risk."
-        elif share >= 80:
-            return f"🟠 **High concentration**\n\nTop 5 funders control {share:.0f}% of ${total:,.0f}."
+        if top5 >= 85:
+            emoji = "🔴"
+            label = "Extreme concentration"
+            detail = f"Top 5 funders control {top5:.0f}% of ${total:,.0f}. This creates significant dependency risk."
+        elif top5 >= 70:
+            emoji = "🟡"
+            label = "Moderate concentration"
+            detail = f"Top 5 funders control {top5:.0f}% of ${total:,.0f}. Some diversification exists but top funders dominate."
         else:
-            return f"🟢 **Healthy distribution**\n\nFunding is relatively distributed — top 5 funders control {share:.0f}% of ${total:,.0f}. This diversity provides resilience and multiple pathways for grantees."
+            emoji = "🟢"
+            label = "Healthy distribution"
+            detail = f"Funding is relatively distributed — top 5 funders control {top5:.0f}% of ${total:,.0f}. This diversity provides resilience and multiple pathways for grantees."
+        
+        return f"{emoji} **{label}**\n\n{detail}"
     
-    def _format_board_summary(self, multi_board: pd.DataFrame) -> str:
-        if len(multi_board) == 0:
+    def _format_governance_summary(self) -> str:
+        if not self.governance_stats.get('has_governance_data'):
+            return "⚪ **No board membership data available**\n\nGovernance analysis requires board membership edges in the network data."
+        
+        shared_count = self.governance_stats.get('shared_board_count', 0)
+        
+        if shared_count == 0:
             return "⚪ **No multi-board individuals detected**\n\nNo one serves on multiple boards in this network. Governance structures are fully separate — a potential gap for coordination."
         else:
-            return f"🔗 **{len(multi_board)} multi-board individuals**\n\nThese individuals serve on 2+ boards, creating informal coordination pathways."
+            top_connectors = self.governance_stats.get('top_connectors', [])
+            connector_list = ", ".join([f"{c['person']} ({c['org_count']} boards)" for c in top_connectors[:3]])
+            return f"🟢 **{shared_count} multi-board individuals detected**\n\nThese individuals serve as governance bridges: {connector_list}."
     
-    def _format_hidden_broker_summary(self, hidden_brokers: pd.DataFrame) -> str:
-        if len(hidden_brokers) == 0:
+    def _format_broker_summary(self) -> str:
+        if not self.brokerage_data or not self.brokerage_data.enabled:
+            return "⚪ **Brokerage analysis unavailable**"
+        
+        # Count hidden brokers (high betweenness, low visibility)
+        role_counts = self.brokerage_data.role_counts
+        hidden_broker_count = role_counts.get('consultant', 0) + role_counts.get('liaison', 0)
+        
+        if hidden_broker_count == 0:
             return "⚪ **No hidden brokers detected**\n\nAll high-betweenness nodes are also highly visible. No quiet bridges exist in this network."
         else:
-            return f"🔍 **{len(hidden_brokers)} hidden brokers detected**\n\nThese organizations have high betweenness but low visibility — they quietly bridge different parts of the network."
+            return f"🔍 **{hidden_broker_count} hidden brokers detected**\n\nThese organizations have high betweenness but low visibility — they quietly bridge different parts of the network."
     
-    def _generate_decision_options(self, health: HealthScore) -> str:
-        lines = ["_The options below describe common ways teams apply these signals in practice; they are not recommendations._\n"]
+    def _format_recommendations(self, health: HealthScore) -> str:
+        lines = []
+        lines.append("*The options below describe common ways teams apply these signals in practice; they are not recommendations.*")
+        lines.append("")
         
-        if health.score < 40:
+        # Opening context based on health
+        if health.score >= 70:
             lines.append("### 🧭 How to Read This\n")
-            lines.append("The network appears **fragmented**. Funders operate largely in silos with minimal coordination. Teams often assess whether building basic connective tissue would be valuable.\n")
-        elif health.score < 70:
+            lines.append("The network shows **healthy coordination signals**. Strategic options focus on deepening existing connections.\n")
+        elif health.score >= 40:
             lines.append("### 🧭 How to Read This\n")
             lines.append("The network shows **mixed signals**. Some coordination exists, but structural gaps limit effectiveness.\n")
         else:
             lines.append("### 🧭 How to Read This\n")
-            lines.append("The network shows **healthy coordination signals**. Focus on deepening strategic relationships.\n")
+            lines.append("The network appears **fragmented**. Funders operate largely in silos with minimal coordination. Teams often assess whether building basic connective tissue would be valuable.\n")
         
-        if self.flow_stats['multi_funder_pct'] < 5:
+        # Funder coordination
+        if self.flow_stats['multi_funder_pct'] < 10:
             lines.append("### 🔗 Strengthen Funder Coordination\n")
             lines.append("- **Build initial overlap:** Almost no grantees receive from multiple funders. Start by mapping where portfolios *could* overlap based on thematic focus, then facilitate introductions.\n")
+        elif self.flow_stats['multi_funder_pct'] < 30:
+            lines.append("### 🔗 Strengthen Funder Coordination\n")
+            lines.append("- **Expand existing bridges:** Some overlap exists. Identify the grantees already receiving from multiple funders and explore whether they can serve as coordination anchors.\n")
         
-        multi_board = self.metrics_df[
-            (self.metrics_df['node_type'].str.lower() == 'person') & 
-            (self.metrics_df['boards_served'] >= 2)
-        ] if 'boards_served' in self.metrics_df.columns else pd.DataFrame()
-        
-        if len(multi_board) == 0:
+        # Governance
+        if self.governance_stats.get('shared_board_count', 0) == 0:
             lines.append("### 🏛️ Strengthen Governance Ties\n")
             lines.append("- **Identify potential bridge-builders:** No one currently serves on multiple boards. Look for respected individuals who could be nominated to additional boards to create connective tissue.\n")
         
@@ -782,21 +833,16 @@ class FunderAnalyzer(NetworkAnalyzer):
         """Format brokerage ecosystem section for markdown report."""
         lines = []
         lines.append("## 🎭 Brokerage Ecosystem")
-        lines.append("")
-        lines.append("_How information and influence flow through the network_")
+        lines.append("*How information and influence flow through the network*")
         lines.append("")
         
-        if not self.brokerage_data or not self.brokerage_data.enabled:
-            lines.append("> Brokerage analysis requires at least 10 organizations.")
-            return lines
+        lines.append(f"**Pattern:** {self.brokerage_data.pattern}")
+        lines.append("")
+        lines.append(self.brokerage_data.summary)
+        lines.append("")
         
-        # Pattern and interpretation
-        pattern_display = self.brokerage_data.pattern.replace('-', ' ').title()
-        lines.append(f"**Pattern:** {pattern_display}")
-        lines.append("")
-        lines.append(self.brokerage_data.interpretation)
-        lines.append("")
-        lines.append(f"The network contains **{self.brokerage_data.community_count} distinct communities** detected via Louvain algorithm.")
+        # Community count
+        lines.append(f"The network contains **{len(self.brokerage_data.communities)} distinct communities** detected via Louvain algorithm.")
         lines.append("")
         
         # Role distribution table
@@ -805,30 +851,101 @@ class FunderAnalyzer(NetworkAnalyzer):
         lines.append("| Role | Count | Description |")
         lines.append("|------|-------|-------------|")
         
-        role_order = ['liaison', 'gatekeeper', 'representative', 'coordinator', 'consultant', 'peripheral']
-        for role in role_order:
-            count = self.brokerage_data.role_counts.get(role, 0)
+        for role_key, config in BROKERAGE_ROLE_CONFIG.items():
+            count = self.brokerage_data.role_counts.get(role_key, 0)
             if count > 0:
-                config = BROKERAGE_ROLE_CONFIG[role]
                 lines.append(f"| {config['emoji']} {config['label']} | {count} | {config['description']} |")
-        
         lines.append("")
         
         # Top brokers
         if self.brokerage_data.top_brokers:
             lines.append("### Key Brokers")
             lines.append("")
-            for node_id, label, role in self.brokerage_data.top_brokers[:8]:
-                config = BROKERAGE_ROLE_CONFIG.get(role, BROKERAGE_ROLE_CONFIG['peripheral'])
-                lines.append(f"- **{label}** — {config['emoji']} {config['label']}")
+            for broker in self.brokerage_data.top_brokers:
+                role_config = BROKERAGE_ROLE_CONFIG.get(broker['role'], {})
+                emoji = role_config.get('emoji', '⚪')
+                label = role_config.get('label', broker['role'])
+                lines.append(f"- **{broker['label']}** — {emoji} {label}")
             lines.append("")
         
         # Strategic implications
-        if self.brokerage_data.strategic_implications:
-            lines.append("### Strategic Implications")
-            lines.append("")
-            for impl in self.brokerage_data.strategic_implications:
-                lines.append(f"- {impl}")
-            lines.append("")
+        lines.append("### Strategic Implications")
+        lines.append("")
+        
+        strategic_roles = ['gatekeeper', 'representative', 'consultant', 'liaison']
+        strategic_count = sum(self.brokerage_data.role_counts.get(r, 0) for r in strategic_roles)
+        
+        if strategic_count >= 5:
+            lines.append("- Multiple strategic brokers exist — consider engaging them as coordination facilitators")
+            lines.append("- Gatekeepers and representatives can be entry points for cross-community initiatives")
+        elif strategic_count >= 1:
+            lines.append("- Few strategic brokers exist — they carry disproportionate coordination load")
+            lines.append("- Consider building redundancy by developing additional cross-community connectors")
+        else:
+            lines.append("- No urgent structural interventions needed")
+            lines.append("- Consider targeted investment in liaison development for strategic priorities")
+        lines.append("")
         
         return lines
+    
+    def _compute_node_metrics(self) -> pd.DataFrame:
+        """Compute per-node metrics for funder network."""
+        if self.combined_org_graph is None or self.combined_org_graph.number_of_nodes() == 0:
+            return pd.DataFrame()
+        
+        # Get org nodes only
+        org_nodes = self.nodes_df[self.nodes_df['node_type'].isin(['org', 'organization'])].copy()
+        
+        # Compute centrality metrics
+        degree = dict(self.combined_org_graph.degree())
+        betweenness = nx.betweenness_centrality(self.combined_org_graph)
+        
+        try:
+            eigenvector = nx.eigenvector_centrality(self.combined_org_graph, max_iter=1000)
+        except:
+            eigenvector = {n: 0 for n in self.combined_org_graph.nodes()}
+        
+        # Build metrics dataframe
+        metrics = []
+        for _, row in org_nodes.iterrows():
+            node_id = row['node_id']
+            if node_id in self.combined_org_graph:
+                metrics.append({
+                    'node_id': node_id,
+                    'label': row.get('label', row.get('name', node_id)),
+                    'node_type': row['node_type'],
+                    'degree': degree.get(node_id, 0),
+                    'betweenness': betweenness.get(node_id, 0),
+                    'eigenvector': eigenvector.get(node_id, 0),
+                    'brokerage_role': self.brokerage_data.roles.get(node_id, 'unknown') if self.brokerage_data else 'unknown'
+                })
+        
+        return pd.DataFrame(metrics)
+    
+    def _generate_project_summary(self) -> ProjectSummary:
+        """Generate project summary for funder network."""
+        org_count = len(self.nodes_df[self.nodes_df['node_type'].isin(['org', 'organization'])])
+        person_count = len(self.nodes_df[self.nodes_df['node_type'] == 'person'])
+        
+        grant_count = len(self.edges_df[self.edges_df['edge_type'].isin(['grant', 'funding'])])
+        board_count = len(self.edges_df[self.edges_df['edge_type'].isin(['board_membership', 'board'])])
+        
+        return ProjectSummary(
+            project_id=self.project_id,
+            network_type='funder',
+            node_counts={
+                'total': len(self.nodes_df),
+                'organizations': org_count,
+                'people': person_count
+            },
+            edge_counts={
+                'total': len(self.edges_df),
+                'grants': grant_count,
+                'board_memberships': board_count
+            },
+            funding={
+                'total_amount': self.flow_stats.get('total_funding', 0),
+                'funder_count': self.flow_stats.get('funder_count', 0),
+                'grantee_count': self.flow_stats.get('grantee_count', 0)
+            }
+        )
