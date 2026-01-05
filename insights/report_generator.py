@@ -6,15 +6,22 @@ Output matches the exact structure defined in the spec.
 
 VERSION HISTORY:
 ----------------
-v1.0.0 (2025-12-19): Initial release
-- ReportData container class
-- Table formatters for evidence sections
-- generate_report() producing canonical Markdown
+v1.1.0 (2026-01-06): YAML Copy Map Integration
+- Health score labels/descriptions from INSIGHTGRAPH_COPY_MAP_v1.yaml
+- Hidden broker definition from canonical YAML source
+- Interpretive guardrail added to Network Health section
+- Connectivity interpretation aligned with spec vocabulary
+- Single source of truth for all narrative copy
 
 v1.0.1 (2025-12-19): Updated visibility display
 - Broker table now shows visibility_rank (lower = less visible)
 - Shows raw degree in parentheses to ground metric in real data
 - Updated footnote to explain calculation
+
+v1.0.0 (2025-12-19): Initial release
+- ReportData container class
+- Table formatters for evidence sections
+- generate_report() producing canonical Markdown
 """
 
 from datetime import datetime
@@ -37,6 +44,68 @@ from narratives import (
     generate_system_summary,
     generate_recommendations
 )
+
+# Import copy manager for YAML-driven copy
+try:
+    from copy_manager import get_copy_manager, get_health_label, get_health_description
+    COPY_MANAGER_AVAILABLE = True
+except ImportError:
+    COPY_MANAGER_AVAILABLE = False
+    # Fallback functions if copy_manager not available
+    def get_health_label(score: float) -> str:
+        if score >= 80: return "Strong"
+        if score >= 60: return "Moderate"
+        if score >= 40: return "Constrained"
+        return "Fragile"
+    
+    def get_health_description(score: float) -> str:
+        if score >= 80: return "Structurally aligned; coordination pathways are robust."
+        if score >= 60: return "Mixed signals; coordination is possible but not automatic."
+        if score >= 40: return "Coordination is limited by thin overlap and structural bottlenecks."
+        return "High structural risk; the network depends on a small number of critical bridges."
+
+
+# =============================================================================
+# Copy Strings (from YAML when available, fallback otherwise)
+# =============================================================================
+
+def _get_copy():
+    """Get copy manager or None if unavailable."""
+    if COPY_MANAGER_AVAILABLE:
+        return get_copy_manager()
+    return None
+
+
+def get_health_guardrail() -> str:
+    """Get the interpretive guardrail for Network Health."""
+    copy = _get_copy()
+    if copy:
+        return copy.health_score_helper
+    return "Network Health reflects coordination capacity — not impact, effectiveness, or intent."
+
+
+def get_hidden_broker_definition() -> str:
+    """Get the canonical hidden broker definition."""
+    copy = _get_copy()
+    if copy:
+        return copy.hidden_broker_definition
+    return "Hidden brokers are structurally critical connectors with high betweenness and low visibility — quiet nodes that carry disproportionate coordination load."
+
+
+def get_structural_pivot() -> str:
+    """Get the structural pivot statement."""
+    copy = _get_copy()
+    if copy:
+        return copy.structural_pivot
+    return "To understand performance, we look past totals and examine structure."
+
+
+def get_coordination_question() -> str:
+    """Get the core coordination question."""
+    copy = _get_copy()
+    if copy:
+        return copy.coordination_question
+    return "The key question is not whether actors are connected, but whether the system supports coordinated action."
 
 
 # =============================================================================
@@ -106,7 +175,7 @@ class ReportData:
             top_bridges=m.get("top_bridges", [])
         )
         
-        # Network Health
+        # Network Health — use YAML-driven labels
         health_score = m.get("network_health_score", 50)
         governance_label = "Available" if m.get("governance_data_available") else "Unavailable"
         
@@ -217,10 +286,15 @@ def generate_report(report_data: ReportData) -> str:
     summary = report_data.system_summary
     recs = report_data.recommendations
     
-    # Network Health details
+    # Network Health details — using YAML-driven labels
     health = s["network_health"]
     health_score = health.evidence.get("health_score", 50)
-    health_label = health.evidence.get("health_label", "Moderate")
+    health_label = get_health_label(health_score)  # From YAML
+    health_description = get_health_description(health_score)  # From YAML
+    health_guardrail = get_health_guardrail()  # From YAML
+    
+    # Hidden broker definition — from YAML
+    hidden_broker_def = get_hidden_broker_definition()
     
     # Format tables
     shared_grantee_rows = format_shared_grantees_table(
@@ -248,11 +322,13 @@ def generate_report(report_data: ReportData) -> str:
 
 ## How to Read This Report
 
-- **5 minutes:** System Summary → Network Health → Strategic Recommendations
+- **5 minutes:** System Summary → Network Health → Strategic Considerations
 - **20 minutes:** Read all signal sections and expand selected evidence
 - **Optional:** Explore grant themes or download data files
 
 *If Governance Connectivity shows "data unavailable," you may skip that section.*
+
+> **Interpretive Note:** These insights are diagnostic rather than evaluative. They are intended to inform strategic conversations about structure, feasibility, and risk—not to assess intent, performance, or effectiveness.
 
 ---
 
@@ -278,6 +354,10 @@ def generate_report(report_data: ReportData) -> str:
 ## Network Health
 
 **Overall Score:** {health_score:.0f} / 100 — {health_label}
+
+*{health_guardrail}*
+
+{health_description}
 
 ### Key Signals
 
@@ -372,13 +452,16 @@ def generate_report(report_data: ReportData) -> str:
 
 ## Hidden Brokers
 
-> **Lens: Opportunity**
+> **Lens: Structural Opportunity**
 
 **Signal**  
 {s['hidden_brokers'].signal}
 
 **Interpretation**  
 {s['hidden_brokers'].interpretation}
+
+**Definition**  
+{hidden_broker_def}
 
 **Opportunity**  
 {s['hidden_brokers'].why_it_matters}
@@ -395,7 +478,7 @@ def generate_report(report_data: ReportData) -> str:
 
 ## Single-Point Bridges
 
-> **Lens: Risk**
+> **Lens: Structural Risk**
 
 **Signal**  
 {s['single_point_bridges'].signal}
@@ -413,7 +496,9 @@ def generate_report(report_data: ReportData) -> str:
 
 ---
 
-## Strategic Recommendations
+## Strategic Considerations
+
+> These are structural options — not prescriptions.
 
 {cfg.STRATEGIC_INTRO}
 
@@ -435,9 +520,9 @@ def generate_report(report_data: ReportData) -> str:
 
 ### Method Notes
 
-**Network Health Score (v1):** Weighted composite of coordination (multi-funder %), connectivity, concentration (inverse), and governance connectivity proxies.
+**Network Health Score (v1):** Weighted composite of coordination (multi-funder %), connectivity, concentration (inverse), and governance connectivity proxies. {health_guardrail}
 
-**Hidden Broker Definition:** Nodes in top {cfg.BROKER_BETWEENNESS_PERCENTILE}th percentile of betweenness centrality AND bottom {cfg.BROKER_VISIBILITY_PERCENTILE}th percentile of degree, computed within each node type (funder, grantee, person) to avoid cross-type artifacts. Optionally uses weighted degree when edge weights are stable.
+**Hidden Broker Definition:** {hidden_broker_def}
 
 **Single-Point Bridge Definition:** Articulation points — nodes whose removal disconnects the network graph.
 
@@ -466,15 +551,19 @@ def _short_interpretation(signal: SignalInterpretation) -> str:
 
 
 def _connectivity_interpretation(connectivity_pct: float) -> str:
-    """Generate short interpretation for connectivity."""
+    """
+    Generate short interpretation for connectivity.
+    
+    Uses spec vocabulary: coordination capacity, not "health" or "performance"
+    """
     if connectivity_pct > 80:
-        return "Strong network connectivity"
+        return "Strong coordination capacity"
     elif connectivity_pct > 50:
-        return "Moderate connectivity"
+        return "Moderate coordination capacity"
     elif connectivity_pct > 20:
-        return "Limited connectivity"
+        return "Limited coordination capacity"
     else:
-        return "Fragmented network"
+        return "Fragmented — coordination constrained"
 
 
 # =============================================================================
