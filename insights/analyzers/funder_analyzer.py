@@ -6,6 +6,10 @@ Wraps existing run.py logic with the NetworkAnalyzer interface.
 
 VERSION HISTORY:
 ----------------
+v1.1.1 (2026-01-06): Bug fix for graph building
+- FIX: Exclude 'weight' from row dict spread to avoid duplicate keyword argument
+- Affects build_grant_graph and build_board_graph
+
 v1.1.0 (2026-01-06): YAML Copy Map Integration
 - Health labels now sourced from INSIGHTGRAPH_COPY_MAP_v1.yaml
 - Interpretive guardrail added to markdown reports
@@ -130,7 +134,7 @@ def _get_health_guardrail() -> str:
 # Version
 # =============================================================================
 
-FUNDER_ANALYZER_VERSION = "1.1.0"
+FUNDER_ANALYZER_VERSION = "1.1.1"
 
 # =============================================================================
 # Thresholds (from original run.py)
@@ -160,7 +164,9 @@ def build_grant_graph(nodes_df: pd.DataFrame, edges_df: pd.DataFrame) -> nx.DiGr
         weight = row.get('amount', row.get('weight', 1))
         if pd.isna(weight):
             weight = 1
-        G.add_edge(row['from_id'], row['to_id'], weight=weight, **row.to_dict())
+        # Exclude 'weight' from row dict to avoid duplicate keyword argument
+        row_dict = {k: v for k, v in row.to_dict().items() if k != 'weight'}
+        G.add_edge(row['from_id'], row['to_id'], weight=weight, **row_dict)
     
     return G
 
@@ -176,7 +182,9 @@ def build_board_graph(nodes_df: pd.DataFrame, edges_df: pd.DataFrame) -> nx.Grap
     # Add board membership edges
     board_edges = edges_df[edges_df['edge_type'].isin(['board_membership', 'board'])]
     for _, row in board_edges.iterrows():
-        G.add_edge(row['from_id'], row['to_id'], **row.to_dict())
+        # Exclude 'weight' from row dict to avoid potential duplicate
+        row_dict = {k: v for k, v in row.to_dict().items() if k != 'weight'}
+        G.add_edge(row['from_id'], row['to_id'], **row_dict)
     
     return G
 
