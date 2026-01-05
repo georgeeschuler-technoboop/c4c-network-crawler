@@ -6,6 +6,10 @@ Provides centrality metrics, brokerage roles, sector analysis, and connector ide
 
 VERSION HISTORY:
 ----------------
+v1.1.1 (2026-01-06): Bug fix for graph building
+- FIX: Exclude 'weight' from row dict spread to avoid duplicate keyword argument
+- Affects build_connection_graph
+
 v1.1.0 (2026-01-06): YAML Copy Map Integration
 - Health labels now sourced from INSIGHTGRAPH_COPY_MAP_v1.yaml
 - Interpretive guardrail added to markdown reports
@@ -127,7 +131,7 @@ def _get_health_guardrail() -> str:
 # Version
 # =============================================================================
 
-SOCIAL_ANALYZER_VERSION = "1.1.0"
+SOCIAL_ANALYZER_VERSION = "1.1.1"
 
 # =============================================================================
 # Thresholds
@@ -154,7 +158,9 @@ def build_connection_graph(nodes_df: pd.DataFrame, edges_df: pd.DataFrame) -> nx
         weight = row.get('weight', 1)
         if pd.isna(weight):
             weight = 1
-        G.add_edge(row['from_id'], row['to_id'], weight=weight, **row.to_dict())
+        # Exclude 'weight' from row dict to avoid duplicate keyword argument
+        row_dict = {k: v for k, v in row.to_dict().items() if k != 'weight'}
+        G.add_edge(row['from_id'], row['to_id'], weight=weight, **row_dict)
     
     return G
 
