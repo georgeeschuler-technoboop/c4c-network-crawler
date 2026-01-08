@@ -135,7 +135,7 @@ from c4c_utils.coregraph_schema import prepare_unified_nodes_csv, prepare_unifie
 # =============================================================================
 # Constants
 # =============================================================================
-APP_VERSION = "0.25.0"  # Board detail export with interlock detection
+APP_VERSION = "0.25.1"  # Fix fiscal_year Arrow serialization bug  # Board detail export with interlock detection
 MAX_FILES = 50
 C4C_LOGO_URL = "https://static.wixstatic.com/media/275a3f_25063966d6cd496eb2fe3f6ee5cde0fa~mv2.png"
 APP_ICON_URL = "https://static.wixstatic.com/media/275a3f_f8ac661446cc49788526af77befbf7b3~mv2.png"
@@ -367,7 +367,7 @@ def render_cloud_status():
         st.sidebar.caption(f"☁️ {user['email']}")
         st.sidebar.caption(f"📦 {project_count} cloud project(s)")
         
-        if st.sidebar.button("Logout", key="cloud_logout", use_container_width=True):
+        if st.sidebar.button("Logout", key="cloud_logout", width="stretch"):
             client.logout()
             st.rerun()
         return client
@@ -760,6 +760,13 @@ def ensure_grants_detail_columns(grants_df: pd.DataFrame, source_file: str = "")
     for col in GRANTS_DETAIL_COLUMNS:
         if col not in df.columns:
             df[col] = ""
+    
+    # CRITICAL: Force consistent dtypes for columns that cause Arrow serialization issues
+    # fiscal_year and tax_year can be mixed int/str from different parsers
+    # This prevents PyArrow from hanging when Streamlit tries to serialize DataFrames
+    for col in ["fiscal_year", "tax_year"]:
+        if col in df.columns:
+            df[col] = df[col].astype("string")
     
     return df
 
@@ -1576,7 +1583,7 @@ def render_single_file_diagnostics(result: dict, expanded: bool = False):
                     "Amount": f"${s.get('amount', 0):,}",
                     "Format": "A" if "erb" in s.get("format", "").lower() else "B"
                 })
-            st.dataframe(pd.DataFrame(sample_data), hide_index=True, use_container_width=True)
+            st.dataframe(pd.DataFrame(sample_data), hide_index=True, width="stretch")
         
         # Warnings
         warnings = diag.get("warnings", [])
@@ -2214,13 +2221,13 @@ def render_data_preview(nodes_df: pd.DataFrame, edges_df: pd.DataFrame):
     """Render data preview expanders."""
     with st.expander("👀 Preview Nodes", expanded=False):
         if not nodes_df.empty:
-            st.dataframe(nodes_df, use_container_width=True)
+            st.dataframe(nodes_df, width="stretch")
         else:
             st.info("No nodes to display")
     
     with st.expander("👀 Preview Edges", expanded=False):
         if not edges_df.empty:
-            st.dataframe(edges_df, use_container_width=True)
+            st.dataframe(edges_df, width="stretch")
         else:
             st.info("No edges to display")
 
@@ -2903,7 +2910,7 @@ def render_downloads(nodes_df: pd.DataFrame, edges_df: pd.DataFrame,
     # --- Save to Project (Local) ---
     with col1:
         if project_name and project_name != DEMO_PROJECT_NAME:
-            if st.button("💾 Save to Project", use_container_width=True, 
+            if st.button("💾 Save to Project", width="stretch", 
                         help="Save here so you can add more foundations to this project later"):
                 project_path = get_project_path(project_name)
                 try:
@@ -2916,7 +2923,7 @@ def render_downloads(nodes_df: pd.DataFrame, edges_df: pd.DataFrame,
                 except Exception as e:
                     st.error(f"Error: {e}")
         else:
-            st.button("💾 Save to Project", use_container_width=True, disabled=True,
+            st.button("💾 Save to Project", width="stretch", disabled=True,
                      help="Create a project first to enable local saves")
     
     # --- Save to Cloud ---
@@ -2926,7 +2933,7 @@ def render_downloads(nodes_df: pd.DataFrame, edges_df: pd.DataFrame,
         
         if st.button("☁️ Save to Cloud", 
                     disabled=not cloud_enabled,
-                    use_container_width=True,
+                    width="stretch",
                     help="Login to enable cloud saves" if not cloud_enabled else "Save to cloud so you can analyze in InsightGraph or share with teammates"):
             
             with st.spinner("☁️ Uploading..."):
@@ -3006,7 +3013,7 @@ def render_downloads(nodes_df: pd.DataFrame, edges_df: pd.DataFrame,
             file_name=f"{safe_project_name}_export.zip",
             mime="application/zip",
             type="primary",
-            use_container_width=True,
+            width="stretch",
             key=f"dl_zip_{safe_project_name}",
             on_click=lambda: st.session_state["stage4_actions"].__setitem__("download_zip", True),
             help="Download everything in one bundle — ready for Polinode, sharing, or offline use"
@@ -3346,7 +3353,7 @@ def main():
             with colA:
                 st.caption(f"Signed in as **{cloud_email}**" if cloud_email else "Signed in.")
             with colB:
-                if st.button("Logout", key="cloud_logout_main", use_container_width=True):
+                if st.button("Logout", key="cloud_logout_main", width="stretch"):
                     cloud_client.logout()
                     st.rerun()
         else:
